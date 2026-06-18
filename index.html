@@ -101,9 +101,15 @@
         <section class="panel">
           <div class="toolbar">
             <h3>每日订单利润明细</h3>
-            <label style="min-width:220px">店铺筛选<select id="storeFilter"></select></label>
+            <div class="order-filters">
+              <label>开始日期<input id="orderDateFrom" type="date" /></label>
+              <label>结束日期<input id="orderDateTo" type="date" /></label>
+              <label>店铺筛选<select id="storeFilter"></select></label>
+              <button class="secondary" id="reloadOrders" type="button">刷新订单</button>
+            </div>
           </div>
-          <div class="table-wrap">
+          <div id="orderRangeStatus" class="table-status"></div>
+          <div class="table-wrap orders-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -111,6 +117,7 @@
                   <th>店铺</th>
                   <th>订单号</th>
                   <th>产品</th>
+                  <th>费用状态</th>
                   <th>后台定价</th>
                   <th>成本</th>
                   <th>佣金</th>
