@@ -387,6 +387,7 @@ async function probeRequest(name, url, options = {}) {
       status: response.status,
       ms: Date.now() - started,
       sample: parsed ? summarizeProbePayload(parsed) : text.slice(0, 500),
+      raw: parsed || undefined,
     };
   } catch (error) {
     return { name, ok: false, error: error.message || String(error), ms: Date.now() - started };
@@ -456,6 +457,22 @@ function firstCampaignId(payload) {
   return String(campaign.id || campaign.campaignId || campaign.campaign_id || "");
 }
 
+function probeUuid(payload) {
+  const candidates = [
+    payload?.UUID,
+    payload?.uuid,
+    payload?.result?.UUID,
+    payload?.result?.uuid,
+    payload?.raw?.UUID,
+    payload?.raw?.uuid,
+    payload?.raw?.result?.UUID,
+    payload?.raw?.result?.uuid,
+    payload?.sample?.UUID,
+    payload?.sample?.uuid,
+  ];
+  return String(candidates.find(Boolean) || "");
+}
+
 async function probeOzonAnalytics(env, from, to) {
   const stores = ozonStores(env);
   const probes = [];
@@ -510,21 +527,32 @@ async function probeOzonAds(env, from, to) {
       const campaignId = firstCampaignId(campaignList.raw || campaignList.sample);
       checks.push({ name: "ads_selected_campaign", ok: Boolean(campaignId), campaignId });
       if (campaignId) {
-        checks.push(await probeRequest("ads_statistics_create_campaign", "https://api-performance.ozon.ru/api/client/statistics", {
+        const statCreate = await probeRequest("ads_statistics_create_campaign", "https://api-performance.ozon.ru/api/client/statistics", {
           method: "POST",
           headers,
           body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: "DATE" }),
-        }));
-        checks.push(await probeRequest("ads_statistics_daily_campaign", "https://api-performance.ozon.ru/api/client/statistics/daily", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to }),
-        }));
-        checks.push(await probeRequest("ads_statistics_products_campaign", "https://api-performance.ozon.ru/api/client/statistics/products", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to }),
-        }));
+        });
+        checks.push(statCreate);
+        const reportUuid = probeUuid(statCreate);
+        checks.push({ name: "ads_statistics_uuid", ok: Boolean(reportUuid), uuid: reportUuid });
+        if (reportUuid) {
+          checks.push(await probeRequest("ads_statistics_status_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}`, {
+            method: "GET",
+            headers,
+          }));
+          checks.push(await probeRequest("ads_statistics_report_uuid_upper", `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(reportUuid)}`, {
+            method: "GET",
+            headers,
+          }));
+          checks.push(await probeRequest("ads_statistics_report_uuid_lower", `https://api-performance.ozon.ru/api/client/statistics/report?uuid=${encodeURIComponent(reportUuid)}`, {
+            method: "GET",
+            headers,
+          }));
+          checks.push(await probeRequest("ads_statistics_report_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}/report`, {
+            method: "GET",
+            headers,
+          }));
+        }
       }
     } catch (error) {
       checks.push({ name: "ads_token", ok: false, error: error.message || String(error) });
