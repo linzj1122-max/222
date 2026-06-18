@@ -473,6 +473,27 @@ function probeUuid(payload) {
   return String(candidates.find(Boolean) || "");
 }
 
+async function probeAdsReportChecks(checks, headers, reportUuid) {
+  checks.push({ name: "ads_statistics_uuid", ok: Boolean(reportUuid), uuid: reportUuid });
+  if (!reportUuid) return;
+  checks.push(await probeRequest("ads_statistics_status_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}`, {
+    method: "GET",
+    headers,
+  }));
+  checks.push(await probeRequest("ads_statistics_report_uuid_upper", `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(reportUuid)}`, {
+    method: "GET",
+    headers,
+  }));
+  checks.push(await probeRequest("ads_statistics_report_uuid_lower", `https://api-performance.ozon.ru/api/client/statistics/report?uuid=${encodeURIComponent(reportUuid)}`, {
+    method: "GET",
+    headers,
+  }));
+  checks.push(await probeRequest("ads_statistics_report_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}/report`, {
+    method: "GET",
+    headers,
+  }));
+}
+
 async function probeOzonAnalytics(env, from, to) {
   const stores = ozonStores(env);
   const probes = [];
@@ -510,7 +531,7 @@ async function probeOzonAnalytics(env, from, to) {
   };
 }
 
-async function probeOzonAds(env, from, to) {
+async function probeOzonAds(env, from, to, existingUuid = "") {
   const accounts = ozonAdAccounts(env);
   const probes = [];
   for (const account of accounts) {
@@ -526,6 +547,17 @@ async function probeOzonAds(env, from, to) {
       checks.push(campaignList);
       const campaignId = firstCampaignId(campaignList.raw || campaignList.sample);
       checks.push({ name: "ads_selected_campaign", ok: Boolean(campaignId), campaignId });
+      if (existingUuid) {
+        checks.push({ name: "ads_statistics_create_campaign", ok: true, skipped: true, note: "Using existing uuid; no new report request was created." });
+        await probeAdsReportChecks(checks, headers, existingUuid);
+        probes.push({
+          store: account.name,
+          clientIdConfigured: Boolean(account.clientId),
+          clientSecretConfigured: Boolean(account.clientSecret),
+          checks,
+        });
+        continue;
+      }
       if (campaignId) {
         const statCreate = await probeRequest("ads_statistics_create_campaign", "https://api-performance.ozon.ru/api/client/statistics", {
           method: "POST",
@@ -534,25 +566,7 @@ async function probeOzonAds(env, from, to) {
         });
         checks.push(statCreate);
         const reportUuid = probeUuid(statCreate);
-        checks.push({ name: "ads_statistics_uuid", ok: Boolean(reportUuid), uuid: reportUuid });
-        if (reportUuid) {
-          checks.push(await probeRequest("ads_statistics_status_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}`, {
-            method: "GET",
-            headers,
-          }));
-          checks.push(await probeRequest("ads_statistics_report_uuid_upper", `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(reportUuid)}`, {
-            method: "GET",
-            headers,
-          }));
-          checks.push(await probeRequest("ads_statistics_report_uuid_lower", `https://api-performance.ozon.ru/api/client/statistics/report?uuid=${encodeURIComponent(reportUuid)}`, {
-            method: "GET",
-            headers,
-          }));
-          checks.push(await probeRequest("ads_statistics_report_by_uuid", `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(reportUuid)}/report`, {
-            method: "GET",
-            headers,
-          }));
-        }
+        await probeAdsReportChecks(checks, headers, reportUuid);
       }
     } catch (error) {
       checks.push({ name: "ads_token", ok: false, error: error.message || String(error) });
@@ -568,6 +582,7 @@ async function probeOzonAds(env, from, to) {
     dateFrom: from,
     dateTo: to,
     accountCount: accounts.length,
+    existingUuid: existingUuid || "",
     note: "Use after configuring OZON_ADS_1_CLIENT_ID and OZON_ADS_1_CLIENT_SECRET. Secrets are not returned.",
     probes,
   };
@@ -578,7 +593,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-19-cloudflare-ads-v1",
+    version: "2026-06-19-cloudflare-ads-v2",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
@@ -635,7 +650,7 @@ export async function onRequest(context) {
     }
     if (path === "probe/ozon-ads") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await probeOzonAds(env, from, to));
+      return json(await probeOzonAds(env, from, to, url.searchParams.get("uuid") || ""));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
