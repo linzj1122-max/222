@@ -283,10 +283,10 @@ function analyticsRowBase(row, storeName) {
     store: storeName,
     revenue: analyticsMetric(row, 0),
     orderedUnits: analyticsMetric(row, 1),
-    sessions: analyticsMetric(row, 2),
-    impressions: analyticsMetric(row, 3),
-    cartAdds: analyticsMetric(row, 4),
-    cartConversion: analyticsMetric(row, 5),
+    totalClicks: analyticsMetric(row, 2),
+    naturalImpressions: analyticsMetric(row, 3),
+    naturalCartAdds: analyticsMetric(row, 4),
+    naturalCartRate: analyticsMetric(row, 5),
   };
 }
 
@@ -298,12 +298,14 @@ async function fetchStoreAnalytics(env, from, to) {
       const item = analyticsRowBase(row, store.name);
       acc.revenue += item.revenue;
       acc.orderedUnits += item.orderedUnits;
-      acc.sessions += item.sessions;
-      acc.impressions += item.impressions;
-      acc.cartAdds += item.cartAdds;
+      acc.totalClicks += item.totalClicks;
+      acc.naturalImpressions += item.naturalImpressions;
+      acc.naturalCartAdds += item.naturalCartAdds;
       return acc;
-    }, { store: store.name, revenue: 0, orderedUnits: 0, sessions: 0, impressions: 0, cartAdds: 0 });
-    total.cartConversion = total.sessions ? total.cartAdds / total.sessions * 100 : 0;
+    }, { store: store.name, revenue: 0, orderedUnits: 0, totalClicks: 0, naturalImpressions: 0, naturalCartAdds: 0 });
+    total.totalImpressions = 0;
+    total.totalCtr = 0;
+    total.naturalCartRate = total.naturalImpressions ? total.naturalCartAdds / total.naturalImpressions * 100 : 0;
     rows.push(total);
   }
   return rows;
@@ -323,6 +325,72 @@ async function fetchProductAnalytics(env, from, to) {
     }
   }
   return rows;
+}
+
+function ozonAdAccounts(env) {
+  const sellerStores = ozonStores(env);
+  const accounts = [];
+  for (let index = 1; index <= 10; index += 1) {
+    const clientId = env[`OZON_ADS_${index}_CLIENT_ID`];
+    const clientSecret = env[`OZON_ADS_${index}_CLIENT_SECRET`];
+    if (clientId && clientSecret) {
+      const store = sellerStores[index - 1] || {};
+      accounts.push({
+        name: env[`OZON_ADS_${index}_NAME`] || store.name || `Ozon Ads ${index}`,
+        clientId,
+        clientSecret,
+      });
+    }
+  }
+  return accounts;
+}
+
+async function fetchOzonAdsToken(account) {
+  const response = await fetch("https://performance.ozon.ru/api/client/token", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_id: account.clientId,
+      client_secret: account.clientSecret,
+      grant_type: "client_credentials",
+    }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(`Ozon ads token API ${response.status}: ${text.slice(0, 240)}`);
+  }
+  const token = payload?.access_token || payload?.result?.access_token || payload?.token;
+  if (!token) throw new Error("Ozon ads token API did not return access_token");
+  return token;
+}
+
+async function probeRequest(name, url, options = {}) {
+  const started = Date.now();
+  try {
+    const response = await fetch(url, { redirect: "manual", ...options });
+    const text = await response.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    return {
+      name,
+      ok: response.ok,
+      status: response.status,
+      ms: Date.now() - started,
+      sample: parsed ? summarizeProbePayload(parsed) : text.slice(0, 500),
+    };
+  } catch (error) {
+    return { name, ok: false, error: error.message || String(error), ms: Date.now() - started };
+  }
 }
 
 async function probeJson(name, url, headers, body) {
@@ -406,11 +474,53 @@ async function probeOzonAnalytics(env, from, to) {
   };
 }
 
+async function probeOzonAds(env, from, to) {
+  const accounts = ozonAdAccounts(env);
+  const probes = [];
+  for (const account of accounts) {
+    const checks = [];
+    try {
+      const token = await fetchOzonAdsToken(account);
+      checks.push({ name: "ads_token", ok: true, status: 200, note: "token received" });
+      const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
+      checks.push(await probeRequest("ads_campaign_list", "https://performance.ozon.ru/api/client/campaign", {
+        method: "GET",
+        headers,
+      }));
+      checks.push(await probeRequest("ads_statistics_create_empty", "https://performance.ozon.ru/api/client/statistics", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ campaigns: [], dateFrom: from, dateTo: to, groupBy: "DATE" }),
+      }));
+      checks.push(await probeRequest("ads_statistics_json_guess", `https://performance.ozon.ru/api/client/statistics/json?dateFrom=${from}&dateTo=${to}`, {
+        method: "GET",
+        headers,
+      }));
+    } catch (error) {
+      checks.push({ name: "ads_token", ok: false, error: error.message || String(error) });
+    }
+    probes.push({
+      store: account.name,
+      clientIdConfigured: Boolean(account.clientId),
+      clientSecretConfigured: Boolean(account.clientSecret),
+      checks,
+    });
+  }
+  return {
+    dateFrom: from,
+    dateTo: to,
+    accountCount: accounts.length,
+    note: "Use after configuring OZON_ADS_1_CLIENT_ID and OZON_ADS_1_CLIENT_SECRET. Secrets are not returned.",
+    probes,
+  };
+}
+
 function debugStatus(env) {
   const stores = ozonStores(env);
+  const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-18-cloudflare-v1",
+    version: "2026-06-19-cloudflare-ads-v1",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
@@ -424,7 +534,15 @@ function debugStatus(env) {
       detectedEnvNames: envNames,
     },
     wb: { tokenConfigured: Boolean(env.WB_API_TOKEN), storeName: env.WB_STORE_NAME || "" },
-    ads: { enabled: false, reason: "广告 API 暂停接入：当前未确认广告权限" },
+    ads: {
+      enabled: adAccounts.length > 0,
+      accountCount: adAccounts.length,
+      accounts: adAccounts.map((account) => ({
+        name: account.name,
+        clientIdConfigured: Boolean(account.clientId),
+        clientSecretConfigured: Boolean(account.clientSecret),
+      })),
+    },
   };
 }
 
@@ -456,6 +574,10 @@ export async function onRequest(context) {
     if (path === "probe/ozon-analytics") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeOzonAnalytics(env, from, to));
+    }
+    if (path === "probe/ozon-ads") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await probeOzonAds(env, from, to));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
