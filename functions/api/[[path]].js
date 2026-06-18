@@ -437,6 +437,23 @@ function summarizeProbePayload(payload) {
   return payload;
 }
 
+function probeArray(payload) {
+  const result = payload?.result ?? payload;
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.list)) return result.list;
+  if (Array.isArray(result?.campaigns)) return result.campaigns;
+  if (Array.isArray(payload?.list)) return payload.list;
+  if (Array.isArray(payload?.campaigns)) return payload.campaigns;
+  if (payload?.type === "array" && payload.first) return [payload.first];
+  return [];
+}
+
+function firstCampaignId(payload) {
+  const campaigns = probeArray(payload);
+  const campaign = campaigns.find((item) => item.state === "CAMPAIGN_STATE_RUNNING") || campaigns[0] || {};
+  return String(campaign.id || campaign.campaignId || campaign.campaign_id || "");
+}
+
 async function probeOzonAnalytics(env, from, to) {
   const stores = ozonStores(env);
   const probes = [];
@@ -483,19 +500,30 @@ async function probeOzonAds(env, from, to) {
       const token = await fetchOzonAdsToken(account);
       checks.push({ name: "ads_token", ok: true, status: 200, note: "token received" });
       const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
-      checks.push(await probeRequest("ads_campaign_list", "https://api-performance.ozon.ru/api/client/campaign", {
+      const campaignList = await probeRequest("ads_campaign_list", "https://api-performance.ozon.ru/api/client/campaign", {
         method: "GET",
         headers,
-      }));
-      checks.push(await probeRequest("ads_statistics_create_empty", "https://api-performance.ozon.ru/api/client/statistics", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ campaigns: [], dateFrom: from, dateTo: to, groupBy: "DATE" }),
-      }));
-      checks.push(await probeRequest("ads_statistics_json_guess", `https://api-performance.ozon.ru/api/client/statistics/json?dateFrom=${from}&dateTo=${to}`, {
-        method: "GET",
-        headers,
-      }));
+      });
+      checks.push(campaignList);
+      const campaignId = firstCampaignId(campaignList.raw || campaignList.sample);
+      checks.push({ name: "ads_selected_campaign", ok: Boolean(campaignId), campaignId });
+      if (campaignId) {
+        checks.push(await probeRequest("ads_statistics_create_campaign", "https://api-performance.ozon.ru/api/client/statistics", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: "DATE" }),
+        }));
+        checks.push(await probeRequest("ads_statistics_daily_campaign", "https://api-performance.ozon.ru/api/client/statistics/daily", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to }),
+        }));
+        checks.push(await probeRequest("ads_statistics_products_campaign", "https://api-performance.ozon.ru/api/client/statistics/products", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ campaigns: [campaignId], dateFrom: from, dateTo: to }),
+        }));
+      }
     } catch (error) {
       checks.push({ name: "ads_token", ok: false, error: error.message || String(error) });
     }
