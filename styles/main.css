@@ -238,6 +238,12 @@
     .store-table td {
       padding: 13px 12px;
     }
+    .import-box {
+      display: grid;
+      grid-template-columns: minmax(180px, 240px) minmax(260px, 1fr) auto auto;
+      gap: 12px;
+      align-items: end;
+    }
     .muted-cell {
       color: #94a3b8;
       font-weight: 700;
