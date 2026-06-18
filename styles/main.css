@@ -404,6 +404,10 @@
       font-size: 12px;
       font-weight: 800;
     }
+    .calendar-empty {
+      height: 28px;
+      display: block;
+    }
     .calendar-day:hover { background: #eff6ff; color: var(--brand); }
     .calendar-day.muted { color: #cbd5e1; }
     .calendar-day.in-range { background: #eef4ff; color: #2563eb; }
