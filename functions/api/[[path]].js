@@ -100,36 +100,55 @@ async function fetchOzonPostings(kind, from, to, store) {
 
 async function fetchOzonFinanceTransactions(from, to, store) {
   const rows = [];
-  let page = 1;
-  let pageCount = 1;
-  while (page <= pageCount && page <= 20) {
-    const response = await fetch("https://api-seller.ozon.ru/v3/finance/transaction/list", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "client-id": store.clientId,
-        "api-key": store.apiKey,
-      },
-      body: JSON.stringify({
-        filter: {
-          date: { from: `${from}T00:00:00Z`, to: `${to}T23:59:59Z` },
-          transaction_type: "all",
+  const ranges = splitDateRange(from, to, 28);
+  for (const range of ranges) {
+    let page = 1;
+    let pageCount = 1;
+    while (page <= pageCount && page <= 20) {
+      const response = await fetch("https://api-seller.ozon.ru/v3/finance/transaction/list", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "client-id": store.clientId,
+          "api-key": store.apiKey,
         },
-        page,
-        page_size: 1000,
-      }),
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Ozon finance API ${response.status}: ${text.slice(0, 240)}`);
+        body: JSON.stringify({
+          filter: {
+            date: { from: `${range.from}T00:00:00Z`, to: `${range.to}T23:59:59Z` },
+            transaction_type: "all",
+          },
+          page,
+          page_size: 1000,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Ozon finance API ${response.status}: ${text.slice(0, 240)}`);
+      }
+      const payload = await response.json();
+      const result = payload.result || {};
+      rows.push(...(result.operations || []));
+      pageCount = Number(result.page_count || 1);
+      page += 1;
     }
-    const payload = await response.json();
-    const result = payload.result || {};
-    rows.push(...(result.operations || []));
-    pageCount = Number(result.page_count || 1);
-    page += 1;
   }
   return rows;
+}
+
+function splitDateRange(from, to, maxDays) {
+  const ranges = [];
+  let cursor = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  while (cursor <= end) {
+    const chunkFrom = cursor.toISOString().slice(0, 10);
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setDate(chunkEnd.getDate() + maxDays - 1);
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+    ranges.push({ from: chunkFrom, to: chunkEnd.toISOString().slice(0, 10) });
+    cursor = new Date(chunkEnd);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return ranges;
 }
 
 function financeBucketForService(serviceName) {
