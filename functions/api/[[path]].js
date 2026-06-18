@@ -1,19 +1,19 @@
-const PRODUCTS = [
-  { code: "HS", sku: "3555785455", name: "电动按摩器", purchase: 28, domestic: 5, firstFreight: 4.18, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "HX", sku: "3592078186", name: "电动按摩器", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "HX", sku: "3903949202", name: "电动按摩器", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "JBAM", sku: "3714580469", name: "电动按摩器", purchase: 35, domestic: 5, firstFreight: 29.046, lastMile: 6, rate: 11.5, platform: "Ozon" },
-  { code: "PJ", sku: "3555656299", name: "电动按摩器", purchase: 50, domestic: 5, firstFreight: 27.55, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "SFZ", sku: "3555479037", name: "按摩枕", purchase: 35, domestic: 5, firstFreight: 25.3, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "TBAM", sku: "3714561826", name: "电动按摩器", purchase: 65, domestic: 5, firstFreight: 12.78, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "XFJ", sku: "3555131131", name: "电动按摩器", purchase: 60, domestic: 5, firstFreight: 22.66, lastMile: 4, rate: 11.5, platform: "Ozon" },
-  { code: "JW", sku: "4526520053", name: "脚腕按摩器", purchase: 28, domestic: 5, firstFreight: 3.52, lastMile: 3.5, rate: 11.5, platform: "Ozon" },
-  { code: "CDAM", sku: "4539993573", name: "床垫按摩器", purchase: 150, domestic: 5, firstFreight: 120.6, lastMile: 5, rate: 11.5, platform: "Ozon" },
-  { code: "AMY", sku: "4488765265", name: "按摩椅", purchase: 950, domestic: 5, firstFreight: 1587.2, lastMile: 0, rate: 11.5, platform: "Ozon" },
-  { code: "QB60-GRAY", sku: "4675959653", name: "水泵", purchase: 74.5, domestic: 12, firstFreight: 43.2, lastMile: 5, rate: 11.5, platform: "Ozon" },
-  { code: "QB-60", sku: "4509788886", name: "水泵", purchase: 70.5, domestic: 12, firstFreight: 43.2, lastMile: 5, rate: 11.5, platform: "Ozon" },
-  { code: "PK-750", sku: "4509718786", name: "水泵", purchase: 104.5, domestic: 12, firstFreight: 76.61, lastMile: 7, rate: 11.5, platform: "Ozon" },
-  { code: "GP-130", sku: "4509770907", name: "水泵", purchase: 104.5, domestic: 12, firstFreight: 141.86, lastMile: 10, rate: 11.5, platform: "Ozon" },
+﻿const PRODUCTS = [
+  { code: "HS", sku: "3555785455", name: "Product HS", purchase: 28, domestic: 5, firstFreight: 4.18, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "HX", sku: "3592078186", name: "Product HX", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "HX", sku: "3903949202", name: "Product HX", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "JBAM", sku: "3714580469", name: "Product JBAM", purchase: 35, domestic: 5, firstFreight: 29.046, lastMile: 6, rate: 11.5, platform: "Ozon" },
+  { code: "PJ", sku: "3555656299", name: "Product PJ", purchase: 50, domestic: 5, firstFreight: 27.55, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "SFZ", sku: "3555479037", name: "Product SFZ", purchase: 35, domestic: 5, firstFreight: 25.3, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "TBAM", sku: "3714561826", name: "Product TBAM", purchase: 65, domestic: 5, firstFreight: 12.78, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "XFJ", sku: "3555131131", name: "Product XFJ", purchase: 60, domestic: 5, firstFreight: 22.66, lastMile: 4, rate: 11.5, platform: "Ozon" },
+  { code: "JW", sku: "4526520053", name: "Product JW", purchase: 28, domestic: 5, firstFreight: 3.52, lastMile: 3.5, rate: 11.5, platform: "Ozon" },
+  { code: "CDAM", sku: "4539993573", name: "Product CDAM", purchase: 150, domestic: 5, firstFreight: 120.6, lastMile: 5, rate: 11.5, platform: "Ozon" },
+  { code: "AMY", sku: "4488765265", name: "Product AMY", purchase: 950, domestic: 5, firstFreight: 1587.2, lastMile: 0, rate: 11.5, platform: "Ozon" },
+  { code: "QB60-GRAY", sku: "4675959653", name: "Product QB60-GRAY", purchase: 74.5, domestic: 12, firstFreight: 43.2, lastMile: 5, rate: 11.5, platform: "Ozon" },
+  { code: "QB-60", sku: "4509788886", name: "Product QB-60", purchase: 70.5, domestic: 12, firstFreight: 43.2, lastMile: 5, rate: 11.5, platform: "Ozon" },
+  { code: "PK-750", sku: "4509718786", name: "Product PK-750", purchase: 104.5, domestic: 12, firstFreight: 76.61, lastMile: 7, rate: 11.5, platform: "Ozon" },
+  { code: "GP-130", sku: "4509770907", name: "Product GP-130", purchase: 104.5, domestic: 12, firstFreight: 141.86, lastMile: 10, rate: 11.5, platform: "Ozon" },
 ].map((item, index) => ({ ...item, id: `${item.platform}-${item.sku}-${index}` }));
 
 function json(body, status = 200) {
@@ -49,7 +49,7 @@ function ozonStores(env) {
     const clientId = env[`OZON_STORE_${index}_CLIENT_ID`];
     const apiKey = env[`OZON_STORE_${index}_API_KEY`];
     if (clientId && apiKey) {
-      stores.push({ name: name || `Ozon 店铺 ${index}`, clientId, apiKey });
+      stores.push({ name: name || `Ozon 搴楅摵 ${index}`, clientId, apiKey });
     }
   }
   if (env.OZON_STORES) {
@@ -57,7 +57,7 @@ function ozonStores(env) {
       const parsed = JSON.parse(env.OZON_STORES);
       if (Array.isArray(parsed)) {
         parsed.forEach((item, index) => {
-          if (item.clientId && item.apiKey) stores.push({ name: item.name || `Ozon 店铺 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
+          if (item.clientId && item.apiKey) stores.push({ name: item.name || `Ozon 搴楅摵 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
         });
       }
     } catch {
@@ -65,7 +65,7 @@ function ozonStores(env) {
     }
   }
   if (env.OZON_CLIENT_ID && env.OZON_API_KEY) {
-    stores.push({ name: env.OZON_STORE_NAME || "Ozon 店铺", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
+    stores.push({ name: env.OZON_STORE_NAME || "Ozon 搴楅摵", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
   }
   return stores;
 }
@@ -153,8 +153,8 @@ function splitDateRange(from, to, maxDays) {
 
 function financeBucketForService(serviceName) {
   const name = String(serviceName || "").toLowerCase();
-  if (/acquir|эквайр|оплат/.test(name)) return "acquiringFee";
-  if (/logistic|delivery|deliver|return|drop.?off|достав|логист|возврат/.test(name)) return "logisticsFee";
+  if (/acquir|褝泻胁邪泄褉|芯锌谢邪褌/.test(name)) return "acquiringFee";
+  if (/logistic|delivery|deliver|return|drop.?off|写芯褋褌邪胁|谢芯谐懈褋褌|胁芯蟹胁褉邪褌/.test(name)) return "logisticsFee";
   return "otherFixedFee";
 }
 
@@ -181,7 +181,7 @@ function financeIndex(transactions) {
       current[financeBucketForService(service.name)] += Math.abs(value);
     }
     const opText = `${operation.operation_type || ""} ${operation.operation_type_name || ""}`.toLowerCase();
-    if (/return|refund|возврат/.test(opText)) current.refundFee += Math.abs(amount(operation.amount));
+    if (/return|refund|胁芯蟹胁褉邪褌/.test(opText)) current.refundFee += Math.abs(amount(operation.amount));
     current.financeReady = true;
     map.set(postingNo, current);
   }
@@ -242,7 +242,7 @@ function filterRows(rows, params) {
 }
 
 function integrations(env) {
-  return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 环境变量" }));
+  return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 鐜鍙橀噺" }));
 }
 
 const ANALYTICS_METRICS = ["revenue", "ordered_units", "session_view", "hits_view_search", "hits_tocart_search", "conv_tocart"];
@@ -346,7 +346,7 @@ function ozonAdAccounts(env) {
 }
 
 async function fetchOzonAdsToken(account) {
-  const response = await fetch("https://performance.ozon.ru/api/client/token", {
+  const response = await fetch("https://api-performance.ozon.ru/api/client/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -456,7 +456,7 @@ async function probeOzonAnalytics(env, from, to) {
       store: store.name,
       checks: [
         await probeJson("seller_analytics_data", "https://api-seller.ozon.ru/v1/analytics/data", sellerHeaders, sellerBody),
-        await probeJson("performance_statistics_with_seller_key", "https://performance.ozon.ru/api/client/statistics", { Authorization: `Bearer ${store.apiKey}` }, {
+        await probeJson("performance_statistics_with_seller_key", "https://api-performance.ozon.ru/api/client/statistics", { Authorization: `Bearer ${store.apiKey}` }, {
           campaigns: [],
           dateFrom: from,
           dateTo: to,
@@ -469,7 +469,7 @@ async function probeOzonAnalytics(env, from, to) {
     dateFrom: from,
     dateTo: to,
     storeCount: stores.length,
-    note: "seller_analytics_data 如果成功，可接整体商品销售数据。performance_* 如果 401/403，说明需要单独广告/Performance API Token。",
+    note: "seller_analytics_data checks Seller API analytics. performance_* checks require a separate Performance API token.",
     probes,
   };
 }
@@ -483,16 +483,16 @@ async function probeOzonAds(env, from, to) {
       const token = await fetchOzonAdsToken(account);
       checks.push({ name: "ads_token", ok: true, status: 200, note: "token received" });
       const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
-      checks.push(await probeRequest("ads_campaign_list", "https://performance.ozon.ru/api/client/campaign", {
+      checks.push(await probeRequest("ads_campaign_list", "https://api-performance.ozon.ru/api/client/campaign", {
         method: "GET",
         headers,
       }));
-      checks.push(await probeRequest("ads_statistics_create_empty", "https://performance.ozon.ru/api/client/statistics", {
+      checks.push(await probeRequest("ads_statistics_create_empty", "https://api-performance.ozon.ru/api/client/statistics", {
         method: "POST",
         headers,
         body: JSON.stringify({ campaigns: [], dateFrom: from, dateTo: to, groupBy: "DATE" }),
       }));
-      checks.push(await probeRequest("ads_statistics_json_guess", `https://performance.ozon.ru/api/client/statistics/json?dateFrom=${from}&dateTo=${to}`, {
+      checks.push(await probeRequest("ads_statistics_json_guess", `https://api-performance.ozon.ru/api/client/statistics/json?dateFrom=${from}&dateTo=${to}`, {
         method: "GET",
         headers,
       }));
