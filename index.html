@@ -14,6 +14,7 @@
       </section>
       <nav>
         <button class="tab-btn active" data-tab="dashboard"><span>📊</span>首页大屏</button>
+        <button class="tab-btn" data-tab="orderProfit"><span>💰</span>订单利润</button>
         <button class="tab-btn" data-tab="costs"><span>📦</span>产品成本</button>
         <button class="tab-btn" data-tab="ads"><span>📣</span>广告费用</button>
         <button class="tab-btn" data-tab="competitors"><span>🛡️</span>竞品跟价 <span class="live-badge">LIVE</span></button>
@@ -34,11 +35,6 @@
     <main>
       <header class="topbar">
         <h2 id="pageTitle">首页大屏</h2>
-        <div class="top-filters">
-          <select><option>全部混合主仓 (Ozon + WB)</option></select>
-          <select><option>卢布账户 (₽)</option></select>
-          <select><option>今日实时</option><option>近 7 天</option><option>近 30 天</option></select>
-        </div>
       </header>
 
       <section class="tab active" id="dashboard">
@@ -130,6 +126,35 @@
           </div>
         </section>
 
+        <section class="panel store-overview-panel">
+          <div class="toolbar">
+            <div>
+              <h3>店铺经营概览</h3>
+              <p class="section-note">按当前经营汇总范围统计，曝光/点击/转化率待流量接口接入后自动补齐。</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="store-table">
+              <thead>
+                <tr>
+                  <th>店铺</th>
+                  <th>营业额</th>
+                  <th>利润</th>
+                  <th>订单量</th>
+                  <th>曝光</th>
+                  <th>点击</th>
+                  <th>转化率</th>
+                  <th>退单量</th>
+                  <th>退货率</th>
+                </tr>
+              </thead>
+              <tbody id="storeOverviewRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab" id="orderProfit">
         <section class="panel">
           <div class="toolbar">
             <h3>每日订单利润明细</h3>
