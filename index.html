@@ -42,32 +42,52 @@
       </header>
 
       <section class="tab active" id="dashboard">
-        <section class="panel">
+        <section class="dashboard-brief">
+          <div>
+            <h2>经营核心快报</h2>
+            <p>聚合 Ozon / WB 关键财务与动销指标</p>
+          </div>
+          <span class="live-chip"><span></span>实时战况模式</span>
+        </section>
+
+        <section class="panel api-panel">
           <div class="toolbar">
             <h3>线上 API 自检</h3>
             <button class="secondary" id="runApiDiagnostics" type="button">开始检测</button>
           </div>
-          <div id="apiDiagnostics" class="notice">点击“开始检测”，检查 Netlify Functions、Ozon 环境变量和订单接口。</div>
+          <div id="apiDiagnostics" class="notice">点击“开始检测”，检查 Cloudflare Functions、Ozon 环境变量和订单接口。</div>
         </section>
 
         <div class="grid metrics">
-          <div class="panel metric"><span>今日总营业额</span><strong id="todayRevenue">₽0.00</strong></div>
-          <div class="panel metric"><span>7天前营业额</span><strong id="weekAgoRevenue">₽0.00</strong></div>
-          <div class="panel metric profit-card"><span>今日利润</span><strong id="todayProfit">₽0.00</strong></div>
-          <div class="panel metric"><span>今日订单数</span><strong id="todayOrderCount">0</strong></div>
+          <div class="panel metric metric-revenue">
+            <span>今日实时总营业额</span>
+            <strong id="todayRevenue">₽0.00</strong>
+            <div class="metric-sub">7天前：<b id="weekAgoRevenue">₽0.00</b></div>
+            <div class="metric-split"><i></i><em></em></div>
+          </div>
+          <div class="panel metric profit-card">
+            <span>今日预估纯利</span>
+            <strong id="todayProfit">₽0.00</strong>
+            <div class="metric-sub">已扣成本、平台费与服务商费</div>
+          </div>
+          <div class="panel metric">
+            <span>今日实时订单总数</span>
+            <strong><b id="todayOrderCount">0</b><small> 单</small></strong>
+            <div class="metric-sub">刷单订单不计入经营利润</div>
+          </div>
         </div>
 
-        <section class="panel">
+        <section class="panel trend-panel">
           <div class="toolbar">
             <div class="chart-heading">
-              <h3 id="chartTitle">实时销售 & 订单趋势</h3>
-              <p>左轴：销售额，右轴：订单数，虚线：同期销售对比</p>
+              <h3 id="chartTitle">每日销量与销售额走势</h3>
+              <p>青蓝柱形：营业额（左轴） | 亮黄折线：订单量（右轴） | 灰色虚线：上个周期</p>
             </div>
             <div class="chart-controls">
               <div class="legend">
-                <span class="legend-item"><span class="legend-line"></span>今日销售额</span>
-                <span class="legend-item"><span class="legend-line dashed"></span>7天前销售额</span>
-                <span class="legend-item"><span class="legend-line green"></span>今日订单数</span>
+                <span class="legend-item"><span class="legend-bar"></span>营业额</span>
+                <span class="legend-item"><span class="legend-line yellow"></span>订单量</span>
+                <span class="legend-item"><span class="legend-line dashed"></span>上个周期</span>
               </div>
               <div class="chart-select">
                 <button id="chartMenuButton" type="button">以卢布为单位 周期为28天⌄</button>
