@@ -144,6 +144,51 @@
       font-size: 12px;
     }
     .order-filters select { min-width: 190px; }
+    .date-range-picker {
+      position: relative;
+    }
+    .date-range-button {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+      min-width: 240px;
+      text-align: left;
+    }
+    .date-range-panel {
+      position: absolute;
+      right: 0;
+      top: 44px;
+      display: none;
+      grid-template-columns: minmax(280px, 1fr) 78px;
+      gap: 14px;
+      width: 420px;
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 18px 42px rgba(35, 50, 66, .16);
+      z-index: 8;
+    }
+    .date-range-panel.open { display: grid; }
+    .date-inputs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .quick-ranges {
+      display: grid;
+      gap: 4px;
+      border-left: 1px solid var(--line);
+      padding-left: 12px;
+    }
+    .quick-ranges button {
+      background: transparent;
+      color: var(--brand);
+      padding: 4px 0;
+      text-align: left;
+      font-size: 13px;
+    }
+    .quick-ranges button:hover { color: var(--brand-dark); }
     .search { max-width: 360px; }
     .inline-select {
       display: flex;
@@ -171,6 +216,7 @@
       white-space: nowrap;
     }
     .finance-badge.actual { background: #e9f8ef; color: var(--green); }
+    .finance-badge.learned { background: #eaf2ff; color: var(--brand); }
     .finance-badge.estimated { background: #fff7ed; color: var(--orange); }
     .finance-badge.ignored { background: #f1f5f9; color: #64748b; }
     .ok { background: #e9f8ef; color: var(--green); }
