@@ -245,6 +245,88 @@ function integrations(env) {
   return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 环境变量" }));
 }
 
+async function probeJson(name, url, headers, body) {
+  const started = Date.now();
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    return {
+      name,
+      ok: response.ok,
+      status: response.status,
+      ms: Date.now() - started,
+      sample: parsed ? summarizeProbePayload(parsed) : text.slice(0, 500),
+    };
+  } catch (error) {
+    return { name, ok: false, error: error.message || String(error), ms: Date.now() - started };
+  }
+}
+
+function summarizeProbePayload(payload) {
+  if (Array.isArray(payload)) return { type: "array", count: payload.length, first: payload[0] || null };
+  const result = payload.result ?? payload;
+  if (Array.isArray(result)) return { type: "array", count: result.length, first: result[0] || null };
+  if (result && typeof result === "object") {
+    const summary = {};
+    for (const [key, value] of Object.entries(result).slice(0, 8)) {
+      if (Array.isArray(value)) summary[key] = { type: "array", count: value.length, first: value[0] || null };
+      else if (value && typeof value === "object") summary[key] = Object.fromEntries(Object.entries(value).slice(0, 6));
+      else summary[key] = value;
+    }
+    return summary;
+  }
+  return payload;
+}
+
+async function probeOzonAnalytics(env, from, to) {
+  const stores = ozonStores(env);
+  const probes = [];
+  for (const store of stores) {
+    const sellerHeaders = { "client-id": store.clientId, "api-key": store.apiKey };
+    const sellerBody = {
+      date_from: from,
+      date_to: to,
+      metrics: ["revenue", "ordered_units", "hits_view_search", "hits_tocart_search", "session_view", "conv_tocart"],
+      dimension: ["sku", "day"],
+      filters: [],
+      sort: [{ key: "revenue", order: "DESC" }],
+      limit: 10,
+      offset: 0,
+    };
+    probes.push({
+      store: store.name,
+      checks: [
+        await probeJson("seller_analytics_data", "https://api-seller.ozon.ru/v1/analytics/data", sellerHeaders, sellerBody),
+        await probeJson("seller_analytics_stock", "https://api-seller.ozon.ru/v1/analytics/stock", sellerHeaders, { limit: 10, offset: 0 }),
+        await probeJson("performance_campaign_list_with_seller_key", "https://performance.ozon.ru/api/client/campaign", { Authorization: `Bearer ${store.apiKey}` }, {}),
+        await probeJson("performance_statistics_with_seller_key", "https://performance.ozon.ru/api/client/statistics", { Authorization: `Bearer ${store.apiKey}` }, {
+          campaigns: [],
+          dateFrom: from,
+          dateTo: to,
+          groupBy: "DATE",
+        }),
+      ],
+    });
+  }
+  return {
+    dateFrom: from,
+    dateTo: to,
+    storeCount: stores.length,
+    note: "seller_analytics_data 如果成功，可接整体商品销售数据。performance_* 如果 401/403，说明需要单独广告/Performance API Token。",
+    probes,
+  };
+}
+
 function debugStatus(env) {
   const stores = ozonStores(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
@@ -284,6 +366,10 @@ export async function onRequest(context) {
     if (path === "ads/daily-products") return json([]);
     if (path === "competitors") return json([]);
     if (path === "integrations") return json(integrations(env));
+    if (path === "probe/ozon-analytics") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await probeOzonAnalytics(env, from, to));
+    }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
     return json({ error: error.message || String(error) }, 500);
