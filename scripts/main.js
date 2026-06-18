@@ -21,6 +21,8 @@ const initialProducts = [
     const competitorKey = "ozon_wb_competitors_v2";
     const apiConfigKey = "ozon_wb_api_configs_v1";
     const importedAdsKey = "ozon_wb_imported_ads_v1";
+    const orderRangeCacheKey = "ozon_wb_order_range_cache_v1";
+    const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v1";
     const skuFeeModels = {
       "3555785455": { defaultPrice: 2812.68, commissionRate: 0.47, logisticsFee: 146.9176, handlingFee: 25.9, acquiringFee: 11.1049, otherFixedFee: 10.8444 },
       "3592078186": { defaultPrice: 3050.0357, commissionRate: 0.47, logisticsFee: 249.9216, handlingFee: 24.5982, acquiringFee: 15.6189, otherFixedFee: 13.4782 },
@@ -51,12 +53,15 @@ const initialProducts = [
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
+    let orderRangeCache = JSON.parse(localStorage.getItem(orderRangeCacheKey) || "{}");
+    let storeAnalyticsCache = JSON.parse(localStorage.getItem(storeAnalyticsCacheKey) || "{}");
+    let storeAnalyticsRows = [];
     let revenueChartHitboxes = [];
     let activeChartIndex = null;
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
     let selectedStore = "all";
-    let orderDateFrom = addDays(todayIso(), -59);
-    let orderDateTo = todayIso();
+    let orderDateFrom = addDays(todayIso(), -28);
+    let orderDateTo = addDays(todayIso(), -1);
     let calendarCursor = new Date(`${orderDateFrom}T00:00:00`);
     let pickingDateField = "from";
     let pendingOrderDateAnchor = null;
@@ -174,6 +179,8 @@ const initialProducts = [
       localStorage.setItem(competitorKey, JSON.stringify(competitors));
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
+      localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
+      localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
     };
 
     async function apiRequest(path, options = {}) {
@@ -185,14 +192,45 @@ const initialProducts = [
       return response.json();
     }
 
-    async function loadBackendOrders() {
+    const cacheDayKey = () => todayIso();
+    const rangeCacheKey = (from, to) => `${cacheDayKey()}|${from}|${to}`;
+    const shouldRefreshRange = (from, to, force = false) => force || (from === todayIso() && to === todayIso());
+
+    async function loadBackendOrders(options = {}) {
       if (!backendEnabled) return;
+      const key = rangeCacheKey(orderDateFrom, orderDateTo);
+      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
+        orders = orderRangeCache[key];
+        return;
+      }
       const params = new URLSearchParams();
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
       const backendAds = await apiRequest("/api/ads/daily-products");
       if (backendAds.length) orders = mergeAdRowsIntoOrders(orders, backendAds);
+      orderRangeCache[key] = orders;
+      save();
+    }
+
+    async function loadStoreAnalytics(options = {}) {
+      storeAnalyticsRows = [];
+      if (!backendEnabled) return;
+      const key = rangeCacheKey(orderDateFrom, orderDateTo);
+      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && storeAnalyticsCache[key]) {
+        storeAnalyticsRows = storeAnalyticsCache[key];
+        return;
+      }
+      try {
+        const params = new URLSearchParams();
+        if (orderDateFrom) params.set("dateFrom", orderDateFrom);
+        if (orderDateTo) params.set("dateTo", orderDateTo);
+        storeAnalyticsRows = await apiRequest(`/api/analytics/store?${params.toString()}`);
+        storeAnalyticsCache[key] = storeAnalyticsRows;
+        save();
+      } catch {
+        storeAnalyticsRows = [];
+      }
     }
 
     async function runApiDiagnostics() {
@@ -379,6 +417,20 @@ const initialProducts = [
       drawRevenueChart();
     }
 
+    function analyticsForStore(store) {
+      return storeAnalyticsRows.find((row) => row.store === store) || null;
+    }
+
+    function metricText(value, fallback = "\u5F85\u63A5\u5165") {
+      const number = Number(value || 0);
+      return number > 0 ? number.toLocaleString("zh-CN") : fallback;
+    }
+
+    function percentText(value, fallback = "\u5F85\u63A5\u5165") {
+      const number = Number(value || 0);
+      return number > 0 ? number.toFixed(2) + "%" : fallback;
+    }
+
     function renderStoreOverview() {
       const body = $("storeOverviewRows");
       if (!body) return;
@@ -386,31 +438,39 @@ const initialProducts = [
       const map = new Map();
       scoped.forEach((order) => {
         const c = calcOrder(order);
-        const row = map.get(order.store) || { store: order.store || "未命名店铺", revenue: 0, profit: 0, orders: 0, refunds: 0 };
+        const store = order.store || "\u672A\u547D\u540D\u5E97\u94FA";
+        const row = map.get(store) || { store, revenue: 0, profit: 0, orders: 0, refunds: 0 };
         row.revenue += c.sale;
         row.profit += c.preliminaryProfit;
         if (!c.ignored) row.orders += 1;
         if (Number(c.refundFee || 0) > 0) row.refunds += 1;
-        map.set(order.store, row);
+        map.set(store, row);
+      });
+      storeAnalyticsRows.forEach((analytics) => {
+        const store = analytics.store || "\u672A\u547D\u540D\u5E97\u94FA";
+        if (!map.has(store)) map.set(store, { store, revenue: 0, profit: 0, orders: 0, refunds: 0 });
       });
       const rows = [...map.values()].sort((a, b) => b.revenue - a.revenue);
       body.innerHTML = rows.length ? rows.map((row) => {
+        const analytics = analyticsForStore(row.store) || {};
+        const exposure = Number(analytics.impressions || analytics.sessions || 0);
+        const clicks = Number(analytics.sessions || analytics.cartAdds || 0);
+        const conversion = exposure ? row.orders / exposure * 100 : Number(analytics.cartConversion || 0);
         const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
         const profitClass = row.profit >= 0 ? "positive" : "negative";
-        return `<tr>
-          <td><strong>${escapeHtml(row.store)}</strong></td>
-          <td class="money">${rub(row.revenue)}</td>
-          <td class="money ${profitClass}"><strong>${rub(row.profit)}</strong></td>
-          <td>${row.orders}</td>
-          <td class="muted-cell">待接入</td>
-          <td class="muted-cell">待接入</td>
-          <td class="muted-cell">待接入</td>
-          <td>${row.refunds}</td>
-          <td>${refundRate.toFixed(2)}%</td>
-        </tr>`;
-      }).join("") : `<tr><td colspan="9" class="muted-cell">当前时间范围暂无店铺数据</td></tr>`;
+        return '<tr>' +
+          '<td><strong>' + escapeHtml(row.store) + '</strong></td>' +
+          '<td class="money">' + rub(row.revenue) + '</td>' +
+          '<td class="money ' + profitClass + '"><strong>' + rub(row.profit) + '</strong></td>' +
+          '<td>' + row.orders + '</td>' +
+          '<td>' + metricText(exposure) + '</td>' +
+          '<td>' + metricText(clicks) + '</td>' +
+          '<td>' + percentText(conversion) + '</td>' +
+          '<td>' + row.refunds + '</td>' +
+          '<td>' + refundRate.toFixed(2) + '%</td>' +
+        '</tr>';
+      }).join("") : '<tr><td colspan="9" class="muted-cell">\u5F53\u524D\u65F6\u95F4\u8303\u56F4\u6682\u65E0\u5E97\u94FA\u6570\u636E</td></tr>';
     }
-
     function filteredOrders() {
       return selectedStore === "all" ? orders : orders.filter((order) => order.store === selectedStore);
     }
@@ -868,16 +928,29 @@ const initialProducts = [
       updateOrderDateButton();
       renderCalendar();
       await loadBackendOrders();
+      await loadStoreAnalytics();
       renderAll();
     }
     async function applySummaryRange(value) {
       const today = todayIso();
+      const yesterday = addDays(today, -1);
       let from = today;
       let to = today;
-      if (value === "7") from = addDays(today, -6);
-      else if (value === "28") from = addDays(today, -27);
-      else if (value === "quarter") from = addDays(today, -89);
-      else if (value === "year") from = addDays(today, -364);
+      if (value === "7") {
+        from = addDays(today, -7);
+        to = yesterday;
+      } else if (value === "28") {
+        from = addDays(today, -28);
+        to = yesterday;
+      } else if (value === "quarter") {
+        const d = new Date(`${today}T00:00:00`);
+        const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
+        from = new Date(d.getFullYear(), quarterStartMonth, 1).toISOString().slice(0, 10);
+        to = yesterday;
+      } else if (value === "year") {
+        from = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
+        to = yesterday;
+      }
       await reloadOrdersForRange(from, to);
     }
 
@@ -1349,22 +1422,25 @@ const initialProducts = [
       button.addEventListener("click", async () => {
         const value = button.dataset.range;
         const today = todayIso();
+        const yesterday = addDays(today, -1);
         pendingOrderDateAnchor = null;
         if (value === "today") {
           orderDateFrom = today;
           orderDateTo = today;
         } else if (value === "yesterday") {
-          orderDateFrom = addDays(today, -1);
-          orderDateTo = addDays(today, -1);
+          orderDateFrom = yesterday;
+          orderDateTo = yesterday;
         } else if (value === "quarter") {
-          orderDateFrom = addDays(today, -89);
-          orderDateTo = today;
+          const d = new Date(`${today}T00:00:00`);
+          const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
+          orderDateFrom = new Date(d.getFullYear(), quarterStartMonth, 1).toISOString().slice(0, 10);
+          orderDateTo = yesterday;
         } else if (value === "year") {
-          orderDateFrom = addDays(today, -364);
-          orderDateTo = today;
+          orderDateFrom = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
+          orderDateTo = yesterday;
         } else {
-          orderDateFrom = addDays(today, -(Number(value) - 1));
-          orderDateTo = today;
+          orderDateFrom = addDays(today, -Number(value));
+          orderDateTo = yesterday;
         }
         $("orderDateRangePanel")?.classList.remove("open");
         try {
@@ -1389,6 +1465,7 @@ const initialProducts = [
           ]);
           if (backendProducts.length) products = backendProducts;
           await loadBackendOrders();
+          await loadStoreAnalytics();
           competitors = backendCompetitors;
           apiConfigs = backendIntegrations;
         } catch {
