@@ -71,6 +71,38 @@ const initialProducts = [
       if (product) return skuFeeModels[String(product.sku)] || skuFeeModels[String(product.code)] || {};
       return skuFeeModels[String(fallbackSku)] || {};
     };
+    const orderProductKey = (order) => {
+      const product = productBySku(order.sku);
+      return product ? String(product.code || product.sku) : normalizeOffer(order.sku);
+    };
+    const financeEstimateForOrder = (order) => {
+      const key = orderProductKey(order);
+      const samples = orders.filter((item) => item !== order && item.financeReady && !isBrushOrder(item.sku) && orderProductKey(item) === key);
+      if (!samples.length) return null;
+      const avg = (field) => samples.reduce((sum, item) => sum + Number(item[field] || 0), 0) / samples.length;
+      return {
+        commission: avg("commission"),
+        logisticsFee: avg("logisticsFee"),
+        handlingFee: avg("handlingFee"),
+        acquiringFee: avg("acquiringFee"),
+        otherFixedFee: avg("otherFixedFee"),
+      };
+    };
+    const normalizeOrderRange = () => {
+      orderDateFrom = $("orderDateFrom")?.value || addDays(todayIso(), -59);
+      orderDateTo = $("orderDateTo")?.value || todayIso();
+      if (orderDateFrom > orderDateTo) {
+        alert("开始日期不能晚于结束日期，请重新选择日期范围。");
+        return false;
+      }
+      if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
+      if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
+      updateOrderDateButton();
+      return true;
+    };
+    const updateOrderDateButton = () => {
+      if ($("orderDateRangeButton")) $("orderDateRangeButton").textContent = `${orderDateFrom} - ${orderDateTo}`;
+    };
     const save = () => {
       localStorage.setItem(productKey, JSON.stringify(products));
       localStorage.setItem(orderKey, JSON.stringify(orders));
@@ -184,13 +216,14 @@ const initialProducts = [
       const product = productBySku(order.sku);
       const feeModel = feeModelByProduct(product, order.sku);
       const useActualFinance = Boolean(order.financeReady);
+      const learnedEstimate = useActualFinance ? null : financeEstimateForOrder(order);
       const sale = Number(order.backendPrice || order.sale || feeModel.defaultPrice || 0);
       const commissionRate = Number(feeModel.commissionRate || 0);
-      const commission = useActualFinance ? Number(order.commission || 0) : (commissionRate ? sale * commissionRate : Number(order.commission || 0));
-      const logisticsFee = useActualFinance ? Number(order.logisticsFee || 0) : Number(order.logisticsFee || feeModel.logisticsFee || 0);
-      const handlingFee = useActualFinance ? Number(order.handlingFee || 0) : Number(order.handlingFee || feeModel.handlingFee || 0);
-      const acquiringFee = useActualFinance ? Number(order.acquiringFee || 0) : Number(order.acquiringFee || feeModel.acquiringFee || 0);
-      const otherFixedFee = useActualFinance ? Number(order.otherFixedFee || 0) : Number(order.otherFixedFee || feeModel.otherFixedFee || 0);
+      const commission = useActualFinance ? Number(order.commission || 0) : Number(learnedEstimate?.commission ?? (commissionRate ? sale * commissionRate : Number(order.commission || 0)));
+      const logisticsFee = useActualFinance ? Number(order.logisticsFee || 0) : Number(learnedEstimate?.logisticsFee ?? order.logisticsFee ?? feeModel.logisticsFee ?? 0);
+      const handlingFee = useActualFinance ? Number(order.handlingFee || 0) : Number(learnedEstimate?.handlingFee ?? order.handlingFee ?? feeModel.handlingFee ?? 0);
+      const acquiringFee = useActualFinance ? Number(order.acquiringFee || 0) : Number(learnedEstimate?.acquiringFee ?? order.acquiringFee ?? feeModel.acquiringFee ?? 0);
+      const otherFixedFee = useActualFinance ? Number(order.otherFixedFee || 0) : Number(learnedEstimate?.otherFixedFee ?? order.otherFixedFee ?? feeModel.otherFixedFee ?? 0);
       const platformFee = logisticsFee + handlingFee + acquiringFee + otherFixedFee;
       const refundFee = Number(order.refundFee || 0);
       const adCost = Number(order.adCost || 0);
@@ -198,7 +231,7 @@ const initialProducts = [
       const serviceFee = platformProfit * 0.13;
       const cost = product ? totalRub(product) : 0;
       const preliminaryProfit = platformProfit - serviceFee - cost;
-      return { product, feeModel, sale, commissionRate, commission, logisticsFee, handlingFee, acquiringFee, otherFixedFee, platformFee, refundFee, adCost, platformProfit, serviceFee, cost, preliminaryProfit, realProfit: preliminaryProfit - adCost };
+      return { product, feeModel, sale, commissionRate, commission, logisticsFee, handlingFee, acquiringFee, otherFixedFee, platformFee, refundFee, adCost, platformProfit, serviceFee, cost, preliminaryProfit, realProfit: preliminaryProfit - adCost, learnedEstimate: Boolean(learnedEstimate) };
     }
 
     function calcPriceProfit(productId, price) {
@@ -256,6 +289,8 @@ const initialProducts = [
           ? `<span class="finance-badge ignored">刷单忽略</span>`
           : order.financeReady
           ? `<span class="finance-badge actual">真实费用</span>`
+          : c.learnedEstimate
+          ? `<span class="finance-badge learned">同品预估</span>`
           : `<span class="finance-badge estimated">预估费用</span>`;
         return `<tr>
           <td>${order.date}</td>
@@ -1007,8 +1042,7 @@ const initialProducts = [
       renderDashboard();
     });
     $("reloadOrders").addEventListener("click", async () => {
-      orderDateFrom = $("orderDateFrom").value || addDays(todayIso(), -59);
-      orderDateTo = $("orderDateTo").value || todayIso();
+      if (!normalizeOrderRange()) return;
       $("reloadOrders").textContent = "抓取中...";
       $("reloadOrders").disabled = true;
       try {
@@ -1021,10 +1055,40 @@ const initialProducts = [
         renderAll();
       }
     });
+    $("orderDateRangeButton")?.addEventListener("click", () => {
+      $("orderDateRangePanel")?.classList.toggle("open");
+    });
+    document.querySelectorAll("[data-range]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const value = button.dataset.range;
+        const today = todayIso();
+        if (value === "today") {
+          orderDateFrom = today;
+          orderDateTo = today;
+        } else if (value === "yesterday") {
+          orderDateFrom = addDays(today, -1);
+          orderDateTo = addDays(today, -1);
+        } else if (value === "quarter") {
+          orderDateFrom = addDays(today, -89);
+          orderDateTo = today;
+        } else if (value === "year") {
+          orderDateFrom = addDays(today, -364);
+          orderDateTo = today;
+        } else {
+          orderDateFrom = addDays(today, -(Number(value) - 1));
+          orderDateTo = today;
+        }
+        $("orderDateFrom").value = orderDateFrom;
+        $("orderDateTo").value = orderDateTo;
+        updateOrderDateButton();
+        $("orderDateRangePanel")?.classList.remove("open");
+      });
+    });
 
     async function bootstrap() {
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
+      updateOrderDateButton();
       if (backendEnabled) {
         try {
           const [backendProducts, backendCompetitors, backendIntegrations] = await Promise.all([
