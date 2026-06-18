@@ -59,6 +59,7 @@ const initialProducts = [
     let orderDateTo = todayIso();
     let calendarCursor = new Date(`${orderDateFrom}T00:00:00`);
     let pickingDateField = "from";
+    let pendingOrderDateAnchor = null;
     const backendEnabled = location.protocol !== "file:";
 
     const totalRmb = (p) => Number(p.purchase||0) + Number(p.domestic||0) + Number(p.firstFreight||0) + Number(p.lastMile||0);
@@ -97,8 +98,7 @@ const initialProducts = [
       orderDateFrom = $("orderDateFrom")?.value || addDays(todayIso(), -59);
       orderDateTo = $("orderDateTo")?.value || todayIso();
       if (orderDateFrom > orderDateTo) {
-        alert("开始日期不能晚于结束日期，请重新选择日期范围。");
-        return false;
+        [orderDateFrom, orderDateTo] = [orderDateTo, orderDateFrom];
       }
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
@@ -121,19 +121,21 @@ const initialProducts = [
       box.innerHTML = months.map((month) => {
         const first = new Date(month.getFullYear(), month.getMonth(), 1);
         const startOffset = (first.getDay() + 6) % 7;
-        const start = new Date(first);
-        start.setDate(first.getDate() - startOffset);
+        const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
         const days = [];
-        for (let i = 0; i < 42; i += 1) {
-          const day = new Date(start);
-          day.setDate(start.getDate() + i);
+        for (let i = 0; i < startOffset; i += 1) {
+          days.push(`<span class="calendar-empty"></span>`);
+        }
+        for (let date = 1; date <= daysInMonth; date += 1) {
+          const day = new Date(month.getFullYear(), month.getMonth(), date);
           const iso = day.toISOString().slice(0, 10);
+          const rangeFrom = orderDateFrom <= orderDateTo ? orderDateFrom : orderDateTo;
+          const rangeTo = orderDateFrom <= orderDateTo ? orderDateTo : orderDateFrom;
           const classes = [
             "calendar-day",
-            day.getMonth() !== month.getMonth() ? "muted" : "",
             iso === todayIso() ? "today" : "",
-            iso === orderDateFrom || iso === orderDateTo ? "selected" : "",
-            iso > orderDateFrom && iso < orderDateTo ? "in-range" : "",
+            iso === rangeFrom || iso === rangeTo || iso === pendingOrderDateAnchor ? "selected" : "",
+            iso > rangeFrom && iso < rangeTo ? "in-range" : "",
           ].filter(Boolean).join(" ");
           days.push(`<button type="button" class="${classes}" data-date="${iso}">${day.getDate()}</button>`);
         }
@@ -144,18 +146,27 @@ const initialProducts = [
         </div>`;
       }).join("");
     };
-    const setOrderDate = (value) => {
-      if (pickingDateField === "from") {
+    const setOrderDate = async (value) => {
+      if (!pendingOrderDateAnchor) {
+        pendingOrderDateAnchor = value;
         orderDateFrom = value;
-        pickingDateField = "to";
-      } else {
         orderDateTo = value;
-        pickingDateField = "from";
+        $("orderDateFrom").value = orderDateFrom;
+        $("orderDateTo").value = orderDateTo;
+        updateOrderDateButton();
+        renderCalendar();
+        return;
       }
+      const sorted = [pendingOrderDateAnchor, value].sort();
+      pendingOrderDateAnchor = null;
+      orderDateFrom = sorted[0];
+      orderDateTo = sorted[1];
       $("orderDateFrom").value = orderDateFrom;
       $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();
       renderCalendar();
+      $("orderDateRangePanel")?.classList.remove("open");
+      await reloadOrdersForRange(orderDateFrom, orderDateTo);
     };
     const save = () => {
       localStorage.setItem(productKey, JSON.stringify(products));
@@ -849,6 +860,7 @@ const initialProducts = [
       $("chartMenuButton").textContent = `以${unitText}为单位 周期为${chartConfig.periodLabel}⌄`;
     }
     async function reloadOrdersForRange(from, to) {
+      if (from > to) [from, to] = [to, from];
       orderDateFrom = from;
       orderDateTo = to;
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
@@ -1331,12 +1343,13 @@ const initialProducts = [
     $("orderCalendar")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-date]");
       if (!button) return;
-      setOrderDate(button.dataset.date);
+      setOrderDate(button.dataset.date).catch((error) => alert(error.message));
     });
     document.querySelectorAll("[data-range]").forEach((button) => {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
         const value = button.dataset.range;
         const today = todayIso();
+        pendingOrderDateAnchor = null;
         if (value === "today") {
           orderDateFrom = today;
           orderDateTo = today;
@@ -1353,11 +1366,12 @@ const initialProducts = [
           orderDateFrom = addDays(today, -(Number(value) - 1));
           orderDateTo = today;
         }
-        $("orderDateFrom").value = orderDateFrom;
-        $("orderDateTo").value = orderDateTo;
-        updateOrderDateButton();
-        renderCalendar();
         $("orderDateRangePanel")?.classList.remove("open");
+        try {
+          await reloadOrdersForRange(orderDateFrom, orderDateTo);
+        } catch (error) {
+          alert(error.message);
+        }
       });
     });
 
