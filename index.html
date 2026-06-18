@@ -50,28 +50,36 @@
           <span class="live-chip"><span></span>实时战况模式</span>
         </section>
 
-        <section class="panel api-panel">
+        <section class="panel summary-panel">
           <div class="toolbar">
-            <h3>线上 API 自检</h3>
-            <button class="secondary" id="runApiDiagnostics" type="button">开始检测</button>
+            <div>
+              <h3>经营汇总范围</h3>
+              <p id="summaryRangeText">按当前订单日期范围统计</p>
+            </div>
+            <div class="range-pills">
+              <button type="button" data-summary-range="today">今天</button>
+              <button type="button" data-summary-range="7">7天</button>
+              <button class="active" type="button" data-summary-range="28">28天</button>
+              <button type="button" data-summary-range="quarter">季度</button>
+              <button type="button" data-summary-range="year">年</button>
+            </div>
           </div>
-          <div id="apiDiagnostics" class="notice">点击“开始检测”，检查 Cloudflare Functions、Ozon 环境变量和订单接口。</div>
         </section>
 
         <div class="grid metrics">
           <div class="panel metric metric-revenue">
-            <span>今日实时总营业额</span>
+            <span id="revenueMetricLabel">范围总营业额</span>
             <strong id="todayRevenue">₽0.00</strong>
             <div class="metric-sub">7天前：<b id="weekAgoRevenue">₽0.00</b></div>
             <div class="metric-split"><i></i><em></em></div>
           </div>
           <div class="panel metric profit-card">
-            <span>今日预估纯利</span>
+            <span id="profitMetricLabel">范围预估纯利</span>
             <strong id="todayProfit">₽0.00</strong>
             <div class="metric-sub">已扣成本、平台费与服务商费</div>
           </div>
           <div class="panel metric">
-            <span>今日实时订单总数</span>
+            <span id="orderMetricLabel">范围订单总数</span>
             <strong><b id="todayOrderCount">0</b><small> 单</small></strong>
             <div class="metric-sub">刷单订单不计入经营利润</div>
           </div>
@@ -84,6 +92,10 @@
               <p>青蓝柱形：营业额（左轴） | 亮黄折线：订单量（右轴） | 灰色虚线：上个周期</p>
             </div>
             <div class="chart-controls">
+              <div class="period-tabs">
+                <button type="button" data-chart-period="7">7天</button>
+                <button class="active" type="button" data-chart-period="28">28天</button>
+              </div>
               <div class="legend">
                 <span class="legend-item"><span class="legend-bar"></span>营业额</span>
                 <span class="legend-item"><span class="legend-line yellow"></span>订单量</span>
@@ -125,9 +137,19 @@
               <div class="date-range-picker">
                 <button class="date-range-button" id="orderDateRangeButton" type="button">选择日期范围</button>
                 <div class="date-range-panel" id="orderDateRangePanel">
-                  <div class="date-inputs">
-                    <label>开始日期<input id="orderDateFrom" type="date" /></label>
-                    <label>结束日期<input id="orderDateTo" type="date" /></label>
+                  <div class="date-range-main">
+                    <div class="date-fields">
+                      <label>开始日期<button class="date-display" id="orderDateFromDisplay" type="button">-</button></label>
+                      <label>结束日期<button class="date-display" id="orderDateToDisplay" type="button">-</button></label>
+                    </div>
+                    <input id="orderDateFrom" type="hidden" />
+                    <input id="orderDateTo" type="hidden" />
+                    <div class="calendar-head">
+                      <button id="calendarPrev" type="button">‹</button>
+                      <span id="calendarTitle">选择日期</span>
+                      <button id="calendarNext" type="button">›</button>
+                    </div>
+                    <div class="calendar-months" id="orderCalendar"></div>
                   </div>
                   <div class="quick-ranges">
                     <button type="button" data-range="today">今天</button>
