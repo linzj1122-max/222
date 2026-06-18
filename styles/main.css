@@ -221,6 +221,29 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .section-note {
+      margin: 4px 0 0;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .store-overview-panel .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .store-table {
+      min-width: 1040px;
+    }
+    .store-table th,
+    .store-table td {
+      padding: 13px 12px;
+    }
+    .muted-cell {
+      color: #94a3b8;
+      font-weight: 700;
+    }
+    .positive { color: #059669; }
+    .negative { color: var(--red); }
     table { width: 100%; min-width: 980px; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--line); padding: 11px 9px; text-align: left; font-size: 14px; vertical-align: middle; }
     th { background: #f7fafb; color: #465961; font-size: 12px; position: sticky; top: 0; }
@@ -579,24 +602,6 @@
       background: #005bff;
       border-radius: 3px;
       display: inline-block;
-    }
-    .top-filters {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    .top-filters select {
-      width: auto;
-      min-width: 138px;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 8px 11px;
-      color: #334155;
-      font-size: 12px;
-      font-weight: 800;
     }
     .live-badge {
       margin-left: auto;
