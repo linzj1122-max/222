@@ -50,10 +50,13 @@ const initialProducts = [
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
     let revenueChartHitboxes = [];
+    let activeChartIndex = null;
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
     let selectedStore = "all";
     let orderDateFrom = addDays(todayIso(), -59);
     let orderDateTo = todayIso();
+    let calendarCursor = new Date(`${orderDateFrom}T00:00:00`);
+    let pickingDateField = "from";
     const backendEnabled = location.protocol !== "file:";
 
     const totalRmb = (p) => Number(p.purchase||0) + Number(p.domestic||0) + Number(p.firstFreight||0) + Number(p.lastMile||0);
@@ -102,6 +105,55 @@ const initialProducts = [
     };
     const updateOrderDateButton = () => {
       if ($("orderDateRangeButton")) $("orderDateRangeButton").textContent = `${orderDateFrom} - ${orderDateTo}`;
+      if ($("orderDateFromDisplay")) $("orderDateFromDisplay").textContent = orderDateFrom.replaceAll("-", "/");
+      if ($("orderDateToDisplay")) $("orderDateToDisplay").textContent = orderDateTo.replaceAll("-", "/");
+    };
+    const monthLabel = (date) => `${date.getFullYear()}年 ${date.getMonth() + 1}月`;
+    const renderCalendar = () => {
+      const box = $("orderCalendar");
+      if (!box) return;
+      const base = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), 1);
+      const months = [0, 1].map((offset) => new Date(base.getFullYear(), base.getMonth() + offset, 1));
+      $("calendarTitle").textContent = `${monthLabel(months[0])} - ${monthLabel(months[1])}`;
+      const weeks = ["一", "二", "三", "四", "五", "六", "日"];
+      box.innerHTML = months.map((month) => {
+        const first = new Date(month.getFullYear(), month.getMonth(), 1);
+        const startOffset = (first.getDay() + 6) % 7;
+        const start = new Date(first);
+        start.setDate(first.getDate() - startOffset);
+        const days = [];
+        for (let i = 0; i < 42; i += 1) {
+          const day = new Date(start);
+          day.setDate(start.getDate() + i);
+          const iso = day.toISOString().slice(0, 10);
+          const classes = [
+            "calendar-day",
+            day.getMonth() !== month.getMonth() ? "muted" : "",
+            iso === todayIso() ? "today" : "",
+            iso === orderDateFrom || iso === orderDateTo ? "selected" : "",
+            iso > orderDateFrom && iso < orderDateTo ? "in-range" : "",
+          ].filter(Boolean).join(" ");
+          days.push(`<button type="button" class="${classes}" data-date="${iso}">${day.getDate()}</button>`);
+        }
+        return `<div class="calendar-month">
+          <div class="calendar-title">${monthLabel(month)}</div>
+          <div class="calendar-week">${weeks.map((w) => `<span>${w}</span>`).join("")}</div>
+          <div class="calendar-days">${days.join("")}</div>
+        </div>`;
+      }).join("");
+    };
+    const setOrderDate = (value) => {
+      if (pickingDateField === "from") {
+        orderDateFrom = value;
+        pickingDateField = "to";
+      } else {
+        orderDateTo = value;
+        pickingDateField = "from";
+      }
+      $("orderDateFrom").value = orderDateFrom;
+      $("orderDateTo").value = orderDateTo;
+      updateOrderDateButton();
+      renderCalendar();
     };
     const save = () => {
       localStorage.setItem(productKey, JSON.stringify(products));
@@ -267,19 +319,18 @@ const initialProducts = [
 
     function renderDashboard() {
       const today = todayIso();
-      const weekAgo = addDays(today, -7);
       const scopedOrders = filteredOrders();
-      const todayOrders = scopedOrders.filter((o) => o.date === today);
-      const weekAgoOrders = scopedOrders.filter((o) => o.date === weekAgo);
-      const todayRevenue = todayOrders.reduce((sum, o) => sum + calcOrder(o).sale, 0);
-      const weekRevenue = weekAgoOrders.reduce((sum, o) => sum + calcOrder(o).sale, 0);
-      const todayGrossProfit = todayOrders.reduce((sum, o) => sum + calcOrder(o).preliminaryProfit, 0);
-      const todayAdCost = todayOrders.reduce((sum, o) => sum + Number(o.adCost || 0), 0);
+      const rangeOrders = scopedOrders.filter((o) => (!orderDateFrom || o.date >= orderDateFrom) && (!orderDateTo || o.date <= orderDateTo));
+      const todayRevenue = rangeOrders.reduce((sum, o) => sum + calcOrder(o).sale, 0);
+      const weekRevenue = scopedOrders.filter((o) => o.date === addDays(today, -7)).reduce((sum, o) => sum + calcOrder(o).sale, 0);
+      const todayGrossProfit = rangeOrders.reduce((sum, o) => sum + calcOrder(o).preliminaryProfit, 0);
+      const todayAdCost = rangeOrders.reduce((sum, o) => sum + Number(o.adCost || 0), 0);
       const todayProfit = todayGrossProfit - todayAdCost;
       $("todayRevenue").textContent = rub(todayRevenue);
       $("weekAgoRevenue").textContent = rub(weekRevenue);
       $("todayProfit").textContent = rub(todayProfit);
-      $("todayOrderCount").textContent = todayOrders.length;
+      $("todayOrderCount").textContent = rangeOrders.length;
+      if ($("summaryRangeText")) $("summaryRangeText").textContent = `当前统计范围：${orderDateFrom} 至 ${orderDateTo}`;
       if ($("orderRangeStatus")) {
         $("orderRangeStatus").textContent = `当前订单范围：${orderDateFrom || "最早"} 至 ${orderDateTo || "今天"}，共 ${scopedOrders.length} 单。未出财务的订单先按历史模型预估，出财务后自动改为真实费用。`;
       }
@@ -399,6 +450,19 @@ const initialProducts = [
 
       const comparePoints = comparison.map((item, index) => ({ x: toX(index), y: toY(item.revenue) }));
       const orderPoints = current.map((item, index) => ({ x: toX(index), y: toOrderY(item.orders) }));
+      if (activeChartIndex !== null && current[activeChartIndex]) {
+        const activeX = toX(activeChartIndex);
+        ctx.fillStyle = "rgba(255, 255, 255, .06)";
+        ctx.fillRect(activeX - Math.max(10, xStep / 2), chartY, Math.max(20, xStep), chartH);
+        ctx.strokeStyle = "rgba(250, 217, 97, .45)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        ctx.moveTo(activeX, chartY);
+        ctx.lineTo(activeX, chartY + chartH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       drawSmoothLine(ctx, comparePoints, "rgba(148, 163, 184, .58)", 2, { dots: false, dashed: true });
 
       const barStep = chartW / Math.max(current.length, 1);
@@ -408,8 +472,8 @@ const initialProducts = [
         const y = toY(item.revenue);
         const h = chartY + chartH - y;
         const grad = ctx.createLinearGradient(0, y, 0, chartY + chartH);
-        grad.addColorStop(0, "#00f2fe");
-        grad.addColorStop(1, "#4facfe");
+        grad.addColorStop(0, index === activeChartIndex ? "#b9fbff" : "#00f2fe");
+        grad.addColorStop(1, index === activeChartIndex ? "#6bb8ff" : "#4facfe");
         ctx.fillStyle = grad;
         ctx.beginPath();
         const r = Math.min(5, barW / 2, h);
@@ -423,6 +487,16 @@ const initialProducts = [
         ctx.fill();
       });
       drawSmoothLine(ctx, orderPoints, "#fad961", 2.5, { dots: false });
+      if (activeChartIndex !== null && orderPoints[activeChartIndex]) {
+        const point = orderPoints[activeChartIndex];
+        ctx.fillStyle = "#0b111e";
+        ctx.strokeStyle = "#fad961";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
 
       ctx.fillStyle = "#64748b";
       ctx.font = "12px Microsoft YaHei, Arial";
@@ -440,17 +514,24 @@ const initialProducts = [
 
       revenueChartHitboxes = current.map((item, index) => {
         const compare = comparison[index] || { revenue: 0 };
-        const change = compare.revenue ? (item.revenue - compare.revenue) / compare.revenue * 100 : 0;
+        const change = compare.revenue ? (item.revenue - compare.revenue) / compare.revenue * 100 : null;
+        const changeLabel = compare.revenue
+          ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`
+          : item.revenue > 0
+          ? "新增"
+          : "无变化";
         return {
           x: toX(index) - Math.max(8, xStep / 2),
           y: chartY,
           w: Math.max(16, xStep),
           h: chartH,
+          index,
           date: item.date,
           revenue: item.revenue,
           previous: compare.revenue,
           orders: item.orders,
           change,
+          changeLabel,
           formatSales,
           formatOrders
         };
@@ -669,8 +750,28 @@ const initialProducts = [
 
     function updateChartMenuText() {
       const unitText = chartConfig.unit === "count" ? "件" : "卢布";
-      $("chartTitle").textContent = chartConfig.unit === "count" ? "订购商品数量" : "销售额趋势";
+      $("chartTitle").textContent = chartConfig.unit === "count" ? "订购商品数量" : "每日销量与销售额走势";
       $("chartMenuButton").textContent = `以${unitText}为单位 周期为${chartConfig.periodLabel}⌄`;
+    }
+    async function reloadOrdersForRange(from, to) {
+      orderDateFrom = from;
+      orderDateTo = to;
+      if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
+      if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
+      updateOrderDateButton();
+      renderCalendar();
+      await loadBackendOrders();
+      renderAll();
+    }
+    async function applySummaryRange(value) {
+      const today = todayIso();
+      let from = today;
+      let to = today;
+      if (value === "7") from = addDays(today, -6);
+      else if (value === "28") from = addDays(today, -27);
+      else if (value === "quarter") from = addDays(today, -89);
+      else if (value === "year") from = addDays(today, -364);
+      await reloadOrdersForRange(from, to);
     }
 
     $("chartMenuButton").addEventListener("click", () => {
@@ -697,6 +798,37 @@ const initialProducts = [
         drawRevenueChart();
       });
     });
+    document.querySelectorAll("[data-chart-period]").forEach((button) => {
+      button.addEventListener("click", () => {
+        chartConfig.period = Number(button.dataset.chartPeriod);
+        chartConfig.periodLabel = `${chartConfig.period}天`;
+        document.querySelectorAll("[data-chart-period]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        document.querySelectorAll(`.menu-option[data-config="period"]`).forEach((item) => {
+          item.classList.toggle("active", Number(item.dataset.value) === chartConfig.period);
+        });
+        updateChartMenuText();
+        activeChartIndex = null;
+        drawRevenueChart();
+      });
+    });
+    document.querySelectorAll("[data-summary-range]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        document.querySelectorAll("[data-summary-range]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        button.textContent = "抓取中...";
+        button.disabled = true;
+        try {
+          await applySummaryRange(button.dataset.summaryRange);
+        } catch (error) {
+          alert(error.message);
+        } finally {
+          const labels = { today: "今天", "7": "7天", "28": "28天", quarter: "季度", year: "年" };
+          button.textContent = labels[button.dataset.summaryRange] || "范围";
+          button.disabled = false;
+        }
+      });
+    });
 
     $("revenueChart").addEventListener("mousemove", (event) => {
       const canvas = $("revenueChart");
@@ -709,14 +841,22 @@ const initialProducts = [
       const hit = revenueChartHitboxes.find((box) => x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h);
       if (!hit) {
         tooltip.style.display = "none";
+        if (activeChartIndex !== null) {
+          activeChartIndex = null;
+          drawRevenueChart();
+        }
         return;
+      }
+      if (activeChartIndex !== hit.index) {
+        activeChartIndex = hit.index;
+        drawRevenueChart();
       }
       tooltip.innerHTML = `
         <strong>${hit.date}</strong><br>
         今日销售额：${hit.formatSales(hit.revenue)}<br>
         7天前销售额：${hit.formatSales(hit.previous)}<br>
         今日订单数：${hit.formatOrders(hit.orders)}<br>
-        涨跌：<span style="color:${hit.change >= 0 ? "#ffd6d2" : "#d6f7df"}">${hit.change >= 0 ? "+" : ""}${hit.change.toFixed(2)}%</span>
+        涨跌：<span style="color:${hit.change === null ? "#fde68a" : hit.change >= 0 ? "#ffd6d2" : "#d6f7df"}">${hit.changeLabel}</span>
       `;
       tooltip.style.display = "block";
       tooltip.style.left = `${Math.min(event.clientX - rect.left + 14, rect.width - 170)}px`;
@@ -725,6 +865,8 @@ const initialProducts = [
 
     $("revenueChart").addEventListener("mouseleave", () => {
       $("chartTooltip").style.display = "none";
+      activeChartIndex = null;
+      drawRevenueChart();
     });
 
     function renderCosts() {
@@ -1071,6 +1213,22 @@ const initialProducts = [
     });
     $("orderDateRangeButton")?.addEventListener("click", () => {
       $("orderDateRangePanel")?.classList.toggle("open");
+      renderCalendar();
+    });
+    $("orderDateFromDisplay")?.addEventListener("click", () => { pickingDateField = "from"; renderCalendar(); });
+    $("orderDateToDisplay")?.addEventListener("click", () => { pickingDateField = "to"; renderCalendar(); });
+    $("calendarPrev")?.addEventListener("click", () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
+      renderCalendar();
+    });
+    $("calendarNext")?.addEventListener("click", () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
+      renderCalendar();
+    });
+    $("orderCalendar")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-date]");
+      if (!button) return;
+      setOrderDate(button.dataset.date);
     });
     document.querySelectorAll("[data-range]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1095,6 +1253,7 @@ const initialProducts = [
         $("orderDateFrom").value = orderDateFrom;
         $("orderDateTo").value = orderDateTo;
         updateOrderDateButton();
+        renderCalendar();
         $("orderDateRangePanel")?.classList.remove("open");
       });
     });
@@ -1103,6 +1262,7 @@ const initialProducts = [
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();
+      renderCalendar();
       if (backendEnabled) {
         try {
           const [backendProducts, backendCompetitors, backendIntegrations] = await Promise.all([
