@@ -445,6 +445,8 @@ function probeArray(payload) {
   if (Array.isArray(payload?.list)) return payload.list;
   if (Array.isArray(payload?.campaigns)) return payload.campaigns;
   if (payload?.type === "array" && payload.first) return [payload.first];
+  if (payload?.list?.type === "array" && payload.list.first) return [payload.list.first];
+  if (payload?.campaigns?.type === "array" && payload.campaigns.first) return [payload.campaigns.first];
   return [];
 }
 
