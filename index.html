@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
   <link rel="stylesheet" href="styles/main.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -271,6 +272,22 @@
       <section class="tab" id="ads">
         <section class="panel">
           <div class="toolbar">
+            <div>
+              <h3>广告数据导入</h3>
+              <p class="section-note">上传 Ozon 推广分析 xlsx，系统会提取广告费、广告销售额、广告订单、曝光、点击和 CTR。</p>
+            </div>
+          </div>
+          <div class="import-box">
+            <label>归属店铺<select id="adImportStore"></select></label>
+            <label>推广分析文件<input id="adImportFile" type="file" accept=".xlsx,.xls,.csv" /></label>
+            <button class="primary" id="importAds" type="button">导入广告数据</button>
+            <button class="danger" id="clearImportedAds" type="button">清空导入数据</button>
+          </div>
+          <div id="adImportStatus" class="table-status">尚未导入广告数据。</div>
+        </section>
+
+        <section class="panel">
+          <div class="toolbar">
             <h3>广告费用</h3>
             <label class="inline-select">选择店铺
               <select id="adStoreSelect"></select>
@@ -303,11 +320,15 @@
             <table>
               <thead>
                 <tr>
-                  <th>日期</th>
+                  <th>日期/周期</th>
                   <th>店铺</th>
                   <th>产品</th>
-                  <th>广告产生营业额</th>
+                  <th>广告销售额</th>
+                  <th>广告订单</th>
                   <th>广告费</th>
+                  <th>曝光</th>
+                  <th>点击</th>
+                  <th>CTR</th>
                   <th>广告占比</th>
                 </tr>
               </thead>
