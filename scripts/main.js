@@ -52,12 +52,21 @@ const initialProducts = [
     let revenueChartHitboxes = [];
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
     let selectedStore = "all";
+    let orderDateFrom = addDays(todayIso(), -59);
+    let orderDateTo = todayIso();
     const backendEnabled = location.protocol !== "file:";
 
     const totalRmb = (p) => Number(p.purchase||0) + Number(p.domestic||0) + Number(p.firstFreight||0) + Number(p.lastMile||0);
     const totalRub = (p) => totalRmb(p) * Number(p.rate || 0);
     const productById = (id) => products.find((p) => p.id === id);
-    const productBySku = (sku) => products.find((p) => String(p.sku) === String(sku) || String(p.code) === String(sku));
+    const isBrushOrder = (sku) => /[-_]JS$/i.test(String(sku || "").trim());
+    const normalizeOffer = (value) => String(value || "").trim().replace(/[-_](RU|FBO|FBS)$/i, "");
+    const productBySku = (sku) => {
+      const raw = String(sku || "");
+      const normalized = normalizeOffer(raw);
+      return products.find((p) => String(p.sku) === raw || String(p.code) === raw)
+        || products.find((p) => String(p.sku) === normalized || String(p.code) === normalized);
+    };
     const feeModelByProduct = (product, fallbackSku) => {
       if (product) return skuFeeModels[String(product.sku)] || skuFeeModels[String(product.code)] || {};
       return skuFeeModels[String(fallbackSku)] || {};
@@ -76,6 +85,16 @@ const initialProducts = [
       });
       if (!response.ok) throw new Error(`API 请求失败：${response.status}`);
       return response.json();
+    }
+
+    async function loadBackendOrders() {
+      if (!backendEnabled) return;
+      const params = new URLSearchParams();
+      if (orderDateFrom) params.set("dateFrom", orderDateFrom);
+      if (orderDateTo) params.set("dateTo", orderDateTo);
+      orders = await apiRequest(`/api/orders?${params.toString()}`);
+      const backendAds = await apiRequest("/api/ads/daily-products");
+      if (backendAds.length) orders = mergeAdRowsIntoOrders(orders, backendAds);
     }
 
     async function runApiDiagnostics() {
@@ -140,6 +159,28 @@ const initialProducts = [
     });
 
     function calcOrder(order) {
+      if (isBrushOrder(order.sku)) {
+        return {
+          product: null,
+          feeModel: {},
+          sale: 0,
+          commissionRate: 0,
+          commission: 0,
+          logisticsFee: 0,
+          handlingFee: 0,
+          acquiringFee: 0,
+          otherFixedFee: 0,
+          platformFee: 0,
+          refundFee: 0,
+          adCost: 0,
+          platformProfit: 0,
+          serviceFee: 0,
+          cost: 0,
+          preliminaryProfit: 0,
+          realProfit: 0,
+          ignored: true,
+        };
+      }
       const product = productBySku(order.sku);
       const feeModel = feeModelByProduct(product, order.sku);
       const useActualFinance = Boolean(order.financeReady);
@@ -206,13 +247,22 @@ const initialProducts = [
       $("weekAgoRevenue").textContent = rub(weekRevenue);
       $("todayProfit").textContent = rub(todayProfit);
       $("todayOrderCount").textContent = todayOrders.length;
+      if ($("orderRangeStatus")) {
+        $("orderRangeStatus").textContent = `当前订单范围：${orderDateFrom || "最早"} 至 ${orderDateTo || "今天"}，共 ${scopedOrders.length} 单。未出财务的订单先按历史模型预估，出财务后自动改为真实费用。`;
+      }
       $("orderRows").innerHTML = [...scopedOrders].sort((a,b) => b.date.localeCompare(a.date)).map((order) => {
         const c = calcOrder(order);
+        const financeStatus = c.ignored
+          ? `<span class="finance-badge ignored">刷单忽略</span>`
+          : order.financeReady
+          ? `<span class="finance-badge actual">真实费用</span>`
+          : `<span class="finance-badge estimated">预估费用</span>`;
         return `<tr>
           <td>${order.date}</td>
           <td>${escapeHtml(order.store)}</td>
           <td>${escapeHtml(order.orderNo)}</td>
           <td><strong>${escapeHtml(c.product?.code || order.sku)}</strong><div class="sku">${escapeHtml(c.product?.name || "未匹配成本")}</div></td>
+          <td>${financeStatus}</td>
           <td class="money">${rub(c.sale)}</td>
           <td class="money">${rub(c.cost)}</td>
           <td class="money">${rub(c.commission)}</td>
@@ -956,22 +1006,34 @@ const initialProducts = [
       selectedStore = event.target.value;
       renderDashboard();
     });
+    $("reloadOrders").addEventListener("click", async () => {
+      orderDateFrom = $("orderDateFrom").value || addDays(todayIso(), -59);
+      orderDateTo = $("orderDateTo").value || todayIso();
+      $("reloadOrders").textContent = "抓取中...";
+      $("reloadOrders").disabled = true;
+      try {
+        await loadBackendOrders();
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        $("reloadOrders").textContent = "刷新订单";
+        $("reloadOrders").disabled = false;
+        renderAll();
+      }
+    });
 
     async function bootstrap() {
+      if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
+      if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       if (backendEnabled) {
         try {
-          const [backendProducts, backendOrders, backendAds, backendCompetitors, backendIntegrations] = await Promise.all([
+          const [backendProducts, backendCompetitors, backendIntegrations] = await Promise.all([
             apiRequest("/api/products"),
-            apiRequest("/api/orders"),
-            apiRequest("/api/ads/daily-products"),
             apiRequest("/api/competitors"),
             apiRequest("/api/integrations")
           ]);
           if (backendProducts.length) products = backendProducts;
-          if (backendOrders.length) orders = backendOrders;
-          if (backendAds.length) {
-            orders = mergeAdRowsIntoOrders(orders, backendAds);
-          }
+          await loadBackendOrders();
           competitors = backendCompetitors;
           apiConfigs = backendIntegrations;
         } catch {
