@@ -310,6 +310,7 @@ const initialProducts = [
       renderStoreFilter();
       renderCosts();
       renderDashboard();
+      renderStoreOverview();
       renderAds();
       renderCompetitors();
       renderCompetitorProfit();
@@ -362,6 +363,38 @@ const initialProducts = [
         </tr>`;
       }).join("");
       drawRevenueChart();
+    }
+
+    function renderStoreOverview() {
+      const body = $("storeOverviewRows");
+      if (!body) return;
+      const scoped = filteredOrders().filter((o) => (!orderDateFrom || o.date >= orderDateFrom) && (!orderDateTo || o.date <= orderDateTo));
+      const map = new Map();
+      scoped.forEach((order) => {
+        const c = calcOrder(order);
+        const row = map.get(order.store) || { store: order.store || "未命名店铺", revenue: 0, profit: 0, orders: 0, refunds: 0 };
+        row.revenue += c.sale;
+        row.profit += c.preliminaryProfit;
+        if (!c.ignored) row.orders += 1;
+        if (Number(c.refundFee || 0) > 0) row.refunds += 1;
+        map.set(order.store, row);
+      });
+      const rows = [...map.values()].sort((a, b) => b.revenue - a.revenue);
+      body.innerHTML = rows.length ? rows.map((row) => {
+        const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
+        const profitClass = row.profit >= 0 ? "positive" : "negative";
+        return `<tr>
+          <td><strong>${escapeHtml(row.store)}</strong></td>
+          <td class="money">${rub(row.revenue)}</td>
+          <td class="money ${profitClass}"><strong>${rub(row.profit)}</strong></td>
+          <td>${row.orders}</td>
+          <td class="muted-cell">待接入</td>
+          <td class="muted-cell">待接入</td>
+          <td class="muted-cell">待接入</td>
+          <td>${row.refunds}</td>
+          <td>${refundRate.toFixed(2)}%</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="9" class="muted-cell">当前时间范围暂无店铺数据</td></tr>`;
     }
 
     function filteredOrders() {
