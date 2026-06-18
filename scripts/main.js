@@ -20,6 +20,7 @@ const initialProducts = [
     const orderKey = "ozon_wb_orders_v1";
     const competitorKey = "ozon_wb_competitors_v2";
     const apiConfigKey = "ozon_wb_api_configs_v1";
+    const importedAdsKey = "ozon_wb_imported_ads_v1";
     const skuFeeModels = {
       "3555785455": { defaultPrice: 2812.68, commissionRate: 0.47, logisticsFee: 146.9176, handlingFee: 25.9, acquiringFee: 11.1049, otherFixedFee: 10.8444 },
       "3592078186": { defaultPrice: 3050.0357, commissionRate: 0.47, logisticsFee: 249.9216, handlingFee: 24.5982, acquiringFee: 15.6189, otherFixedFee: 13.4782 },
@@ -49,6 +50,7 @@ const initialProducts = [
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
+    let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let revenueChartHitboxes = [];
     let activeChartIndex = null;
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
@@ -160,6 +162,7 @@ const initialProducts = [
       localStorage.setItem(orderKey, JSON.stringify(orders));
       localStorage.setItem(competitorKey, JSON.stringify(competitors));
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
+      localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
     };
 
     async function apiRequest(path, options = {}) {
@@ -625,52 +628,134 @@ const initialProducts = [
       });
     }
 
-    function adFilteredOrders() {
+    function normalizeAdHeader(value) {
+      return String(value ?? "").replace(/\s+/g, "").replaceAll("\uFF0C", ",").toLowerCase();
+    }
+
+    function adNumber(value) {
+      if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+      const cleaned = String(value ?? "").replace(/\s/g, "").replace("%", "").replace(",", ".").replace(/[^\d.-]/g, "");
+      const parsed = Number(cleaned);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function parseRuDate(value) {
+      const match = String(value ?? "").match(/(\d{2})\.(\d{2})\.(\d{4})/);
+      return match ? match[3] + "-" + match[2] + "-" + match[1] : "";
+    }
+
+    function parseAdPeriod(rows) {
+      const firstCells = rows.slice(0, 3).flat().map((cell) => String(cell ?? ""));
+      const periodText = firstCells.find((cell) => /\d{2}\.\d{2}\.\d{4}/.test(cell)) || "";
+      const dates = [...periodText.matchAll(/(\d{2}\.\d{2}\.\d{4})/g)].map((match) => parseRuDate(match[1]));
+      return { from: dates[0] || todayIso(), to: dates[1] || dates[0] || todayIso() };
+    }
+
+    function adCell(row, headerMap, names) {
+      for (const name of names) {
+        const index = headerMap.get(normalizeAdHeader(name));
+        if (index !== undefined) return row[index];
+      }
+      return "";
+    }
+
+    function adSourceRows() {
       const selected = $("adStoreSelect")?.value || "all";
-      return orders.filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected));
+      const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
+      if (uploaded.length) return uploaded;
+      return orders
+        .filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected))
+        .map((order) => {
+          const c = calcOrder(order);
+          return { date: order.date, dateFrom: order.date, dateTo: order.date, store: order.store, sku: order.sku, name: c.product?.name || "", revenue: c.sale, adCost: c.adCost, adOrders: 1, impressions: 0, clicks: 0, ctr: 0 };
+        });
+    }
+
+    async function importAdFile() {
+      const input = $("adImportFile");
+      const store = $("adImportStore")?.value || "\u672A\u6307\u5B9A\u5E97\u94FA";
+      const status = $("adImportStatus");
+      const file = input?.files?.[0];
+      if (!file) { alert("\u8BF7\u5148\u9009\u62E9 Ozon \u63A8\u5E7F\u5206\u6790 Excel \u6587\u4EF6\u3002"); return; }
+      if (!window.XLSX) { alert("Excel \u8BFB\u53D6\u7EC4\u4EF6\u6CA1\u6709\u52A0\u8F7D\u6210\u529F\uFF0C\u8BF7\u5237\u65B0\u9875\u9762\u540E\u518D\u8BD5\u3002"); return; }
+      try {
+        const workbook = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const sheet = workbook.Sheets.Statistics || workbook.Sheets[workbook.SheetNames[0]];
+        const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        const period = parseAdPeriod(rows);
+        const headerIndex = rows.findIndex((row) => row.some((cell) => normalizeAdHeader(cell) === "sku"));
+        if (headerIndex < 0) throw new Error("\u6CA1\u6709\u627E\u5230 SKU \u8868\u5934");
+        const headerMap = new Map(rows[headerIndex].map((header, index) => [normalizeAdHeader(header), index]));
+        const imported = rows.slice(headerIndex + 1).map((row) => {
+          const sku = String(adCell(row, headerMap, ["SKU"]) || "").trim();
+          if (!sku) return null;
+          return {
+            id: crypto.randomUUID(), source: file.name, store, date: period.to, dateFrom: period.from, dateTo: period.to, sku,
+            name: String(adCell(row, headerMap, ["\u5546\u54C1\u540D\u79F0"]) || "").trim(),
+            tool: String(adCell(row, headerMap, ["\u5DE5\u5177"]) || "").trim(),
+            placement: String(adCell(row, headerMap, ["\u6295\u653E\u4F4D\u7F6E"]) || "").trim(),
+            campaignId: String(adCell(row, headerMap, ["\u5E7F\u544A\u6D3B\u52A8 ID"]) || "").trim(),
+            adCost: adNumber(adCell(row, headerMap, ["\u8D39\u7528\uFF0C\u20BD", "\u8D39\u7528,\u20BD", "\u8D39\u7528"])),
+            revenue: adNumber(adCell(row, headerMap, ["\u4FC3\u9500\u9500\u552E\uFF0C{\u8D27\u5E01}", "\u4FC3\u9500\u9500\u552E,{\u8D27\u5E01}", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D\uFF0C\u20BD", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D"])),
+            adOrders: adNumber(adCell(row, headerMap, ["\u5DF2\u552E\u5546\u54C1\u6570\u91CF\uFF0C\u4EF6", "\u5DF2\u552E\u5546\u54C1\u6570\u91CF,\u4EF6"])),
+            ctr: adNumber(adCell(row, headerMap, ["CTR, %", "CTR,%"])),
+            impressions: adNumber(adCell(row, headerMap, ["\u5C55\u73B0\u91CF", "\u5C55\u793A\u91CF"])),
+            clicks: adNumber(adCell(row, headerMap, ["\u70B9\u51FB\u6B21\u6570", "\u70B9\u51FB\u91CF"])),
+            cartAdds: adNumber(adCell(row, headerMap, ["\u6DFB\u52A0\u5230\u8D2D\u7269\u8F66\u6B21\u6570"])),
+            cartRate: adNumber(adCell(row, headerMap, ["\u6DFB\u52A0\u5230\u8D2D\u7269\u8F66\u7684\u8F6C\u5316\u7387\uFF0C %", "\u6DFB\u52A0\u5230\u8D2D\u7269\u8F66\u7684\u8F6C\u5316\u7387,%"])),
+            importedAt: new Date().toISOString(),
+          };
+        }).filter(Boolean);
+        if (!imported.length) throw new Error("\u8868\u683C\u91CC\u6CA1\u6709\u53EF\u5BFC\u5165\u7684\u5E7F\u544A\u884C");
+        importedAds = importedAds.filter((row) => !(row.store === store && row.source === file.name && row.dateFrom === period.from && row.dateTo === period.to)).concat(imported);
+        save();
+        input.value = "";
+        if (status) status.textContent = "\u5DF2\u5BFC\u5165 " + imported.length + " \u6761\u5E7F\u544A\u6570\u636E\uFF0C\u5468\u671F " + period.from + " - " + period.to + "\uFF0C\u6765\u6E90\uFF1A" + file.name;
+        renderAds();
+      } catch (error) {
+        if (status) status.textContent = "\u5BFC\u5165\u5931\u8D25\uFF1A" + (error.message || error);
+        alert("\u5BFC\u5165\u5931\u8D25\uFF1A" + (error.message || error));
+      }
     }
 
     function renderAds() {
       if (!$("adStoreSelect")) return;
       const currentStore = $("adStoreSelect").value || "all";
-      const stores = [...new Set(orders.map((order) => order.store).filter(Boolean))];
-      $("adStoreSelect").innerHTML = `<option value="all">全部店铺</option>${stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`).join("")}`;
-      $("adStoreSelect").value = stores.includes(currentStore) ? currentStore : "all";
+      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store)].filter(Boolean))];
+      const storeOptions = '<option value="all">\u5168\u90E8\u5E97\u94FA</option>' + allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("");
+      $("adStoreSelect").innerHTML = storeOptions;
+      $("adStoreSelect").value = allStores.includes(currentStore) ? currentStore : "all";
+      if ($("adImportStore")) {
+        const importCurrent = $("adImportStore").value;
+        $("adImportStore").innerHTML = allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("") || '<option value="\u672A\u6307\u5B9A\u5E97\u94FA">\u672A\u6307\u5B9A\u5E97\u94FA</option>';
+        if (allStores.includes(importCurrent)) $("adImportStore").value = importCurrent;
+      }
+      if ($("adImportStatus") && importedAds.length) $("adImportStatus").textContent = "\u672C\u673A\u5DF2\u4FDD\u5B58 " + importedAds.length + " \u6761\u4E0A\u4F20\u5E7F\u544A\u6570\u636E\u3002";
 
-      const rows = adFilteredOrders();
       const summaryMap = new Map();
-      rows.forEach((order) => {
-        const c = calcOrder(order);
-        const key = `${order.date}|${order.store}|${order.sku}`;
-        const existing = summaryMap.get(key) || {
-          date: order.date,
-          store: order.store,
-          sku: order.sku,
-          product: c.product,
-          revenue: 0,
-          adCost: 0
-        };
-        existing.revenue += c.sale;
-        existing.adCost += c.adCost;
+      adSourceRows().forEach((row) => {
+        const product = products.find((item) => item.sku === String(row.sku) || item.code === String(row.sku));
+        const key = (row.dateFrom || row.date) + "|" + (row.dateTo || row.date) + "|" + row.store + "|" + row.sku;
+        const existing = summaryMap.get(key) || { date: row.date, dateFrom: row.dateFrom || row.date, dateTo: row.dateTo || row.date, store: row.store, sku: row.sku, name: row.name || product?.name || "", product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
+        existing.revenue += Number(row.revenue || 0);
+        existing.adCost += Number(row.adCost || 0);
+        existing.adOrders += Number(row.adOrders || 0);
+        existing.impressions += Number(row.impressions || 0);
+        existing.clicks += Number(row.clicks || 0);
+        existing.ctrWeightedClicks += Number(row.ctr || 0) * Number(row.clicks || 0);
         summaryMap.set(key, existing);
       });
-      const summaryRows = [...summaryMap.values()].sort((a, b) => b.date.localeCompare(a.date) || b.adCost - a.adCost);
+      const summaryRows = [...summaryMap.values()].map((row) => ({ ...row, ctr: row.clicks ? row.ctrWeightedClicks / row.clicks : (row.impressions ? row.clicks / row.impressions * 100 : 0) })).sort((a, b) => (b.dateTo || b.date).localeCompare(a.dateTo || a.date) || b.adCost - a.adCost);
       const adTotal = summaryRows.reduce((sum, row) => sum + row.adCost, 0);
       const revenue = summaryRows.reduce((sum, row) => sum + row.revenue, 0);
       const productCount = new Set(summaryRows.map((row) => row.sku)).size;
       $("adTotal").textContent = rub(adTotal);
       $("adRevenue").textContent = rub(revenue);
-      $("adRatio").textContent = `${(revenue ? adTotal / revenue * 100 : 0).toFixed(2)}%`;
+      $("adRatio").textContent = (revenue ? adTotal / revenue * 100 : 0).toFixed(2) + "%";
       $("adProductCount").textContent = productCount;
       $("adRows").innerHTML = summaryRows.map((row) => {
-        return `<tr>
-          <td>${escapeHtml(row.date)}</td>
-          <td>${escapeHtml(row.store)}</td>
-          <td><strong>${escapeHtml(row.product?.code || row.sku)}</strong><div class="sku">${escapeHtml(row.product?.name || "")}</div></td>
-          <td class="money">${rub(row.revenue)}</td>
-          <td class="money">${rub(row.adCost)}</td>
-          <td>${(row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2)}%</td>
-        </tr>`;
+        const period = row.dateFrom === row.dateTo ? row.dateTo : row.dateFrom + " - " + row.dateTo;
+        return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
       }).join("");
       drawAdChart();
     }
@@ -681,16 +766,13 @@ const initialProducts = [
       const ctx = canvas.getContext("2d");
       const width = canvas.width;
       const height = canvas.height;
-      const padLeft = 78;
-      const padRight = 34;
-      const padTop = 28;
-      const padBottom = 58;
-      const chartX = padLeft;
-      const chartY = padTop;
-      const chartW = width - padLeft - padRight;
-      const chartH = height - padTop - padBottom;
+      const padLeft = 78, padRight = 34, padTop = 28, padBottom = 58;
+      const chartX = padLeft, chartY = padTop, chartW = width - padLeft - padRight, chartH = height - padTop - padBottom;
       const map = new Map();
-      adFilteredOrders().forEach((order) => map.set(order.date, (map.get(order.date) || 0) + Number(order.adCost || 0)));
+      adSourceRows().forEach((row) => {
+        const date = row.dateTo || row.date || todayIso();
+        map.set(date, (map.get(date) || 0) + Number(row.adCost || 0));
+      });
       const days = [];
       for (let i = 27; i >= 0; i--) {
         const date = addDays(todayIso(), -i);
@@ -700,41 +782,21 @@ const initialProducts = [
       const axisMax = Math.ceil(max / 500) * 500 || 500;
       const toY = (value) => chartY + chartH - (Number(value || 0) / axisMax) * chartH;
       const step = chartW / Math.max(days.length - 1, 1);
-
       ctx.clearRect(0, 0, width, height);
       const bg = ctx.createLinearGradient(0, 0, width, height);
-      bg.addColorStop(0, "#fffaf6");
-      bg.addColorStop(.55, "#f8fbff");
-      bg.addColorStop(1, "#ffffff");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.strokeStyle = "rgba(150, 164, 173, .24)";
-      ctx.fillStyle = "#667781";
-      ctx.font = "12px Microsoft YaHei, Arial";
+      bg.addColorStop(0, "#fffaf6"); bg.addColorStop(.55, "#f8fbff"); bg.addColorStop(1, "#ffffff");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
+      ctx.strokeStyle = "rgba(150, 164, 173, .24)"; ctx.fillStyle = "#667781"; ctx.font = "12px Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
         const y = toY(value);
-        ctx.setLineDash([3, 7]);
-        ctx.beginPath();
-        ctx.moveTo(chartX, y);
-        ctx.lineTo(chartX + chartW, y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.textAlign = "right";
-        ctx.fillText(`${(value / 1000).toFixed(value >= 1000 ? 1 : 0)} 千`, chartX - 12, y + 4);
+        ctx.setLineDash([3, 7]); ctx.beginPath(); ctx.moveTo(chartX, y); ctx.lineTo(chartX + chartW, y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.textAlign = "right"; ctx.fillText((value / 1000).toFixed(value >= 1000 ? 1 : 0) + "k", chartX - 12, y + 4);
       }
-
       const points = days.map((item, index) => ({ x: chartX + index * step, y: toY(item.value) }));
       drawSmoothLine(ctx, points, "#f97316", 4);
-
-      ctx.fillStyle = "#465961";
-      ctx.font = "12px Microsoft YaHei, Arial";
-      days.forEach((item, index) => {
-        if (index % 4 !== 0 && index !== days.length - 1) return;
-        ctx.textAlign = "center";
-        ctx.fillText(item.date.slice(8), chartX + index * step, height - 26);
-      });
+      ctx.fillStyle = "#465961"; ctx.font = "12px Microsoft YaHei, Arial";
+      days.forEach((item, index) => { if (index % 4 !== 0 && index !== days.length - 1) return; ctx.textAlign = "center"; ctx.fillText(item.date.slice(5), chartX + index * step, height - 26); });
       ctx.textAlign = "left";
     }
 
@@ -1163,6 +1225,14 @@ const initialProducts = [
       if (event.target.id === "imageModal") closeImageModal();
     });
     $("adStoreSelect").addEventListener("change", renderAds);
+    if ($("importAds")) $("importAds").addEventListener("click", importAdFile);
+    if ($("clearImportedAds")) $("clearImportedAds").addEventListener("click", () => {
+      if (!confirm("确定清空本机已导入的广告数据吗？")) return;
+      importedAds = [];
+      save();
+      if ($("adImportStatus")) $("adImportStatus").textContent = "已清空导入广告数据。";
+      renderAds();
+    });
     ["priceCheckCode", "priceCheckPrice"].forEach((id) => {
       if ($(id)) $(id).addEventListener("input", renderCompetitorProfit);
     });
