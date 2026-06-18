@@ -102,8 +102,23 @@
           <div class="toolbar">
             <h3>每日订单利润明细</h3>
             <div class="order-filters">
-              <label>开始日期<input id="orderDateFrom" type="date" /></label>
-              <label>结束日期<input id="orderDateTo" type="date" /></label>
+              <div class="date-range-picker">
+                <button class="date-range-button" id="orderDateRangeButton" type="button">选择日期范围</button>
+                <div class="date-range-panel" id="orderDateRangePanel">
+                  <div class="date-inputs">
+                    <label>开始日期<input id="orderDateFrom" type="date" /></label>
+                    <label>结束日期<input id="orderDateTo" type="date" /></label>
+                  </div>
+                  <div class="quick-ranges">
+                    <button type="button" data-range="today">今天</button>
+                    <button type="button" data-range="yesterday">昨天</button>
+                    <button type="button" data-range="7">7天</button>
+                    <button type="button" data-range="28">28天</button>
+                    <button type="button" data-range="quarter">季度</button>
+                    <button type="button" data-range="year">年</button>
+                  </div>
+                </div>
+              </div>
               <label>店铺筛选<select id="storeFilter"></select></label>
               <button class="secondary" id="reloadOrders" type="button">刷新订单</button>
             </div>
