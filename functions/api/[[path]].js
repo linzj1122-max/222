@@ -245,11 +245,92 @@ function integrations(env) {
   return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 环境变量" }));
 }
 
+const ANALYTICS_METRICS = ["revenue", "ordered_units", "session_view", "hits_view_search", "hits_tocart_search", "conv_tocart"];
+
+async function fetchOzonAnalyticsData(from, to, store, dimension) {
+  const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "client-id": store.clientId,
+      "api-key": store.apiKey,
+    },
+    body: JSON.stringify({
+      date_from: from,
+      date_to: to,
+      metrics: ANALYTICS_METRICS,
+      dimension,
+      filters: [],
+      sort: [{ key: "revenue", order: "DESC" }],
+      limit: 1000,
+      offset: 0,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Ozon analytics API ${response.status}: ${text.slice(0, 240)}`);
+  }
+  const payload = await response.json();
+  return payload.result?.data || [];
+}
+
+function analyticsMetric(row, index) {
+  return amount((row.metrics || [])[index]);
+}
+
+function analyticsRowBase(row, storeName) {
+  return {
+    store: storeName,
+    revenue: analyticsMetric(row, 0),
+    orderedUnits: analyticsMetric(row, 1),
+    sessions: analyticsMetric(row, 2),
+    impressions: analyticsMetric(row, 3),
+    cartAdds: analyticsMetric(row, 4),
+    cartConversion: analyticsMetric(row, 5),
+  };
+}
+
+async function fetchStoreAnalytics(env, from, to) {
+  const rows = [];
+  for (const store of ozonStores(env)) {
+    const data = await fetchOzonAnalyticsData(from, to, store, ["day"]);
+    const total = data.reduce((acc, row) => {
+      const item = analyticsRowBase(row, store.name);
+      acc.revenue += item.revenue;
+      acc.orderedUnits += item.orderedUnits;
+      acc.sessions += item.sessions;
+      acc.impressions += item.impressions;
+      acc.cartAdds += item.cartAdds;
+      return acc;
+    }, { store: store.name, revenue: 0, orderedUnits: 0, sessions: 0, impressions: 0, cartAdds: 0 });
+    total.cartConversion = total.sessions ? total.cartAdds / total.sessions * 100 : 0;
+    rows.push(total);
+  }
+  return rows;
+}
+
+async function fetchProductAnalytics(env, from, to) {
+  const rows = [];
+  for (const store of ozonStores(env)) {
+    const data = await fetchOzonAnalyticsData(from, to, store, ["sku"]);
+    for (const row of data) {
+      const dimensions = row.dimensions || [];
+      rows.push({
+        ...analyticsRowBase(row, store.name),
+        sku: String(dimensions[0]?.id || ""),
+        name: dimensions[0]?.name || "",
+      });
+    }
+  }
+  return rows;
+}
+
 async function probeJson(name, url, headers, body) {
   const started = Date.now();
   try {
     const response = await fetch(url, {
       method: "POST",
+      redirect: "manual",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
@@ -307,8 +388,6 @@ async function probeOzonAnalytics(env, from, to) {
       store: store.name,
       checks: [
         await probeJson("seller_analytics_data", "https://api-seller.ozon.ru/v1/analytics/data", sellerHeaders, sellerBody),
-        await probeJson("seller_analytics_stock", "https://api-seller.ozon.ru/v1/analytics/stock", sellerHeaders, { limit: 10, offset: 0 }),
-        await probeJson("performance_campaign_list_with_seller_key", "https://performance.ozon.ru/api/client/campaign", { Authorization: `Bearer ${store.apiKey}` }, {}),
         await probeJson("performance_statistics_with_seller_key", "https://performance.ozon.ru/api/client/statistics", { Authorization: `Bearer ${store.apiKey}` }, {
           campaigns: [],
           dateFrom: from,
@@ -359,6 +438,14 @@ export async function onRequest(context) {
     if (path === "health") return json({ ok: true, service: "cloudflare-ozon-wb-control-center" });
     if (path === "debug") return json(debugStatus(env));
     if (path === "products") return json(PRODUCTS);
+    if (path === "analytics/store") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await fetchStoreAnalytics(env, from, to));
+    }
+    if (path === "analytics/products") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await fetchProductAnalytics(env, from, to));
+    }
     if (path === "orders") {
       const { from, to } = dateRange(url.searchParams);
       return json(filterRows(await fetchOzonOrders(env, from, to), url.searchParams));
