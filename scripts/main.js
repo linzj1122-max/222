@@ -367,11 +367,7 @@ const initialProducts = [
       const formatOrders = (value) => `${Math.round(value)} 单`;
 
       ctx.clearRect(0, 0, width, height);
-      const bg = ctx.createLinearGradient(0, 0, width, height);
-      bg.addColorStop(0, "#fbfdff");
-      bg.addColorStop(.58, "#f6faff");
-      bg.addColorStop(1, "#ffffff");
-      ctx.fillStyle = bg;
+      ctx.fillStyle = "#0b111e";
       ctx.fillRect(0, 0, width, height);
 
       const maxValue = Math.max(...comparison.map((item) => item.revenue), ...current.map((item) => item.revenue), 1);
@@ -383,19 +379,18 @@ const initialProducts = [
       const toOrderY = (value) => chartY + chartH - (Number(value || 0) / orderAxisMax) * chartH;
       const toX = (index) => chartX + index * xStep;
 
-      ctx.strokeStyle = "rgba(150, 164, 173, .22)";
+      ctx.strokeStyle = "rgba(148, 163, 184, .16)";
       ctx.lineWidth = 1;
-      ctx.fillStyle = "#667781";
+      ctx.fillStyle = "#64748b";
       ctx.font = "12px Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
         const y = toY(value);
-        ctx.setLineDash([2, 8]);
+        ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(chartX, y);
         ctx.lineTo(chartX + chartW, y);
         ctx.stroke();
-        ctx.setLineDash([]);
         ctx.textAlign = "right";
         ctx.fillText(`${(value / 1000).toFixed(value >= 1000 ? 1 : 0)}k`, chartX - 12, y + 4);
         ctx.textAlign = "left";
@@ -403,14 +398,33 @@ const initialProducts = [
       }
 
       const comparePoints = comparison.map((item, index) => ({ x: toX(index), y: toY(item.revenue) }));
-      const currentPoints = current.map((item, index) => ({ x: toX(index), y: toY(item.revenue) }));
       const orderPoints = current.map((item, index) => ({ x: toX(index), y: toOrderY(item.orders) }));
-      drawSmoothLine(ctx, comparePoints, "#94a3b8", 2, { dots: false, dashed: true });
-      drawAreaLine(ctx, currentPoints, chartY + chartH, "#2f9cf4");
-      drawSmoothLine(ctx, currentPoints, "#2563eb", 3, { dots: false });
-      drawSmoothLine(ctx, orderPoints, "#10b981", 2.5, { dots: false });
+      drawSmoothLine(ctx, comparePoints, "rgba(148, 163, 184, .58)", 2, { dots: false, dashed: true });
 
-      ctx.fillStyle = "#465961";
+      const barStep = chartW / Math.max(current.length, 1);
+      const barW = Math.min(34, Math.max(8, barStep * .46));
+      current.forEach((item, index) => {
+        const x = toX(index) - barW / 2;
+        const y = toY(item.revenue);
+        const h = chartY + chartH - y;
+        const grad = ctx.createLinearGradient(0, y, 0, chartY + chartH);
+        grad.addColorStop(0, "#00f2fe");
+        grad.addColorStop(1, "#4facfe");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        const r = Math.min(5, barW / 2, h);
+        ctx.moveTo(x, y + h);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.lineTo(x + barW - r, y);
+        ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
+        ctx.lineTo(x + barW, y + h);
+        ctx.closePath();
+        ctx.fill();
+      });
+      drawSmoothLine(ctx, orderPoints, "#fad961", 2.5, { dots: false });
+
+      ctx.fillStyle = "#64748b";
       ctx.font = "12px Microsoft YaHei, Arial";
       current.forEach((item, index) => {
         const interval = period <= 7 ? 1 : period <= 14 ? 2 : 4;
@@ -418,9 +432,9 @@ const initialProducts = [
         ctx.textAlign = "center";
         ctx.fillText(item.date.slice(8), toX(index), height - 34);
         if (period >= 14 && (index === 2 || index === 16)) {
-          ctx.fillStyle = "#9aa7ae";
+          ctx.fillStyle = "#475569";
           ctx.fillText(index < 10 ? "Sa" : "Su", toX(index), height - 18);
-          ctx.fillStyle = "#465961";
+          ctx.fillStyle = "#64748b";
         }
       });
 
