@@ -57,7 +57,11 @@ const initialProducts = [
     const totalRmb = (p) => Number(p.purchase||0) + Number(p.domestic||0) + Number(p.firstFreight||0) + Number(p.lastMile||0);
     const totalRub = (p) => totalRmb(p) * Number(p.rate || 0);
     const productById = (id) => products.find((p) => p.id === id);
-    const productBySku = (sku) => products.find((p) => String(p.sku) === String(sku));
+    const productBySku = (sku) => products.find((p) => String(p.sku) === String(sku) || String(p.code) === String(sku));
+    const feeModelByProduct = (product, fallbackSku) => {
+      if (product) return skuFeeModels[String(product.sku)] || skuFeeModels[String(product.code)] || {};
+      return skuFeeModels[String(fallbackSku)] || {};
+    };
     const save = () => {
       localStorage.setItem(productKey, JSON.stringify(products));
       localStorage.setItem(orderKey, JSON.stringify(orders));
@@ -137,14 +141,15 @@ const initialProducts = [
 
     function calcOrder(order) {
       const product = productBySku(order.sku);
-      const feeModel = skuFeeModels[String(order.sku)] || {};
-      const sale = Number(feeModel.defaultPrice || order.backendPrice || order.sale || 0);
+      const feeModel = feeModelByProduct(product, order.sku);
+      const useActualFinance = Boolean(order.financeReady);
+      const sale = Number(order.backendPrice || order.sale || feeModel.defaultPrice || 0);
       const commissionRate = Number(feeModel.commissionRate || 0);
-      const commission = commissionRate ? sale * commissionRate : Number(order.commission || 0);
-      const logisticsFee = Number(feeModel.logisticsFee || order.logisticsFee || 0);
-      const handlingFee = Number(feeModel.handlingFee || order.handlingFee || 0);
-      const acquiringFee = Number(feeModel.acquiringFee || order.acquiringFee || 0);
-      const otherFixedFee = Number(feeModel.otherFixedFee || order.otherFixedFee || 0);
+      const commission = useActualFinance ? Number(order.commission || 0) : (commissionRate ? sale * commissionRate : Number(order.commission || 0));
+      const logisticsFee = useActualFinance ? Number(order.logisticsFee || 0) : Number(order.logisticsFee || feeModel.logisticsFee || 0);
+      const handlingFee = useActualFinance ? Number(order.handlingFee || 0) : Number(order.handlingFee || feeModel.handlingFee || 0);
+      const acquiringFee = useActualFinance ? Number(order.acquiringFee || 0) : Number(order.acquiringFee || feeModel.acquiringFee || 0);
+      const otherFixedFee = useActualFinance ? Number(order.otherFixedFee || 0) : Number(order.otherFixedFee || feeModel.otherFixedFee || 0);
       const platformFee = logisticsFee + handlingFee + acquiringFee + otherFixedFee;
       const refundFee = Number(order.refundFee || 0);
       const adCost = Number(order.adCost || 0);
