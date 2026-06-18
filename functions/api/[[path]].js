@@ -98,6 +98,77 @@ async function fetchOzonPostings(kind, from, to, store) {
   return payload.result?.postings || payload.result || [];
 }
 
+async function fetchOzonFinanceTransactions(from, to, store) {
+  const rows = [];
+  let page = 1;
+  let pageCount = 1;
+  while (page <= pageCount && page <= 20) {
+    const response = await fetch("https://api-seller.ozon.ru/v3/finance/transaction/list", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "client-id": store.clientId,
+        "api-key": store.apiKey,
+      },
+      body: JSON.stringify({
+        filter: {
+          date: { from: `${from}T00:00:00Z`, to: `${to}T23:59:59Z` },
+          transaction_type: "all",
+        },
+        page,
+        page_size: 1000,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Ozon finance API ${response.status}: ${text.slice(0, 240)}`);
+    }
+    const payload = await response.json();
+    const result = payload.result || {};
+    rows.push(...(result.operations || []));
+    pageCount = Number(result.page_count || 1);
+    page += 1;
+  }
+  return rows;
+}
+
+function financeBucketForService(serviceName) {
+  const name = String(serviceName || "").toLowerCase();
+  if (/acquir|эквайр|оплат/.test(name)) return "acquiringFee";
+  if (/logistic|delivery|deliver|return|drop.?off|достав|логист|возврат/.test(name)) return "logisticsFee";
+  return "otherFixedFee";
+}
+
+function financeIndex(transactions) {
+  const map = new Map();
+  for (const operation of transactions) {
+    const postingNo = operation.posting?.posting_number || operation.posting_number || "";
+    if (!postingNo) continue;
+    const current = map.get(postingNo) || {
+      backendPrice: 0,
+      commission: 0,
+      logisticsFee: 0,
+      handlingFee: 0,
+      acquiringFee: 0,
+      otherFixedFee: 0,
+      refundFee: 0,
+      financeReady: false,
+    };
+    current.backendPrice += Math.max(amount(operation.accruals_for_sale), 0);
+    current.commission += Math.abs(amount(operation.sale_commission));
+    for (const service of operation.services || []) {
+      const value = amount(service.price);
+      if (value >= 0) continue;
+      current[financeBucketForService(service.name)] += Math.abs(value);
+    }
+    const opText = `${operation.operation_type || ""} ${operation.operation_type_name || ""}`.toLowerCase();
+    if (/return|refund|возврат/.test(opText)) current.refundFee += Math.abs(amount(operation.amount));
+    current.financeReady = true;
+    map.set(postingNo, current);
+  }
+  return map;
+}
+
 async function fetchOzonOrders(env, from, to) {
   const stores = ozonStores(env);
   const rows = [];
@@ -106,24 +177,32 @@ async function fetchOzonOrders(env, from, to) {
       ...(await fetchOzonPostings("fbs", from, to, store)),
       ...(await fetchOzonPostings("fbo", from, to, store)),
     ];
+    const financeByPosting = financeIndex(await fetchOzonFinanceTransactions(from, to, store));
     for (const posting of postings) {
       const date = String(posting.in_process_at || posting.created_at || posting.shipment_date || "").slice(0, 10);
+      const postingNo = posting.posting_number || posting.order_id || "";
+      const finance = financeByPosting.get(postingNo) || {};
+      const products = posting.products || [];
+      const productCount = Math.max(products.length, 1);
       for (const product of posting.products || []) {
         const sale = amount(product.price) * amount(product.quantity || 1);
+        const financeSale = amount(finance.backendPrice);
+        const allocation = financeSale > 0 ? sale / financeSale : 1 / productCount;
         rows.push({
           date,
           store: store.name,
-          orderNo: posting.posting_number || posting.order_id || "",
+          orderNo: postingNo,
           sku: String(product.offer_id || product.sku || product.name || ""),
           sale,
-          backendPrice: sale,
-          commission: amount(product.commission_amount),
-          logisticsFee: 0,
-          handlingFee: 0,
-          acquiringFee: 0,
-          otherFixedFee: 0,
-          refundFee: 0,
+          backendPrice: financeSale > 0 ? financeSale * allocation : sale,
+          commission: amount(finance.commission) * allocation || amount(product.commission_amount),
+          logisticsFee: amount(finance.logisticsFee) * allocation,
+          handlingFee: amount(finance.handlingFee) * allocation,
+          acquiringFee: amount(finance.acquiringFee) * allocation,
+          otherFixedFee: amount(finance.otherFixedFee) * allocation,
+          refundFee: amount(finance.refundFee) * allocation,
           adCost: 0,
+          financeReady: Boolean(finance.financeReady),
         });
       }
     }
