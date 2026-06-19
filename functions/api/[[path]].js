@@ -548,6 +548,12 @@ function campaignRowsFromPayload(payload) {
   })).filter((campaign) => campaign.campaignId);
 }
 
+function adsReportCampaignIds(campaigns) {
+  const running = campaigns.filter((campaign) => /RUNNING/i.test(campaign.state));
+  const ordered = [...running, ...campaigns.filter((campaign) => !/RUNNING/i.test(campaign.state))];
+  return [...new Set(ordered.map((campaign) => campaign.campaignId).filter(Boolean))].slice(0, 10);
+}
+
 function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
   return adArrayFromPayload(payload).map((row) => {
@@ -658,7 +664,7 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
       const token = await fetchOzonAdsToken(account);
       const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
       const { campaigns } = await fetchAdsCampaigns(headers);
-      const campaignIds = campaigns.map((campaign) => campaign.campaignId).filter(Boolean);
+      const campaignIds = adsReportCampaignIds(campaigns);
       const key = adTaskKey(account, from, to);
       const cachedRows = ADS_REPORT_ROWS.get(key) || [];
       if (cachedRows.length && !options.force) {
