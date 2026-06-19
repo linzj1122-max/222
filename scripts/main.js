@@ -200,6 +200,7 @@ const initialProducts = [
     const cacheDayKey = () => todayIso();
     const rangeCacheKey = (from, to) => `${cacheDayKey()}|${from}|${to}`;
     const shouldRefreshRange = (from, to, force = false) => force || (from === todayIso() && to === todayIso());
+    const adRowsArray = () => Array.isArray(backendAds) ? backendAds : (Array.isArray(backendAds?.rows) ? backendAds.rows : []);
 
     async function loadBackendAds(options = {}) {
       backendAds = [];
@@ -215,14 +216,14 @@ const initialProducts = [
       if (options.forceCreate) params.set("force", "1");
       try {
         const payload = await apiRequest(`/api/ads/daily-products?${params.toString()}`);
-        backendAds = Array.isArray(payload) ? payload : (payload.rows || []);
-        adsStatusRows = Array.isArray(payload) ? [] : (payload.meta || []);
+        backendAds = Array.isArray(payload) ? payload : (Array.isArray(payload?.rows) ? payload.rows : []);
+        adsStatusRows = Array.isArray(payload) ? [] : (Array.isArray(payload?.meta) ? payload.meta : []);
         const found = adsStatusRows.find((row) => row.uuid);
         if (found?.uuid) {
           adsTaskCache[key] = { uuid: found.uuid, state: found.state, updatedAt: new Date().toISOString() };
           save();
         }
-        if (!backendAds.length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
+        if (!adRowsArray().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
           return loadBackendAds({ forceCreate: true });
         }
       } catch {
@@ -237,7 +238,7 @@ const initialProducts = [
       if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
         orders = orderRangeCache[key];
         await loadBackendAds();
-        if (backendAds.length) orders = mergeAdRowsIntoOrders(orders, backendAds);
+        if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         return;
       }
       const params = new URLSearchParams();
@@ -245,7 +246,7 @@ const initialProducts = [
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
       await loadBackendAds();
-      if (backendAds.length) orders = mergeAdRowsIntoOrders(orders, backendAds);
+      if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
       save();
     }
@@ -771,7 +772,7 @@ const initialProducts = [
       const selected = $("adStoreSelect")?.value || "all";
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
-      const apiRows = backendAds.filter((row) => selected === "all" || row.store === selected);
+      const apiRows = adRowsArray().filter((row) => selected === "all" || row.store === selected);
       if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       return orders
         .filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected))
@@ -831,7 +832,7 @@ const initialProducts = [
     function renderAds() {
       if (!$("adStoreSelect")) return;
       const currentStore = $("adStoreSelect").value || "all";
-      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...backendAds.map((row) => row.store)].filter(Boolean))];
+      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...adRowsArray().map((row) => row.store)].filter(Boolean))];
       const storeOptions = '<option value="all">\u5168\u90E8\u5E97\u94FA</option>' + allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("");
       $("adStoreSelect").innerHTML = storeOptions;
       $("adStoreSelect").value = allStores.includes(currentStore) ? currentStore : "all";
@@ -844,7 +845,7 @@ const initialProducts = [
         const statusText = adsStatusRows.length
           ? adsStatusRows.map((row) => row.store + ": " + row.state + (row.uuid ? " / " + row.uuid : "") + (row.error ? " / " + row.error : "")).join("；")
           : "";
-        if (backendAds.length) $("adImportStatus").textContent = "\u5DF2\u8BFB\u53D6 API \u5E7F\u544A\u6570\u636E " + backendAds.length + " \u6761\u3002" + (statusText ? " " + statusText : "");
+        if (adRowsArray().length) $("adImportStatus").textContent = "\u5DF2\u8BFB\u53D6 API \u5E7F\u544A\u6570\u636E " + adRowsArray().length + " \u6761\u3002" + (statusText ? " " + statusText : "");
         else if (importedAds.length) $("adImportStatus").textContent = "\u672C\u673A\u5DF2\u4FDD\u5B58 " + importedAds.length + " \u6761\u4E0A\u4F20\u5E7F\u544A\u6570\u636E\u3002" + (statusText ? " API: " + statusText : "");
         else $("adImportStatus").textContent = statusText || "\u5C1A\u672A\u5BFC\u5165\u5E7F\u544A\u6570\u636E\u3002";
       }
