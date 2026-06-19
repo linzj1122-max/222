@@ -18,6 +18,7 @@
 
 const ADS_REPORT_TASKS = new Map();
 const ADS_REPORT_ROWS = new Map();
+const ADS_CAMPAIGN_CACHE = new Map();
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -555,6 +556,24 @@ function adArrayFromPayload(payload) {
   return [];
 }
 
+function compactAdRaw(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return {};
+  const raw = {};
+  for (const [key, value] of Object.entries(row).slice(0, 80)) {
+    if (value === undefined || typeof value === "function") continue;
+    if (value && typeof value === "object") {
+      try {
+        raw[key] = JSON.stringify(value).slice(0, 500);
+      } catch {
+        raw[key] = String(value).slice(0, 500);
+      }
+    } else {
+      raw[key] = value;
+    }
+  }
+  return raw;
+}
+
 function campaignRowsFromPayload(payload) {
   return probeArray(payload).map((campaign) => ({
     campaignId: String(campaign.id || campaign.campaignId || campaign.campaign_id || ""),
@@ -571,7 +590,8 @@ function adsReportCampaignIds(campaigns) {
 
 function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
-  return adArrayFromPayload(payload).map((row) => {
+  return adArrayFromPayload(payload).map((row, index) => {
+    const raw = compactAdRaw(row);
     const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "广告活动 ID", "ID кампании", "Кампания ID", "Campaign ID", "CampaignId", "__campaignId"]) || "");
     const campaign = campaignMap.get(campaignId) || {};
     const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт.", "Impressions", "Shows"]));
@@ -587,7 +607,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       store: account.name,
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
-      sku,
+      sku: sku || campaignId || `api-row-${index + 1}`,
       name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Наименование", "Product name"]) || ""),
       adCost,
       adRevenue,
@@ -597,8 +617,10 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       clicks,
       ctr,
       source: "api",
+      raw,
+      rawKeys: Object.keys(raw),
     };
-  }).filter((row) => row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId);
+  }).filter((row) => row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId || Object.keys(row.raw || {}).length);
 }
 
 function adRowHasMetrics(row) {
@@ -616,6 +638,15 @@ async function fetchAdsCampaigns(headers) {
   }
   if (!response.ok) throw new Error(`Ozon ads campaign API ${response.status}: ${text.slice(0, 240)}`);
   return { payload, campaigns: campaignRowsFromPayload(payload) };
+}
+
+async function fetchAdsCampaignsCached(headers, account) {
+  const key = account.clientId;
+  const cached = ADS_CAMPAIGN_CACHE.get(key);
+  if (cached && Date.now() - cached.time < 5 * 60 * 1000) return cached.data;
+  const data = await fetchAdsCampaigns(headers);
+  ADS_CAMPAIGN_CACHE.set(key, { time: Date.now(), data });
+  return data;
 }
 
 async function postAdsJsonStatistics(headers, endpoint, body) {
@@ -650,7 +681,7 @@ async function fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, 
   for (const endpoint of endpoints) {
     for (const body of bodies) {
       const result = await postAdsJsonStatistics(headers, endpoint, body);
-      const normalized = result.ok ? normalizeAdsReportRows(result.payload, account, campaigns, from, to).filter(adRowHasMetrics) : [];
+      const normalized = result.ok ? normalizeAdsReportRows(result.payload, account, campaigns, from, to) : [];
       attempts.push({
         endpoint,
         ok: result.ok,
@@ -907,7 +938,13 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
     try {
       const token = await fetchOzonAdsToken(account);
       const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
-      const { campaigns } = await fetchAdsCampaigns(headers);
+      let campaigns = [];
+      if (options.uuid) {
+        campaigns = ADS_CAMPAIGN_CACHE.get(account.clientId)?.data?.campaigns || [];
+      } else {
+        const campaignResult = await fetchAdsCampaignsCached(headers, account);
+        campaigns = campaignResult.campaigns;
+      }
       const campaignIds = adsReportCampaignIds(campaigns);
       const key = adTaskKey(account, from, to);
       const cachedRows = ADS_REPORT_ROWS.get(key) || [];
@@ -1091,7 +1128,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-19-cloudflare-ads-v6",
+    version: "2026-06-20-cloudflare-ads-v8-raw",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,

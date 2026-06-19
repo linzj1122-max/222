@@ -749,6 +749,23 @@
       font-weight: 900;
     }
 
+    .raw-table-wrap {
+      max-height: 420px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    #adRawTable {
+      min-width: 1320px;
+    }
+    #adRawTable th,
+    #adRawTable td {
+      max-width: 260px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 12px;
+    }
+
     @media (max-width: 1100px) {
       .app { grid-template-columns: 1fr; }
       aside { min-height: auto; }

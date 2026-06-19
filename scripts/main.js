@@ -226,11 +226,13 @@ const initialProducts = [
     };
     const adRowsArray = () => Array.isArray(backendAds) ? backendAds : (Array.isArray(backendAds?.rows) ? backendAds.rows : []);
     const adRowHasMetrics = (row) => Number(row.adCost || 0) || Number(row.adRevenue || row.revenue || 0) || Number(row.adOrders || 0) || Number(row.impressions || 0) || Number(row.clicks || 0);
+    const adRowHasRawData = (row) => row && typeof row === "object" && Object.keys(row.raw || {}).length > 0;
+    const adRowVisible = (row) => adRowHasMetrics(row) || adRowHasRawData(row) || Object.keys(row || {}).length > 0;
     const adMetricRows = () => adRowsArray().filter(adRowHasMetrics);
 
     function scheduleAdsPoll(from, to) {
       const pending = adsStatusRows.find((row) => row.uuid && !/READY|CACHED|OK|SUCCESS|DONE|COMPLETED|ERROR/i.test(String(row.state || "")));
-      if (!pending || adMetricRows().length || adPollAttempts >= 12) return;
+      if (!pending || adRowsArray().filter(adRowVisible).length || adPollAttempts >= 12) return;
       clearTimeout(adPollTimer);
       adPollAttempts += 1;
       adPollTimer = setTimeout(async () => {
@@ -264,7 +266,7 @@ const initialProducts = [
           adsTaskCache[key] = { uuid: found.uuid, state: found.state, updatedAt: new Date().toISOString() };
           save();
         }
-        if (adMetricRows().length || options.forceCreate) adPollAttempts = 0;
+        if (adRowsArray().filter(adRowVisible).length || options.forceCreate) adPollAttempts = 0;
         scheduleAdsPoll(from, to);
         if (options.allowCreate && !adMetricRows().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
           return loadBackendAds({ forceCreate: true, dateFrom: from, dateTo: to });
@@ -888,7 +890,7 @@ const initialProducts = [
 
     function baseAdRows() {
       const selected = $("adStoreSelect")?.value || "all";
-      const apiRows = adRowsArray().filter((row) => (selected === "all" || row.store === selected) && adRowHasMetrics(row));
+      const apiRows = adRowsArray().filter((row) => (selected === "all" || row.store === selected) && adRowVisible(row));
       if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
@@ -906,6 +908,79 @@ const initialProducts = [
 
     function adSourceRows() {
       return adRowsForRange();
+    }
+
+    function adRawObject(row) {
+      if (row?.raw && typeof row.raw === "object" && !Array.isArray(row.raw)) return row.raw;
+      const raw = {};
+      Object.entries(row || {}).forEach(([key, value]) => {
+        if (["raw", "rawKeys", "product", "image"].includes(key)) return;
+        if (value === undefined || typeof value === "function") return;
+        raw[key] = value;
+      });
+      return raw;
+    }
+
+    function adRawColumns(rows) {
+      const seen = new Set();
+      const columns = [];
+      rows.forEach((row) => {
+        Object.keys(adRawObject(row)).forEach((key) => {
+          if (!seen.has(key)) {
+            seen.add(key);
+            columns.push(key);
+          }
+        });
+      });
+      return columns.slice(0, 14);
+    }
+
+    function rawDisplayValue(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "object") {
+        try { return JSON.stringify(value); } catch { return String(value); }
+      }
+      return String(value);
+    }
+
+    function ensureAdRawPanel() {
+      if ($("adRawRows")) return;
+      const anchor = $("adRows")?.closest("section");
+      if (!anchor) return;
+      const panel = document.createElement("section");
+      panel.className = "panel";
+      panel.id = "adRawPanel";
+      panel.innerHTML = `
+        <div class="toolbar">
+          <h3>API 原始数据预览</h3>
+          <span class="status" id="adRawStatus">后台返回什么字段，这里就先显示什么字段。</span>
+        </div>
+        <div class="table-wrap raw-table-wrap">
+          <table id="adRawTable">
+            <thead id="adRawHead"></thead>
+            <tbody id="adRawRows"></tbody>
+          </table>
+        </div>`;
+      anchor.insertAdjacentElement("afterend", panel);
+    }
+
+    function renderAdRawPreview(rows) {
+      ensureAdRawPanel();
+      if (!$("adRawRows")) return;
+      const rawRows = rows.filter((row) => row.source === "api").slice(0, 30);
+      const columns = adRawColumns(rawRows);
+      if (!rawRows.length || !columns.length) {
+        $("adRawHead").innerHTML = "";
+        $("adRawRows").innerHTML = '<tr><td>暂无 API 原始行。现在显示的是 Excel 上传数据，或 API 只返回了报表状态。</td></tr>';
+        if ($("adRawStatus")) $("adRawStatus").textContent = "等待 API 返回明细行。";
+        return;
+      }
+      $("adRawHead").innerHTML = '<tr>' + columns.map((key) => '<th>' + escapeHtml(key) + '</th>').join("") + '</tr>';
+      $("adRawRows").innerHTML = rawRows.map((row) => {
+        const raw = adRawObject(row);
+        return '<tr>' + columns.map((key) => '<td>' + escapeHtml(rawDisplayValue(raw[key])).slice(0, 220) + '</td>').join("") + '</tr>';
+      }).join("");
+      if ($("adRawStatus")) $("adRawStatus").textContent = `显示 API 原始字段 ${columns.length} 列，预览 ${rawRows.length} 行。字段太多时先截取前 14 列。`;
     }
 
     function renderAdCalendar() {
@@ -1156,6 +1231,19 @@ const initialProducts = [
         $("adImportStatus").textContent = sourceText + (statusText ? ` API 状态：${statusText}` : "");
       }
 
+      if ($("adImportStatus")) {
+        const apiVisibleCount = adRowsArray().filter(adRowVisible).length;
+        const apiMetricCount = adMetricRows().length;
+        const xlsxCount = importedAds.length;
+        const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
+        const sourceTextClean = apiVisibleCount
+          ? `当前显示 API 广告数据 ${apiVisibleCount} 条，其中可识别指标 ${apiMetricCount} 条。`
+          : xlsxCount
+            ? `API 暂无可用明细，当前显示已上传 Excel 数据 ${xlsxCount} 条。`
+            : "暂无广告明细。";
+        $("adImportStatus").textContent = sourceTextClean + (statusTextClean ? ` API 状态：${statusTextClean}` : "");
+      }
+
       const summaryMap = new Map();
       adSourceRows().forEach((row) => {
         const product = productBySku(row.sku);
@@ -1183,6 +1271,7 @@ const initialProducts = [
         const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></div></div>';
         return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
       }).join("");
+      renderAdRawPreview(adSourceRows());
       drawAdChart();
     }
 
