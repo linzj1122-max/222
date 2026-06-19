@@ -16,6 +16,9 @@
   { code: "GP-130", sku: "4509770907", name: "Product GP-130", purchase: 104.5, domestic: 12, firstFreight: 141.86, lastMile: 10, rate: 11.5, platform: "Ozon" },
 ].map((item, index) => ({ ...item, id: `${item.platform}-${item.sku}-${index}` }));
 
+const ADS_REPORT_TASKS = new Map();
+const ADS_REPORT_ROWS = new Map();
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -30,6 +33,13 @@ function json(body, status = 200) {
 
 function amount(value) {
   const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function textAmount(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const cleaned = String(value ?? "").replace(/\s/g, "").replace("%", "").replace(",", ".").replace(/[^\d.-]/g, "");
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -494,6 +504,207 @@ async function probeAdsReportChecks(checks, headers, reportUuid) {
   }));
 }
 
+function adTaskKey(account, from, to) {
+  return `${account.clientId}|${from}|${to}`;
+}
+
+function adObjectValue(row, names) {
+  if (!row || typeof row !== "object") return "";
+  for (const name of names) {
+    if (row[name] !== undefined && row[name] !== null && row[name] !== "") return row[name];
+  }
+  const normalized = new Map(Object.entries(row).map(([key, value]) => [String(key).replace(/\s+/g, "").toLowerCase(), value]));
+  for (const name of names) {
+    const key = String(name).replace(/\s+/g, "").toLowerCase();
+    if (normalized.has(key)) return normalized.get(key);
+  }
+  return "";
+}
+
+function adArrayFromPayload(payload) {
+  const candidates = [
+    payload,
+    payload?.result,
+    payload?.rows,
+    payload?.data,
+    payload?.items,
+    payload?.result?.rows,
+    payload?.result?.data,
+    payload?.result?.items,
+    payload?.report?.rows,
+    payload?.statistics,
+  ];
+  for (const item of candidates) {
+    if (Array.isArray(item)) return item;
+  }
+  return [];
+}
+
+function campaignRowsFromPayload(payload) {
+  return probeArray(payload).map((campaign) => ({
+    campaignId: String(campaign.id || campaign.campaignId || campaign.campaign_id || ""),
+    campaignName: String(campaign.title || campaign.name || ""),
+    state: String(campaign.state || ""),
+  })).filter((campaign) => campaign.campaignId);
+}
+
+function normalizeAdsReportRows(payload, account, campaigns, from, to) {
+  const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
+  return adArrayFromPayload(payload).map((row) => {
+    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "id", "广告活动 ID"]) || "");
+    const campaign = campaignMap.get(campaignId) || {};
+    const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量"]));
+    const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量"]));
+    const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%"])) || (impressions ? clicks / impressions * 100 : 0);
+    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "促销销售"]));
+    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽"]));
+    return {
+      date: String(adObjectValue(row, ["date", "day", "dateTo", "日期"]) || to),
+      dateFrom: String(adObjectValue(row, ["dateFrom"]) || from),
+      dateTo: String(adObjectValue(row, ["dateTo"]) || to),
+      store: account.name,
+      campaignId,
+      campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动"]) || campaign.campaignName || ""),
+      sku: String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "id"]) || ""),
+      name: String(adObjectValue(row, ["name", "title", "productName", "商品名称"]) || ""),
+      adCost,
+      adRevenue,
+      revenue: adRevenue,
+      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量"])),
+      impressions,
+      clicks,
+      ctr,
+      source: "api",
+    };
+  }).filter((row) => row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId);
+}
+
+async function fetchAdsCampaigns(headers) {
+  const response = await fetch("https://api-performance.ozon.ru/api/client/campaign", { method: "GET", headers });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) throw new Error(`Ozon ads campaign API ${response.status}: ${text.slice(0, 240)}`);
+  return { payload, campaigns: campaignRowsFromPayload(payload) };
+}
+
+async function createAdsStatisticsReport(headers, campaignIds, from, to) {
+  const response = await fetch("https://api-performance.ozon.ru/api/client/statistics", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: "DATE" }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    return { ok: false, status: response.status, error: payload?.error || text.slice(0, 240), activeLimit: /лимит|limit/i.test(text) };
+  }
+  return { ok: true, status: response.status, uuid: probeUuid({ raw: payload, sample: payload }), payload };
+}
+
+async function fetchAdsStatisticsStatus(headers, uuid) {
+  const response = await fetch(`https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(uuid)}`, { method: "GET", headers });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) return { ok: false, status: response.status, state: "ERROR", error: payload?.error || text.slice(0, 240), payload };
+  return {
+    ok: true,
+    status: response.status,
+    state: String(payload?.state || payload?.result?.state || payload?.status || "UNKNOWN"),
+    payload,
+  };
+}
+
+async function fetchAdsStatisticsReport(headers, uuid) {
+  const urls = [
+    `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(uuid)}`,
+    `https://api-performance.ozon.ru/api/client/statistics/report?uuid=${encodeURIComponent(uuid)}`,
+    `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(uuid)}/report`,
+  ];
+  for (const url of urls) {
+    const response = await fetch(url, { method: "GET", headers });
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+    if (response.ok) return { ok: true, status: response.status, url, payload: payload || { text } };
+    if (!/not found|404/i.test(text) && response.status !== 404) return { ok: false, status: response.status, url, error: payload?.error || text.slice(0, 240) };
+  }
+  return { ok: false, status: 404, error: "report not found" };
+}
+
+async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
+  const rows = [];
+  const meta = [];
+  for (const account of ozonAdAccounts(env).slice(0, 1)) {
+    try {
+      const token = await fetchOzonAdsToken(account);
+      const headers = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
+      const { campaigns } = await fetchAdsCampaigns(headers);
+      const campaignIds = campaigns.map((campaign) => campaign.campaignId).filter(Boolean);
+      const key = adTaskKey(account, from, to);
+      const cachedRows = ADS_REPORT_ROWS.get(key) || [];
+      if (cachedRows.length && !options.force) {
+        rows.push(...cachedRows);
+        meta.push({ store: account.name, state: "CACHED", rows: cachedRows.length, campaigns: campaignIds.length });
+        continue;
+      }
+      let task = ADS_REPORT_TASKS.get(key);
+      if (!task || options.force) {
+        if (!campaignIds.length) {
+          meta.push({ store: account.name, state: "NO_CAMPAIGNS", rows: 0, campaigns: 0 });
+          continue;
+        }
+        const created = await createAdsStatisticsReport(headers, campaignIds, from, to);
+        if (!created.ok) {
+          meta.push({ store: account.name, state: created.activeLimit ? "WAIT_ACTIVE_REPORT" : "ERROR", rows: 0, campaigns: campaignIds.length, error: created.error });
+          continue;
+        }
+        task = { uuid: created.uuid, from, to, store: account.name, status: "CREATED", createdAt: new Date().toISOString() };
+        ADS_REPORT_TASKS.set(key, task);
+      }
+      const status = await fetchAdsStatisticsStatus(headers, task.uuid);
+      task.status = status.state;
+      task.updatedAt = new Date().toISOString();
+      ADS_REPORT_TASKS.set(key, task);
+      if (!/OK|SUCCESS|DONE|COMPLETED/i.test(status.state)) {
+        meta.push({ store: account.name, state: status.state, uuid: task.uuid, rows: 0, campaigns: campaignIds.length });
+        continue;
+      }
+      const report = await fetchAdsStatisticsReport(headers, task.uuid);
+      if (!report.ok) {
+        meta.push({ store: account.name, state: "REPORT_PENDING", uuid: task.uuid, rows: 0, campaigns: campaignIds.length, error: report.error });
+        continue;
+      }
+      const normalized = normalizeAdsReportRows(report.payload, account, campaigns, from, to);
+      ADS_REPORT_ROWS.set(key, normalized);
+      rows.push(...normalized);
+      meta.push({ store: account.name, state: "READY", uuid: task.uuid, rows: normalized.length, campaigns: campaignIds.length });
+    } catch (error) {
+      meta.push({ store: account.name, state: "ERROR", rows: 0, error: error.message || String(error) });
+    }
+  }
+  Object.defineProperty(rows, "meta", { value: meta, enumerable: false });
+  return rows;
+}
+
 async function probeOzonAnalytics(env, from, to) {
   const stores = ozonStores(env);
   const probes = [];
@@ -531,7 +742,7 @@ async function probeOzonAnalytics(env, from, to) {
   };
 }
 
-async function probeOzonAds(env, from, to, existingUuid = "") {
+async function probeOzonAds(env, from, to, existingUuid = "", createReport = false) {
   const accounts = ozonAdAccounts(env);
   const probes = [];
   for (const account of accounts) {
@@ -550,6 +761,16 @@ async function probeOzonAds(env, from, to, existingUuid = "") {
       if (existingUuid) {
         checks.push({ name: "ads_statistics_create_campaign", ok: true, skipped: true, note: "Using existing uuid; no new report request was created." });
         await probeAdsReportChecks(checks, headers, existingUuid);
+        probes.push({
+          store: account.name,
+          clientIdConfigured: Boolean(account.clientId),
+          clientSecretConfigured: Boolean(account.clientSecret),
+          checks,
+        });
+        continue;
+      }
+      if (!createReport) {
+        checks.push({ name: "ads_statistics_create_campaign", ok: true, skipped: true, note: "Add create=1 to create a new statistics report. Add uuid=... to check an existing report." });
         probes.push({
           store: account.name,
           clientIdConfigured: Boolean(account.clientId),
@@ -583,6 +804,7 @@ async function probeOzonAds(env, from, to, existingUuid = "") {
     dateTo: to,
     accountCount: accounts.length,
     existingUuid: existingUuid || "",
+    createReport,
     note: "Use after configuring OZON_ADS_1_CLIENT_ID and OZON_ADS_1_CLIENT_SECRET. Secrets are not returned.",
     probes,
   };
@@ -593,7 +815,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-19-cloudflare-ads-v2",
+    version: "2026-06-19-cloudflare-ads-v4",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
@@ -641,7 +863,10 @@ export async function onRequest(context) {
       const { from, to } = dateRange(url.searchParams);
       return json(filterRows(await fetchOzonOrders(env, from, to), url.searchParams));
     }
-    if (path === "ads/daily-products") return json([]);
+    if (path === "ads/daily-products") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await fetchOzonAdsDailyProducts(env, from, to, { force: url.searchParams.get("force") === "1" }));
+    }
     if (path === "competitors") return json([]);
     if (path === "integrations") return json(integrations(env));
     if (path === "probe/ozon-analytics") {
@@ -650,7 +875,7 @@ export async function onRequest(context) {
     }
     if (path === "probe/ozon-ads") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await probeOzonAds(env, from, to, url.searchParams.get("uuid") || ""));
+      return json(await probeOzonAds(env, from, to, url.searchParams.get("uuid") || "", url.searchParams.get("create") === "1"));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
