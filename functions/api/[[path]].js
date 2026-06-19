@@ -601,6 +601,10 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   }).filter((row) => row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId);
 }
 
+function adRowHasMetrics(row) {
+  return Boolean(row && (row.adCost || row.adRevenue || row.revenue || row.impressions || row.clicks || row.adOrders));
+}
+
 async function fetchAdsCampaigns(headers) {
   const response = await fetch("https://api-performance.ozon.ru/api/client/campaign", { method: "GET", headers });
   const text = await response.text();
@@ -612,6 +616,52 @@ async function fetchAdsCampaigns(headers) {
   }
   if (!response.ok) throw new Error(`Ozon ads campaign API ${response.status}: ${text.slice(0, 240)}`);
   return { payload, campaigns: campaignRowsFromPayload(payload) };
+}
+
+async function postAdsJsonStatistics(headers, endpoint, body) {
+  const response = await fetch(`https://api-performance.ozon.ru${endpoint}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) return { ok: false, status: response.status, endpoint, error: payload?.error || text.slice(0, 240), payload };
+  return { ok: true, status: response.status, endpoint, payload };
+}
+
+async function fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, from, to) {
+  if (!campaignIds.length) return { rows: [], attempts: [] };
+  const bodies = [
+    { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: "DATE" },
+    { campaigns: campaignIds, from, to, groupBy: "DATE" },
+  ];
+  const endpoints = [
+    "/api/client/statistics/daily/json",
+    "/api/client/statistics/expense/json",
+    "/api/client/statistics/campaign/product/json",
+  ];
+  const attempts = [];
+  for (const endpoint of endpoints) {
+    for (const body of bodies) {
+      const result = await postAdsJsonStatistics(headers, endpoint, body);
+      const normalized = result.ok ? normalizeAdsReportRows(result.payload, account, campaigns, from, to).filter(adRowHasMetrics) : [];
+      attempts.push({
+        endpoint,
+        ok: result.ok,
+        status: result.status,
+        rows: normalized.length,
+        error: result.error || "",
+      });
+      if (normalized.length) return { rows: normalized, attempts };
+    }
+  }
+  return { rows: [], attempts };
 }
 
 async function fetchOzonProductImages(env, skus) {
@@ -865,6 +915,19 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         rows.push(...cachedRows);
         meta.push({ store: account.name, state: "CACHED", rows: cachedRows.length, campaigns: campaignIds.length });
         continue;
+      }
+      if (!options.uuid && !options.force) {
+        const direct = await fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, from, to);
+        if (direct.rows.length) {
+          ADS_REPORT_ROWS.set(key, direct.rows);
+          rows.push(...direct.rows);
+          meta.push({ store: account.name, state: "DIRECT_JSON", rows: direct.rows.length, campaigns: campaignIds.length, attempts: direct.attempts.slice(-3) });
+          continue;
+        }
+        if (!options.create) {
+          meta.push({ store: account.name, state: "DIRECT_EMPTY", rows: 0, campaigns: campaignIds.length, attempts: direct.attempts.slice(-6), note: "Direct JSON statistics returned no metric rows. Click refresh once to create an async report task." });
+          continue;
+        }
       }
       let task = options.uuid ? { uuid: options.uuid, from, to, store: account.name, status: "EXTERNAL", createdAt: "" } : ADS_REPORT_TASKS.get(key);
       if (!task && !options.create && !options.force) {

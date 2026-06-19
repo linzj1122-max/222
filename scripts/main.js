@@ -43,11 +43,18 @@ const initialProducts = [
     const rmb = (v) => `¥${Number(v || 0).toFixed(2)}`;
     const rub = (v) => `₽${Number(v || 0).toFixed(2)}`;
     const escapeHtml = (v) => String(v ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
-    const todayIso = () => new Date().toISOString().slice(0,10);
+    const localIso = (date) => {
+      const d = date instanceof Date ? date : new Date(`${date}T00:00:00`);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    const todayIso = () => localIso(new Date());
     const addDays = (date, days) => {
-      const d = new Date(date);
+      const d = new Date(`${date}T00:00:00`);
       d.setDate(d.getDate() + days);
-      return d.toISOString().slice(0,10);
+      return localIso(d);
     };
 
     let products = JSON.parse(localStorage.getItem(productKey) || "null") || initialProducts;
@@ -66,8 +73,12 @@ const initialProducts = [
     let activeChartIndex = null;
     let adChartHitboxes = [];
     let activeAdChartIndex = null;
+    let adPollTimer = null;
+    let adPollAttempts = 0;
     let adDateFrom = addDays(todayIso(), -27);
     let adDateTo = todayIso();
+    let adCalendarCursor = new Date(`${adDateFrom}T00:00:00`);
+    let pendingAdDateAnchor = null;
     let adCompareEnabled = true;
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
     let selectedStore = "all";
@@ -144,7 +155,7 @@ const initialProducts = [
         }
         for (let date = 1; date <= daysInMonth; date += 1) {
           const day = new Date(month.getFullYear(), month.getMonth(), date);
-          const iso = day.toISOString().slice(0, 10);
+          const iso = localIso(day);
           const rangeFrom = orderDateFrom <= orderDateTo ? orderDateFrom : orderDateTo;
           const rangeTo = orderDateFrom <= orderDateTo ? orderDateTo : orderDateFrom;
           const classes = [
@@ -206,9 +217,27 @@ const initialProducts = [
     }
 
     const cacheDayKey = () => todayIso();
-    const rangeCacheKey = (from, to) => `${cacheDayKey()}|${from}|${to}`;
-    const shouldRefreshRange = (from, to, force = false) => force || (from === todayIso() && to === todayIso());
+    const rangeCacheKey = (from, to) => `orders-v2|${from}|${to}`;
+    const isFutureRange = (from) => from > todayIso();
+    const shouldRefreshRange = (from, to, force = false) => {
+      if (force) return true;
+      if (isFutureRange(from)) return false;
+      return to >= todayIso();
+    };
     const adRowsArray = () => Array.isArray(backendAds) ? backendAds : (Array.isArray(backendAds?.rows) ? backendAds.rows : []);
+    const adRowHasMetrics = (row) => Number(row.adCost || 0) || Number(row.adRevenue || row.revenue || 0) || Number(row.adOrders || 0) || Number(row.impressions || 0) || Number(row.clicks || 0);
+    const adMetricRows = () => adRowsArray().filter(adRowHasMetrics);
+
+    function scheduleAdsPoll(from, to) {
+      const pending = adsStatusRows.find((row) => row.uuid && !/READY|CACHED|OK|SUCCESS|DONE|COMPLETED|ERROR/i.test(String(row.state || "")));
+      if (!pending || adMetricRows().length || adPollAttempts >= 12) return;
+      clearTimeout(adPollTimer);
+      adPollAttempts += 1;
+      adPollTimer = setTimeout(async () => {
+        await loadBackendAds({ dateFrom: from, dateTo: to, uuid: pending.uuid });
+        renderAds();
+      }, 6000);
+    }
 
     async function loadBackendAds(options = {}) {
       backendAds = [];
@@ -221,7 +250,8 @@ const initialProducts = [
       if (to) params.set("dateTo", to);
       const key = `${from}|${to}`;
       const task = adsTaskCache[key];
-      if (task?.uuid && !options.forceCreate) params.set("uuid", task.uuid);
+      if (options.uuid && !options.forceCreate) params.set("uuid", options.uuid);
+      else if (task?.uuid && !options.forceCreate) params.set("uuid", task.uuid);
       else if (options.allowCreate || options.forceCreate) params.set("create", "1");
       if (options.forceCreate) params.set("force", "1");
       try {
@@ -234,12 +264,14 @@ const initialProducts = [
           adsTaskCache[key] = { uuid: found.uuid, state: found.state, updatedAt: new Date().toISOString() };
           save();
         }
-        if (options.allowCreate && !adRowsArray().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
-          return loadBackendAds({ forceCreate: true });
+        if (adMetricRows().length || options.forceCreate) adPollAttempts = 0;
+        scheduleAdsPoll(from, to);
+        if (options.allowCreate && !adMetricRows().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
+          return loadBackendAds({ forceCreate: true, dateFrom: from, dateTo: to });
         }
-      } catch {
+      } catch (error) {
         backendAds = [];
-        adsStatusRows = [];
+        adsStatusRows = [{ store: "API", state: "ERROR", error: error.message || String(error) }];
       }
     }
 
@@ -253,6 +285,8 @@ const initialProducts = [
       }
       if (status) status.textContent = "正在向 Ozon 请求广告报表，请稍等。";
       try {
+        adPollAttempts = 0;
+        clearTimeout(adPollTimer);
         await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
         renderAds();
       } finally {
@@ -266,21 +300,55 @@ const initialProducts = [
     async function loadBackendOrders(options = {}) {
       if (!backendEnabled) return;
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
+      if (isFutureRange(orderDateFrom)) {
+        orders = [];
+        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `当前订单范围：${orderDateFrom} 至 ${orderDateTo}，日期尚未到来，暂无订单。`;
+        return;
+      }
       if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
         orders = orderRangeCache[key];
-        await loadBackendAds();
+        loadBackendAds();
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         return;
       }
+      if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单...`;
       const params = new URLSearchParams();
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
-      await loadBackendAds();
+      loadBackendAds();
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
       save();
     }
+
+    async function loadBackendOrdersCached(options = {}) {
+      if (!backendEnabled) return;
+      const key = rangeCacheKey(orderDateFrom, orderDateTo);
+      if (isFutureRange(orderDateFrom)) {
+        orders = [];
+        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，日期还没到，暂无订单。`;
+        return;
+      }
+      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
+        orders = orderRangeCache[key];
+        loadBackendAds();
+        if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
+        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单。`;
+        return;
+      }
+      if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单，请稍等...`;
+      const params = new URLSearchParams();
+      if (orderDateFrom) params.set("dateFrom", orderDateFrom);
+      if (orderDateTo) params.set("dateTo", orderDateTo);
+      orders = await apiRequest(`/api/orders?${params.toString()}`);
+      loadBackendAds();
+      if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
+      orderRangeCache[key] = orders;
+      if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已抓取并缓存 ${orders.length} 条订单。`;
+      save();
+    }
+    loadBackendOrders = loadBackendOrdersCached;
 
     async function loadStoreAnalytics(options = {}) {
       storeAnalyticsRows = [];
@@ -820,10 +888,10 @@ const initialProducts = [
 
     function baseAdRows() {
       const selected = $("adStoreSelect")?.value || "all";
+      const apiRows = adRowsArray().filter((row) => (selected === "all" || row.store === selected) && adRowHasMetrics(row));
+      if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
-      const apiRows = adRowsArray().filter((row) => selected === "all" || row.store === selected);
-      if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       return orders
         .filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected))
         .map((order) => {
@@ -840,6 +908,129 @@ const initialProducts = [
       return adRowsForRange();
     }
 
+    function renderAdCalendar() {
+      const box = $("adCalendar");
+      if (!box) return;
+      const base = new Date(adCalendarCursor.getFullYear(), adCalendarCursor.getMonth(), 1);
+      const months = [0, 1].map((offset) => new Date(base.getFullYear(), base.getMonth() + offset, 1));
+      if ($("adCalendarTitle")) $("adCalendarTitle").textContent = `${monthLabel(months[0])} - ${monthLabel(months[1])}`;
+      const weeks = ["一", "二", "三", "四", "五", "六", "日"];
+      const rangeFrom = adDateFrom <= adDateTo ? adDateFrom : adDateTo;
+      const rangeTo = adDateFrom <= adDateTo ? adDateTo : adDateFrom;
+      box.innerHTML = months.map((month) => {
+        const first = new Date(month.getFullYear(), month.getMonth(), 1);
+        const startOffset = (first.getDay() + 6) % 7;
+        const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+        const days = [];
+        for (let i = 0; i < startOffset; i += 1) days.push(`<span class="calendar-empty"></span>`);
+        for (let date = 1; date <= daysInMonth; date += 1) {
+          const day = new Date(month.getFullYear(), month.getMonth(), date);
+          const iso = localIso(day);
+          const classes = [
+            "calendar-day",
+            iso === todayIso() ? "today" : "",
+            iso === rangeFrom || iso === rangeTo || iso === pendingAdDateAnchor ? "selected" : "",
+            iso > rangeFrom && iso < rangeTo ? "in-range" : "",
+          ].filter(Boolean).join(" ");
+          days.push(`<button type="button" class="${classes}" data-ad-date="${iso}">${day.getDate()}</button>`);
+        }
+        return `<div class="calendar-month">
+          <div class="calendar-title">${monthLabel(month)}</div>
+          <div class="calendar-week">${weeks.map((w) => `<span>${w}</span>`).join("")}</div>
+          <div class="calendar-days">${days.join("")}</div>
+        </div>`;
+      }).join("");
+    }
+
+    function ensureAdDatePicker() {
+      if ($("adDateRangeButton") || !$("adStoreSelect")?.parentElement) return;
+      if ($("adDateFrom")?.parentElement) $("adDateFrom").parentElement.style.display = "none";
+      if ($("adDateTo")?.parentElement) $("adDateTo").parentElement.style.display = "none";
+      const wrapper = document.createElement("div");
+      wrapper.className = "date-range-picker ad-date-picker";
+      wrapper.innerHTML = `
+        <button class="date-range-button" id="adDateRangeButton" type="button">选择日期范围</button>
+        <div class="date-range-panel ad-date-range-panel" id="adDateRangePanel">
+          <div class="date-range-main">
+            <div class="date-fields">
+              <button class="date-display" id="adDateFromDisplay" type="button"></button>
+              <button class="date-display" id="adDateToDisplay" type="button"></button>
+            </div>
+            <div class="calendar-head">
+              <button id="adCalendarPrev" type="button">‹</button>
+              <strong id="adCalendarTitle"></strong>
+              <button id="adCalendarNext" type="button">›</button>
+            </div>
+            <div class="calendar-months" id="adCalendar"></div>
+          </div>
+          <div class="quick-ranges">
+            <button type="button" data-ad-picker-range="today">今天</button>
+            <button type="button" data-ad-picker-range="yesterday">昨天</button>
+            <button type="button" data-ad-picker-range="7">最近 7 天</button>
+            <button type="button" data-ad-picker-range="28">最近 28 天</button>
+            <button type="button" data-ad-picker-range="90">最近 90 天</button>
+          </div>
+        </div>`;
+      const anchor = $("refreshAdsApi") || $("adStoreSelect").parentElement;
+      anchor.insertAdjacentElement("afterend", wrapper);
+      $("adDateRangeButton").addEventListener("click", () => {
+        $("adDateRangePanel")?.classList.toggle("open");
+        renderAdCalendar();
+      });
+      $("adCalendarPrev").addEventListener("click", () => {
+        adCalendarCursor = new Date(adCalendarCursor.getFullYear(), adCalendarCursor.getMonth() - 1, 1);
+        renderAdCalendar();
+      });
+      $("adCalendarNext").addEventListener("click", () => {
+        adCalendarCursor = new Date(adCalendarCursor.getFullYear(), adCalendarCursor.getMonth() + 1, 1);
+        renderAdCalendar();
+      });
+      $("adCalendar").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-ad-date]");
+        if (!button) return;
+        setAdDate(button.dataset.adDate);
+      });
+      wrapper.querySelectorAll("[data-ad-picker-range]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const value = button.dataset.adPickerRange;
+          const today = todayIso();
+          const yesterday = addDays(today, -1);
+          pendingAdDateAnchor = null;
+          if (value === "today") {
+            adDateFrom = today;
+            adDateTo = today;
+          } else if (value === "yesterday") {
+            adDateFrom = yesterday;
+            adDateTo = yesterday;
+          } else {
+            adDateTo = today;
+            adDateFrom = addDays(adDateTo, -(Number(value || 28) - 1));
+          }
+          $("adDateRangePanel")?.classList.remove("open");
+          updateAdDateInputs();
+          renderAds();
+        });
+      });
+    }
+
+    function setAdDate(value) {
+      if (!pendingAdDateAnchor) {
+        pendingAdDateAnchor = value;
+        adDateFrom = value;
+        adDateTo = value;
+        updateAdDateInputs();
+        renderAdCalendar();
+        return;
+      }
+      const sorted = [pendingAdDateAnchor, value].sort();
+      pendingAdDateAnchor = null;
+      adDateFrom = sorted[0];
+      adDateTo = sorted[1];
+      $("adDateRangePanel")?.classList.remove("open");
+      updateAdDateInputs();
+      renderAds();
+    }
+
     function updateAdDateInputs() {
       if (!$("refreshAdsApi") && $("adStoreSelect")?.parentElement) {
         const button = document.createElement("button");
@@ -850,12 +1041,17 @@ const initialProducts = [
         $("adStoreSelect").parentElement.insertAdjacentElement("afterend", button);
         button.addEventListener("click", refreshAdsApi);
       }
+      ensureAdDatePicker();
       if ($("adDateFrom")) $("adDateFrom").value = adDateFrom;
       if ($("adDateTo")) $("adDateTo").value = adDateTo;
+      if ($("adDateRangeButton")) $("adDateRangeButton").textContent = `${adDateFrom} - ${adDateTo}`;
+      if ($("adDateFromDisplay")) $("adDateFromDisplay").textContent = adDateFrom.replaceAll("-", "/");
+      if ($("adDateToDisplay")) $("adDateToDisplay").textContent = adDateTo.replaceAll("-", "/");
       if ($("adCompareToggle")) $("adCompareToggle").checked = adCompareEnabled;
       document.querySelectorAll("[data-ad-range]").forEach((button) => {
         button.classList.toggle("active", daysInclusive(adDateFrom, adDateTo) === Number(button.dataset.adRange));
       });
+      renderAdCalendar();
     }
 
     function adImageFor(row) {
@@ -950,6 +1146,14 @@ const initialProducts = [
         if (adRowsArray().length) $("adImportStatus").textContent = "\u5DF2\u8BFB\u53D6 API \u5E7F\u544A\u6570\u636E " + adRowsArray().length + " \u6761\u3002" + (statusText ? " " + statusText : "");
         else if (importedAds.length) $("adImportStatus").textContent = "\u672C\u673A\u5DF2\u4FDD\u5B58 " + importedAds.length + " \u6761\u4E0A\u4F20\u5E7F\u544A\u6570\u636E\u3002" + (statusText ? " API: " + statusText : "");
         else $("adImportStatus").textContent = statusText || "\u5C1A\u672A\u5BFC\u5165\u5E7F\u544A\u6570\u636E\u3002";
+      }
+
+      if ($("adImportStatus")) {
+        const apiCount = adMetricRows().length;
+        const xlsxCount = importedAds.length;
+        const statusText = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
+        const sourceText = apiCount ? `当前显示 API 广告数据 ${apiCount} 条。` : xlsxCount ? `API 暂无可用明细，当前显示已上传 Excel 数据 ${xlsxCount} 条。` : "暂无广告明细。";
+        $("adImportStatus").textContent = sourceText + (statusText ? ` API 状态：${statusText}` : "");
       }
 
       const summaryMap = new Map();
@@ -1143,7 +1347,7 @@ const initialProducts = [
       } else if (value === "quarter") {
         const d = new Date(`${today}T00:00:00`);
         const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
-        from = new Date(d.getFullYear(), quarterStartMonth, 1).toISOString().slice(0, 10);
+        from = localIso(new Date(d.getFullYear(), quarterStartMonth, 1));
         to = yesterday;
       } else if (value === "year") {
         from = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
@@ -1687,7 +1891,7 @@ const initialProducts = [
         } else if (value === "quarter") {
           const d = new Date(`${today}T00:00:00`);
           const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
-          orderDateFrom = new Date(d.getFullYear(), quarterStartMonth, 1).toISOString().slice(0, 10);
+          orderDateFrom = localIso(new Date(d.getFullYear(), quarterStartMonth, 1));
           orderDateTo = yesterday;
         } else if (value === "year") {
           orderDateFrom = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
