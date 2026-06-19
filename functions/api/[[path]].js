@@ -557,26 +557,27 @@ function adsReportCampaignIds(campaigns) {
 function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
   return adArrayFromPayload(payload).map((row) => {
-    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "id", "广告活动 ID"]) || "");
+    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "id", "广告活动 ID", "ID кампании", "Кампания ID", "__campaignId"]) || "");
     const campaign = campaignMap.get(campaignId) || {};
-    const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量"]));
-    const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量"]));
+    const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт."]));
+    const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量", "Клики", "Клики, шт."]));
     const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%"])) || (impressions ? clicks / impressions * 100 : 0);
-    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "促销销售"]));
-    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽"]));
+    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "促销销售", "Выручка", "Продажи", "Заказы, ₽"]));
+    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Затраты"]));
+    const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "id", "Артикул", "Ozon ID"]) || campaignId);
     return {
-      date: String(adObjectValue(row, ["date", "day", "dateTo", "日期"]) || to),
+      date: toIsoDate(String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата"]) || to), to),
       dateFrom: String(adObjectValue(row, ["dateFrom"]) || from),
       dateTo: String(adObjectValue(row, ["dateTo"]) || to),
       store: account.name,
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动"]) || campaign.campaignName || ""),
-      sku: String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "id"]) || ""),
+      sku,
       name: String(adObjectValue(row, ["name", "title", "productName", "商品名称"]) || ""),
       adCost,
       adRevenue,
       revenue: adRevenue,
-      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量"])),
+      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量", "Заказы", "Количество заказов", "Продажи, шт."])),
       impressions,
       clicks,
       ctr,
@@ -635,6 +636,121 @@ async function fetchAdsStatisticsStatus(headers, uuid) {
   };
 }
 
+function toIsoDate(value, fallback = "") {
+  const text = String(value || "");
+  const ru = text.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  if (ru) return `${ru[3]}-${ru[2]}-${ru[1]}`;
+  const iso = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  return fallback;
+}
+
+function parseCsv(text) {
+  const firstLine = String(text || "").split(/\r?\n/).find((line) => line.trim()) || "";
+  const delimiter = [";", "\t", ","].sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0];
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === delimiter) {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((value) => String(value).trim())) rows.push(row);
+  return rows;
+}
+
+function csvObjectsFromText(text, fileName = "") {
+  const rows = parseCsv(text).filter((row) => row.some((cell) => String(cell).trim()));
+  if (!rows.length) return [];
+  const headerIndex = rows.findIndex((row) => row.some((cell) => /date|день|дата|campaign|кампан|расход|показы|клики|sku/i.test(String(cell))));
+  if (headerIndex < 0) return [];
+  const headers = rows[headerIndex].map((cell) => String(cell || "").trim());
+  const campaignId = String(fileName).match(/^(\d+)/)?.[1] || "";
+  return rows.slice(headerIndex + 1).map((row) => {
+    const item = { __campaignId: campaignId, __fileName: fileName };
+    headers.forEach((header, index) => {
+      if (header) item[header] = row[index];
+    });
+    return item;
+  }).filter((item) => Object.values(item).some((value) => String(value || "").trim()));
+}
+
+async function inflateZipEntry(bytes) {
+  if (typeof DecompressionStream === "undefined") return null;
+  for (const format of ["deflate-raw", "deflate"]) {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      // Try the next supported format.
+    }
+  }
+  return null;
+}
+
+async function csvObjectsFromZip(buffer) {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let eocd = -1;
+  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 66000); offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) return [];
+  const entryCount = view.getUint16(eocd + 10, true);
+  let centralOffset = view.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder("utf-8");
+  const output = [];
+  for (let entry = 0; entry < entryCount; entry += 1) {
+    if (view.getUint32(centralOffset, true) !== 0x02014b50) break;
+    const method = view.getUint16(centralOffset + 10, true);
+    const compressedSize = view.getUint32(centralOffset + 20, true);
+    const fileNameLength = view.getUint16(centralOffset + 28, true);
+    const extraLength = view.getUint16(centralOffset + 30, true);
+    const commentLength = view.getUint16(centralOffset + 32, true);
+    const localOffset = view.getUint32(centralOffset + 42, true);
+    const fileName = decoder.decode(bytes.slice(centralOffset + 46, centralOffset + 46 + fileNameLength));
+    centralOffset += 46 + fileNameLength + extraLength + commentLength;
+    if (!/\.csv$/i.test(fileName) || view.getUint32(localOffset, true) !== 0x04034b50) continue;
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+    const content = method === 0 ? compressed : method === 8 ? await inflateZipEntry(compressed) : null;
+    if (!content) continue;
+    output.push(...csvObjectsFromText(decoder.decode(content), fileName));
+  }
+  return output;
+}
+
 async function fetchAdsStatisticsReport(headers, uuid) {
   const urls = [
     `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(uuid)}`,
@@ -643,14 +759,20 @@ async function fetchAdsStatisticsReport(headers, uuid) {
   ];
   for (const url of urls) {
     const response = await fetch(url, { method: "GET", headers });
-    const text = await response.text();
+    const buffer = await response.arrayBuffer();
+    const text = new TextDecoder("utf-8").decode(buffer);
     let payload = null;
     try {
       payload = JSON.parse(text);
     } catch {
       payload = null;
     }
-    if (response.ok) return { ok: true, status: response.status, url, payload: payload || { text } };
+    if (response.ok) {
+      const bytes = new Uint8Array(buffer);
+      if (bytes[0] === 0x50 && bytes[1] === 0x4b) return { ok: true, status: response.status, url, payload: await csvObjectsFromZip(buffer) };
+      if (payload) return { ok: true, status: response.status, url, payload };
+      return { ok: true, status: response.status, url, payload: csvObjectsFromText(text) };
+    }
     if (!/not found|404/i.test(text) && response.status !== 404) return { ok: false, status: response.status, url, error: payload?.error || text.slice(0, 240) };
   }
   return { ok: false, status: 404, error: "report not found" };
