@@ -666,7 +666,11 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         meta.push({ store: account.name, state: "CACHED", rows: cachedRows.length, campaigns: campaignIds.length });
         continue;
       }
-      let task = ADS_REPORT_TASKS.get(key);
+      let task = options.uuid ? { uuid: options.uuid, from, to, store: account.name, status: "EXTERNAL", createdAt: "" } : ADS_REPORT_TASKS.get(key);
+      if (!task && !options.create && !options.force) {
+        meta.push({ store: account.name, state: "NO_REPORT_TASK", rows: 0, campaigns: campaignIds.length, note: "Pass create=1 once to create a report task." });
+        continue;
+      }
       if (!task || options.force) {
         if (!campaignIds.length) {
           meta.push({ store: account.name, state: "NO_CAMPAIGNS", rows: 0, campaigns: 0 });
@@ -701,8 +705,7 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
       meta.push({ store: account.name, state: "ERROR", rows: 0, error: error.message || String(error) });
     }
   }
-  Object.defineProperty(rows, "meta", { value: meta, enumerable: false });
-  return rows;
+  return { rows, meta };
 }
 
 async function probeOzonAnalytics(env, from, to) {
@@ -865,7 +868,11 @@ export async function onRequest(context) {
     }
     if (path === "ads/daily-products") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await fetchOzonAdsDailyProducts(env, from, to, { force: url.searchParams.get("force") === "1" }));
+      return json(await fetchOzonAdsDailyProducts(env, from, to, {
+        force: url.searchParams.get("force") === "1",
+        create: url.searchParams.get("create") === "1",
+        uuid: url.searchParams.get("uuid") || "",
+      }));
     }
     if (path === "competitors") return json([]);
     if (path === "integrations") return json(integrations(env));
