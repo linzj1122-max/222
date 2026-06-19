@@ -53,6 +53,7 @@ const initialProducts = [
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
+    let backendAds = [];
     let orderRangeCache = JSON.parse(localStorage.getItem(orderRangeCacheKey) || "{}");
     let storeAnalyticsCache = JSON.parse(localStorage.getItem(storeAnalyticsCacheKey) || "{}");
     let storeAnalyticsRows = [];
@@ -207,7 +208,8 @@ const initialProducts = [
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
-      const backendAds = await apiRequest("/api/ads/daily-products");
+      const adParams = new URLSearchParams(params);
+      backendAds = await apiRequest(`/api/ads/daily-products?${adParams.toString()}`);
       if (backendAds.length) orders = mergeAdRowsIntoOrders(orders, backendAds);
       orderRangeCache[key] = orders;
       save();
@@ -733,12 +735,14 @@ const initialProducts = [
     function adSourceRows() {
       const selected = $("adStoreSelect")?.value || "all";
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
-      if (uploaded.length) return uploaded;
+      if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
+      const apiRows = backendAds.filter((row) => selected === "all" || row.store === selected);
+      if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       return orders
         .filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected))
         .map((order) => {
           const c = calcOrder(order);
-          return { date: order.date, dateFrom: order.date, dateTo: order.date, store: order.store, sku: order.sku, name: c.product?.name || "", revenue: c.sale, adCost: c.adCost, adOrders: 1, impressions: 0, clicks: 0, ctr: 0 };
+          return { date: order.date, dateFrom: order.date, dateTo: order.date, store: order.store, sku: order.sku, name: c.product?.name || "", revenue: c.sale, adRevenue: c.sale, adCost: c.adCost, adOrders: 1, impressions: 0, clicks: 0, ctr: 0, source: "order" };
         });
     }
 
@@ -761,13 +765,13 @@ const initialProducts = [
           const sku = String(adCell(row, headerMap, ["SKU"]) || "").trim();
           if (!sku) return null;
           return {
-            id: crypto.randomUUID(), source: file.name, store, date: period.to, dateFrom: period.from, dateTo: period.to, sku,
+            id: crypto.randomUUID(), fileName: file.name, source: "xlsx", store, date: period.to, dateFrom: period.from, dateTo: period.to, sku,
             name: String(adCell(row, headerMap, ["\u5546\u54C1\u540D\u79F0"]) || "").trim(),
             tool: String(adCell(row, headerMap, ["\u5DE5\u5177"]) || "").trim(),
             placement: String(adCell(row, headerMap, ["\u6295\u653E\u4F4D\u7F6E"]) || "").trim(),
             campaignId: String(adCell(row, headerMap, ["\u5E7F\u544A\u6D3B\u52A8 ID"]) || "").trim(),
             adCost: adNumber(adCell(row, headerMap, ["\u8D39\u7528\uFF0C\u20BD", "\u8D39\u7528,\u20BD", "\u8D39\u7528"])),
-            revenue: adNumber(adCell(row, headerMap, ["\u4FC3\u9500\u9500\u552E\uFF0C{\u8D27\u5E01}", "\u4FC3\u9500\u9500\u552E,{\u8D27\u5E01}", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D\uFF0C\u20BD", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D"])),
+            adRevenue: adNumber(adCell(row, headerMap, ["\u4FC3\u9500\u9500\u552E\uFF0C{\u8D27\u5E01}", "\u4FC3\u9500\u9500\u552E,{\u8D27\u5E01}", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D\uFF0C\u20BD", "\u63A8\u5E7F\u5E26\u6765\u7684\u9500\u552E\u989D"])),
             adOrders: adNumber(adCell(row, headerMap, ["\u5DF2\u552E\u5546\u54C1\u6570\u91CF\uFF0C\u4EF6", "\u5DF2\u552E\u5546\u54C1\u6570\u91CF,\u4EF6"])),
             ctr: adNumber(adCell(row, headerMap, ["CTR, %", "CTR,%"])),
             impressions: adNumber(adCell(row, headerMap, ["\u5C55\u73B0\u91CF", "\u5C55\u793A\u91CF"])),
@@ -778,7 +782,7 @@ const initialProducts = [
           };
         }).filter(Boolean);
         if (!imported.length) throw new Error("\u8868\u683C\u91CC\u6CA1\u6709\u53EF\u5BFC\u5165\u7684\u5E7F\u544A\u884C");
-        importedAds = importedAds.filter((row) => !(row.store === store && row.source === file.name && row.dateFrom === period.from && row.dateTo === period.to)).concat(imported);
+        importedAds = importedAds.filter((row) => !(row.store === store && (row.fileName || row.source) === file.name && row.dateFrom === period.from && row.dateTo === period.to)).concat(imported);
         save();
         input.value = "";
         if (status) status.textContent = "\u5DF2\u5BFC\u5165 " + imported.length + " \u6761\u5E7F\u544A\u6570\u636E\uFF0C\u5468\u671F " + period.from + " - " + period.to + "\uFF0C\u6765\u6E90\uFF1A" + file.name;
@@ -792,7 +796,7 @@ const initialProducts = [
     function renderAds() {
       if (!$("adStoreSelect")) return;
       const currentStore = $("adStoreSelect").value || "all";
-      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store)].filter(Boolean))];
+      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...backendAds.map((row) => row.store)].filter(Boolean))];
       const storeOptions = '<option value="all">\u5168\u90E8\u5E97\u94FA</option>' + allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("");
       $("adStoreSelect").innerHTML = storeOptions;
       $("adStoreSelect").value = allStores.includes(currentStore) ? currentStore : "all";
