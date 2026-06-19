@@ -292,6 +292,16 @@
             <label class="inline-select">选择店铺
               <select id="adStoreSelect"></select>
             </label>
+            <div class="ad-filterbar">
+              <label>开始日期<input id="adDateFrom" type="date" /></label>
+              <label>结束日期<input id="adDateTo" type="date" /></label>
+              <label class="switch-line"><input id="adCompareToggle" type="checkbox" checked /> 周期对比</label>
+              <div class="segmented small">
+                <button type="button" data-ad-range="7">7天</button>
+                <button type="button" data-ad-range="14">14天</button>
+                <button type="button" data-ad-range="28">28天</button>
+              </div>
+            </div>
           </div>
           <div class="grid metrics">
             <div class="panel metric"><span>周期广告费</span><strong id="adTotal">₽0.00</strong></div>
@@ -308,6 +318,7 @@
           </div>
           <div class="chart-wrap">
             <canvas id="adChart" width="1200" height="360"></canvas>
+            <div class="chart-tooltip" id="adChartTooltip"></div>
           </div>
         </section>
 

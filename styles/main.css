@@ -518,6 +518,86 @@
       box-shadow: 0 16px 34px rgba(20, 33, 38, .2);
       z-index: 2;
     }
+    .ad-filterbar {
+      display: flex;
+      align-items: end;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .ad-filterbar label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .ad-filterbar input[type="date"],
+    .ad-filterbar select {
+      height: 36px;
+      min-width: 138px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
+    .switch-line {
+      height: 36px;
+      display: flex !important;
+      grid-auto-flow: column;
+      align-items: center;
+      gap: 7px !important;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      white-space: nowrap;
+    }
+    .segmented.small {
+      height: 36px;
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .segmented.small button {
+      border: 0;
+      border-radius: 0;
+      padding: 0 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .segmented.small button.active {
+      background: #eff6ff;
+      color: #2563eb;
+    }
+    .ad-product {
+      display: grid;
+      grid-template-columns: 42px minmax(160px, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-width: 230px;
+    }
+    .ad-product img,
+    .ad-product .ad-product-placeholder {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: #eef3f4;
+    }
+    .ad-product .ad-product-placeholder {
+      display: grid;
+      place-items: center;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+    }
     .chart-select {
       position: relative;
     }

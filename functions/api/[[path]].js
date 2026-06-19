@@ -614,6 +614,44 @@ async function fetchAdsCampaigns(headers) {
   return { payload, campaigns: campaignRowsFromPayload(payload) };
 }
 
+async function fetchOzonProductImages(env, skus) {
+  const wanted = [...new Set((skus || []).map((sku) => String(sku || "").trim()).filter(Boolean))].slice(0, 100);
+  const images = {};
+  if (!wanted.length) return { images };
+  for (const store of ozonStores(env)) {
+    const headers = { "client-id": store.clientId, "api-key": store.apiKey, "content-type": "application/json" };
+    const numericSkus = wanted.map((sku) => Number(sku)).filter((sku) => Number.isFinite(sku));
+    const bodies = [
+      numericSkus.length ? { sku: numericSkus } : null,
+      { offer_id: wanted },
+    ].filter(Boolean);
+    for (const body of bodies) {
+      try {
+        const response = await fetch("https://api-seller.ozon.ru/v3/product/info/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) continue;
+        const items = payload?.items || payload?.result?.items || payload?.result || [];
+        if (!Array.isArray(items)) continue;
+        items.forEach((item) => {
+          const keys = [item.sku, item.offer_id, item.product_id].map((value) => String(value || "")).filter(Boolean);
+          const image = item.primary_image || item.primary_image_url || item.images?.[0] || item.images360?.[0] || "";
+          if (!image) return;
+          keys.forEach((key) => {
+            if (wanted.includes(key) && !images[key]) images[key] = image;
+          });
+        });
+      } catch {
+        // Try the next store/body. Images are optional enrichment.
+      }
+    }
+  }
+  return { images };
+}
+
 async function createAdsStatisticsReport(headers, campaignIds, from, to) {
   const response = await fetch("https://api-performance.ozon.ru/api/client/statistics", {
     method: "POST",
@@ -990,7 +1028,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-19-cloudflare-ads-v5",
+    version: "2026-06-19-cloudflare-ads-v6",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
@@ -1026,6 +1064,10 @@ export async function onRequest(context) {
     if (path === "health") return json({ ok: true, service: "cloudflare-ozon-wb-control-center" });
     if (path === "debug") return json(debugStatus(env));
     if (path === "products") return json(PRODUCTS);
+    if (path === "product-images") {
+      const skus = String(url.searchParams.get("skus") || "").split(",");
+      return json(await fetchOzonProductImages(env, skus));
+    }
     if (path === "analytics/store") {
       const { from, to } = dateRange(url.searchParams);
       return json(await fetchStoreAnalytics(env, from, to));

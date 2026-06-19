@@ -22,6 +22,7 @@ const initialProducts = [
     const apiConfigKey = "ozon_wb_api_configs_v1";
     const importedAdsKey = "ozon_wb_imported_ads_v1";
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
+    const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
     const orderRangeCacheKey = "ozon_wb_order_range_cache_v1";
     const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v1";
     const skuFeeModels = {
@@ -57,11 +58,17 @@ const initialProducts = [
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
     let adsStatusRows = [];
+    let adImageCache = JSON.parse(localStorage.getItem(adImageCacheKey) || "{}");
     let orderRangeCache = JSON.parse(localStorage.getItem(orderRangeCacheKey) || "{}");
     let storeAnalyticsCache = JSON.parse(localStorage.getItem(storeAnalyticsCacheKey) || "{}");
     let storeAnalyticsRows = [];
     let revenueChartHitboxes = [];
     let activeChartIndex = null;
+    let adChartHitboxes = [];
+    let activeAdChartIndex = null;
+    let adDateFrom = addDays(todayIso(), -27);
+    let adDateTo = todayIso();
+    let adCompareEnabled = true;
     let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
     let selectedStore = "all";
     let orderDateFrom = addDays(todayIso(), -28);
@@ -184,6 +191,7 @@ const initialProducts = [
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
       localStorage.setItem(adsTaskCacheKey, JSON.stringify(adsTaskCache));
+      localStorage.setItem(adImageCacheKey, JSON.stringify(adImageCache));
       localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
       localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
     };
@@ -218,6 +226,7 @@ const initialProducts = [
         const payload = await apiRequest(`/api/ads/daily-products?${params.toString()}`);
         backendAds = Array.isArray(payload) ? payload : (Array.isArray(payload?.rows) ? payload.rows : []);
         adsStatusRows = Array.isArray(payload) ? [] : (Array.isArray(payload?.meta) ? payload.meta : []);
+        fetchAdImagesForRows(backendAds).then(renderAds);
         const found = adsStatusRows.find((row) => row.uuid);
         if (found?.uuid) {
           adsTaskCache[key] = { uuid: found.uuid, state: found.state, updatedAt: new Date().toISOString() };
@@ -753,6 +762,13 @@ const initialProducts = [
       return match ? match[3] + "-" + match[2] + "-" + match[1] : "";
     }
 
+    function parseAdDate(value) {
+      const text = String(value ?? "");
+      const iso = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+      return parseRuDate(text);
+    }
+
     function parseAdPeriod(rows) {
       const firstCells = rows.slice(0, 3).flat().map((cell) => String(cell ?? ""));
       const periodText = firstCells.find((cell) => /\d{2}\.\d{2}\.\d{4}/.test(cell)) || "";
@@ -768,7 +784,19 @@ const initialProducts = [
       return "";
     }
 
-    function adSourceRows() {
+    function dateInRange(date, from, to) {
+      const value = String(date || "");
+      return (!from || value >= from) && (!to || value <= to);
+    }
+
+    function daysInclusive(from, to) {
+      const start = new Date(`${from}T00:00:00`);
+      const end = new Date(`${to}T00:00:00`);
+      const diff = Math.round((end - start) / 86400000) + 1;
+      return Math.max(1, Number.isFinite(diff) ? diff : 1);
+    }
+
+    function baseAdRows() {
       const selected = $("adStoreSelect")?.value || "all";
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
@@ -780,6 +808,43 @@ const initialProducts = [
           const c = calcOrder(order);
           return { date: order.date, dateFrom: order.date, dateTo: order.date, store: order.store, sku: order.sku, name: c.product?.name || "", revenue: c.sale, adRevenue: c.sale, adCost: c.adCost, adOrders: 1, impressions: 0, clicks: 0, ctr: 0, source: "order" };
         });
+    }
+
+    function adRowsForRange(from = adDateFrom, to = adDateTo) {
+      return baseAdRows().filter((row) => dateInRange(row.dateTo || row.date, from, to));
+    }
+
+    function adSourceRows() {
+      return adRowsForRange();
+    }
+
+    function updateAdDateInputs() {
+      if ($("adDateFrom")) $("adDateFrom").value = adDateFrom;
+      if ($("adDateTo")) $("adDateTo").value = adDateTo;
+      if ($("adCompareToggle")) $("adCompareToggle").checked = adCompareEnabled;
+      document.querySelectorAll("[data-ad-range]").forEach((button) => {
+        button.classList.toggle("active", daysInclusive(adDateFrom, adDateTo) === Number(button.dataset.adRange));
+      });
+    }
+
+    function adImageFor(row) {
+      const key = String(row.sku || row.campaignId || "");
+      return row.image || row.product?.image || adImageCache[key] || "";
+    }
+
+    async function fetchAdImagesForRows(rows) {
+      if (!backendEnabled) return;
+      const skus = [...new Set(rows.map((row) => String(row.sku || "")).filter(Boolean).filter((sku) => !adImageCache[sku]))].slice(0, 50);
+      if (!skus.length) return;
+      try {
+        const payload = await apiRequest(`/api/product-images?skus=${encodeURIComponent(skus.join(","))}`);
+        Object.entries(payload?.images || {}).forEach(([sku, image]) => {
+          if (image) adImageCache[String(sku)] = image;
+        });
+        save();
+      } catch {
+        // Product images are helpful, but ad numbers must keep rendering without them.
+      }
     }
 
     async function importAdFile() {
@@ -800,8 +865,9 @@ const initialProducts = [
         const imported = rows.slice(headerIndex + 1).map((row) => {
           const sku = String(adCell(row, headerMap, ["SKU"]) || "").trim();
           if (!sku) return null;
+          const rowDate = parseAdDate(adCell(row, headerMap, ["日期", "Date", "День", "Дата"])) || period.to;
           return {
-            id: crypto.randomUUID(), fileName: file.name, source: "xlsx", store, date: period.to, dateFrom: period.from, dateTo: period.to, sku,
+            id: crypto.randomUUID(), fileName: file.name, source: "xlsx", store, date: rowDate, dateFrom: rowDate, dateTo: rowDate, reportFrom: period.from, reportTo: period.to, sku,
             name: String(adCell(row, headerMap, ["\u5546\u54C1\u540D\u79F0"]) || "").trim(),
             tool: String(adCell(row, headerMap, ["\u5DE5\u5177"]) || "").trim(),
             placement: String(adCell(row, headerMap, ["\u6295\u653E\u4F4D\u7F6E"]) || "").trim(),
@@ -818,8 +884,12 @@ const initialProducts = [
           };
         }).filter(Boolean);
         if (!imported.length) throw new Error("\u8868\u683C\u91CC\u6CA1\u6709\u53EF\u5BFC\u5165\u7684\u5E7F\u544A\u884C");
-        importedAds = importedAds.filter((row) => !(row.store === store && (row.fileName || row.source) === file.name && row.dateFrom === period.from && row.dateTo === period.to)).concat(imported);
+        importedAds = importedAds.filter((row) => !(row.store === store && (row.fileName || row.source) === file.name)).concat(imported);
+        adDateFrom = period.from;
+        adDateTo = period.to;
+        updateAdDateInputs();
         save();
+        fetchAdImagesForRows(imported).then(renderAds);
         input.value = "";
         if (status) status.textContent = "\u5DF2\u5BFC\u5165 " + imported.length + " \u6761\u5E7F\u544A\u6570\u636E\uFF0C\u5468\u671F " + period.from + " - " + period.to + "\uFF0C\u6765\u6E90\uFF1A" + file.name;
         renderAds();
@@ -831,6 +901,7 @@ const initialProducts = [
 
     function renderAds() {
       if (!$("adStoreSelect")) return;
+      updateAdDateInputs();
       const currentStore = $("adStoreSelect").value || "all";
       const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...adRowsArray().map((row) => row.store)].filter(Boolean))];
       const storeOptions = '<option value="all">\u5168\u90E8\u5E97\u94FA</option>' + allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("");
@@ -852,9 +923,9 @@ const initialProducts = [
 
       const summaryMap = new Map();
       adSourceRows().forEach((row) => {
-        const product = products.find((item) => item.sku === String(row.sku) || item.code === String(row.sku));
+        const product = productBySku(row.sku);
         const key = (row.dateFrom || row.date) + "|" + (row.dateTo || row.date) + "|" + row.store + "|" + row.sku;
-        const existing = summaryMap.get(key) || { date: row.date, dateFrom: row.dateFrom || row.date, dateTo: row.dateTo || row.date, store: row.store, sku: row.sku, name: row.name || product?.name || "", product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
+        const existing = summaryMap.get(key) || { date: row.date, dateFrom: row.dateFrom || row.date, dateTo: row.dateTo || row.date, store: row.store, sku: row.sku, name: row.name || product?.name || "", image: adImageFor({ ...row, product }), product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
         existing.revenue += Number(row.revenue || 0);
         existing.adCost += Number(row.adCost || 0);
         existing.adOrders += Number(row.adOrders || 0);
@@ -873,7 +944,9 @@ const initialProducts = [
       $("adProductCount").textContent = productCount;
       $("adRows").innerHTML = summaryRows.map((row) => {
         const period = row.dateFrom === row.dateTo ? row.dateTo : row.dateFrom + " - " + row.dateTo;
-        return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
+        const image = row.image ? '<img src="' + escapeHtml(row.image) + '" alt="' + escapeHtml(row.product?.code || row.sku) + '" />' : '<span class="ad-product-placeholder">' + escapeHtml(String(row.product?.code || row.sku || "?").slice(0, 3)) + '</span>';
+        const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></div></div>';
+        return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
       }).join("");
       drawAdChart();
     }
@@ -884,22 +957,31 @@ const initialProducts = [
       const ctx = canvas.getContext("2d");
       const width = canvas.width;
       const height = canvas.height;
-      const padLeft = 78, padRight = 34, padTop = 28, padBottom = 58;
+      const padLeft = 78, padRight = 34, padTop = 28, padBottom = 62;
       const chartX = padLeft, chartY = padTop, chartW = width - padLeft - padRight, chartH = height - padTop - padBottom;
-      const map = new Map();
-      adSourceRows().forEach((row) => {
-        const date = row.dateTo || row.date || todayIso();
-        map.set(date, (map.get(date) || 0) + Number(row.adCost || 0));
-      });
-      const days = [];
-      for (let i = 27; i >= 0; i--) {
-        const date = addDays(todayIso(), -i);
-        days.push({ date, value: map.get(date) || 0 });
-      }
-      const max = Math.max(...days.map((item) => item.value), 1);
+      const period = daysInclusive(adDateFrom, adDateTo);
+      const previousTo = addDays(adDateFrom, -1);
+      const previousFrom = addDays(previousTo, -(period - 1));
+      const makeSeries = (from, to) => {
+        const map = new Map();
+        adRowsForRange(from, to).forEach((row) => {
+          const date = row.dateTo || row.date || to;
+          map.set(date, (map.get(date) || 0) + Number(row.adCost || 0));
+        });
+        const days = [];
+        for (let i = 0; i < daysInclusive(from, to); i += 1) {
+          const date = addDays(from, i);
+          days.push({ date, value: map.get(date) || 0 });
+        }
+        return days;
+      };
+      const current = makeSeries(adDateFrom, adDateTo);
+      const previous = adCompareEnabled ? makeSeries(previousFrom, previousTo) : [];
+      const max = Math.max(...current.map((item) => item.value), ...previous.map((item) => item.value), 1);
       const axisMax = Math.ceil(max / 500) * 500 || 500;
       const toY = (value) => chartY + chartH - (Number(value || 0) / axisMax) * chartH;
-      const step = chartW / Math.max(days.length - 1, 1);
+      const step = chartW / Math.max(current.length - 1, 1);
+      const toX = (index) => chartX + index * step;
       ctx.clearRect(0, 0, width, height);
       const bg = ctx.createLinearGradient(0, 0, width, height);
       bg.addColorStop(0, "#fffaf6"); bg.addColorStop(.55, "#f8fbff"); bg.addColorStop(1, "#ffffff");
@@ -911,10 +993,48 @@ const initialProducts = [
         ctx.setLineDash([3, 7]); ctx.beginPath(); ctx.moveTo(chartX, y); ctx.lineTo(chartX + chartW, y); ctx.stroke(); ctx.setLineDash([]);
         ctx.textAlign = "right"; ctx.fillText((value / 1000).toFixed(value >= 1000 ? 1 : 0) + "k", chartX - 12, y + 4);
       }
-      const points = days.map((item, index) => ({ x: chartX + index * step, y: toY(item.value) }));
-      drawSmoothLine(ctx, points, "#f97316", 4);
+      const previousPoints = previous.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
+      const points = current.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
+      if (previousPoints.length) drawSmoothLine(ctx, previousPoints, "rgba(47, 156, 244, .62)", 3, { dashed: true, dots: false });
+      drawSmoothLine(ctx, points, "#2f9cf4", 3.5);
+      if (activeAdChartIndex !== null && current[activeAdChartIndex]) {
+        const x = toX(activeAdChartIndex);
+        ctx.strokeStyle = "rgba(77, 100, 122, .22)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, chartY);
+        ctx.lineTo(x, chartY + chartH);
+        ctx.stroke();
+        [points[activeAdChartIndex], previousPoints[activeAdChartIndex]].filter(Boolean).forEach((point, index) => {
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = index ? "rgba(47, 156, 244, .75)" : "#2f9cf4";
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
       ctx.fillStyle = "#465961"; ctx.font = "12px Microsoft YaHei, Arial";
-      days.forEach((item, index) => { if (index % 4 !== 0 && index !== days.length - 1) return; ctx.textAlign = "center"; ctx.fillText(item.date.slice(5), chartX + index * step, height - 26); });
+      const interval = current.length <= 7 ? 1 : current.length <= 14 ? 2 : 4;
+      current.forEach((item, index) => { if (index % interval !== 0 && index !== current.length - 1) return; ctx.textAlign = "center"; ctx.fillText(item.date.slice(5), toX(index), height - 26); });
+      ctx.strokeStyle = "#2f9cf4"; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 150, height - 18); ctx.lineTo(chartX + chartW - 122, height - 18); ctx.stroke();
+      ctx.fillStyle = "#64748b"; ctx.textAlign = "left"; ctx.fillText("本期", chartX + chartW - 114, height - 14);
+      if (previousPoints.length) {
+        ctx.strokeStyle = "rgba(47, 156, 244, .62)"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 68, height - 18); ctx.lineTo(chartX + chartW - 40, height - 18); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillText("上期", chartX + chartW - 32, height - 14);
+      }
+      adChartHitboxes = current.map((item, index) => ({
+        x: toX(index) - Math.max(8, step / 2),
+        y: chartY,
+        w: Math.max(16, step),
+        h: chartH,
+        index,
+        date: item.date,
+        current: item.value,
+        previous: previous[index]?.value || 0,
+        previousDate: previous[index]?.date || "",
+      }));
       ctx.textAlign = "left";
     }
 
@@ -1357,6 +1477,61 @@ const initialProducts = [
       if (event.target.id === "imageModal") closeImageModal();
     });
     $("adStoreSelect").addEventListener("change", renderAds);
+    if ($("adDateFrom")) $("adDateFrom").addEventListener("change", (event) => {
+      adDateFrom = event.target.value || adDateFrom;
+      if (adDateFrom > adDateTo) adDateTo = adDateFrom;
+      renderAds();
+    });
+    if ($("adDateTo")) $("adDateTo").addEventListener("change", (event) => {
+      adDateTo = event.target.value || adDateTo;
+      if (adDateTo < adDateFrom) adDateFrom = adDateTo;
+      renderAds();
+    });
+    if ($("adCompareToggle")) $("adCompareToggle").addEventListener("change", (event) => {
+      adCompareEnabled = event.target.checked;
+      renderAds();
+    });
+    document.querySelectorAll("[data-ad-range]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const days = Number(button.dataset.adRange || 28);
+        adDateTo = todayIso();
+        adDateFrom = addDays(adDateTo, -(days - 1));
+        renderAds();
+      });
+    });
+    if ($("adChart")) {
+      $("adChart").addEventListener("mousemove", (event) => {
+        const canvas = $("adChart");
+        const tooltip = $("adChartTooltip");
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (event.clientX - rect.left) * scaleX;
+        const y = (event.clientY - rect.top) * scaleY;
+        const hit = adChartHitboxes.find((box) => x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h);
+        if (!hit) {
+          tooltip.style.display = "none";
+          if (activeAdChartIndex !== null) {
+            activeAdChartIndex = null;
+            drawAdChart();
+          }
+          return;
+        }
+        if (activeAdChartIndex !== hit.index) {
+          activeAdChartIndex = hit.index;
+          drawAdChart();
+        }
+        tooltip.innerHTML = '<strong>费用</strong><br><span>本期 ' + escapeHtml(hit.date) + '</span><b style="float:right;margin-left:18px">' + rub(hit.current) + '</b><br>' + (hit.previousDate ? '<span>上期 ' + escapeHtml(hit.previousDate) + '</span><b style="float:right;margin-left:18px">' + rub(hit.previous) + '</b>' : '');
+        tooltip.style.display = "block";
+        tooltip.style.left = Math.min(event.clientX - rect.left + 14, rect.width - 210) + "px";
+        tooltip.style.top = Math.max(event.clientY - rect.top - 12, 8) + "px";
+      });
+      $("adChart").addEventListener("mouseleave", () => {
+        $("adChartTooltip").style.display = "none";
+        activeAdChartIndex = null;
+        drawAdChart();
+      });
+    }
     if ($("importAds")) $("importAds").addEventListener("click", importAdFile);
     if ($("clearImportedAds")) $("clearImportedAds").addEventListener("click", () => {
       if (!confirm("确定清空本机已导入的广告数据吗？")) return;
