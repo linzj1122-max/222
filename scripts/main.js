@@ -214,13 +214,15 @@ const initialProducts = [
       backendAds = [];
       adsStatusRows = [];
       if (!backendEnabled) return;
+      const from = options.dateFrom || adDateFrom || orderDateFrom;
+      const to = options.dateTo || adDateTo || orderDateTo;
       const params = new URLSearchParams();
-      if (orderDateFrom) params.set("dateFrom", orderDateFrom);
-      if (orderDateTo) params.set("dateTo", orderDateTo);
-      const key = `${orderDateFrom}|${orderDateTo}`;
+      if (from) params.set("dateFrom", from);
+      if (to) params.set("dateTo", to);
+      const key = `${from}|${to}`;
       const task = adsTaskCache[key];
       if (task?.uuid && !options.forceCreate) params.set("uuid", task.uuid);
-      else params.set("create", "1");
+      else if (options.allowCreate || options.forceCreate) params.set("create", "1");
       if (options.forceCreate) params.set("force", "1");
       try {
         const payload = await apiRequest(`/api/ads/daily-products?${params.toString()}`);
@@ -232,12 +234,32 @@ const initialProducts = [
           adsTaskCache[key] = { uuid: found.uuid, state: found.state, updatedAt: new Date().toISOString() };
           save();
         }
-        if (!adRowsArray().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
+        if (options.allowCreate && !adRowsArray().length && !task?.uuid && adsStatusRows.some((row) => row.state === "NO_REPORT_TASK")) {
           return loadBackendAds({ forceCreate: true });
         }
       } catch {
         backendAds = [];
         adsStatusRows = [];
+      }
+    }
+
+    async function refreshAdsApi() {
+      const button = $("refreshAdsApi");
+      const status = $("adImportStatus");
+      const oldText = button?.textContent || "刷新 API 广告数据";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "正在请求...";
+      }
+      if (status) status.textContent = "正在向 Ozon 请求广告报表，请稍等。";
+      try {
+        await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
+        renderAds();
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = oldText;
+        }
       }
     }
 
@@ -819,6 +841,15 @@ const initialProducts = [
     }
 
     function updateAdDateInputs() {
+      if (!$("refreshAdsApi") && $("adStoreSelect")?.parentElement) {
+        const button = document.createElement("button");
+        button.id = "refreshAdsApi";
+        button.type = "button";
+        button.className = "secondary";
+        button.textContent = "刷新 API 广告数据";
+        $("adStoreSelect").parentElement.insertAdjacentElement("afterend", button);
+        button.addEventListener("click", refreshAdsApi);
+      }
       if ($("adDateFrom")) $("adDateFrom").value = adDateFrom;
       if ($("adDateTo")) $("adDateTo").value = adDateTo;
       if ($("adCompareToggle")) $("adCompareToggle").checked = adCompareEnabled;
@@ -1477,6 +1508,7 @@ const initialProducts = [
       if (event.target.id === "imageModal") closeImageModal();
     });
     $("adStoreSelect").addEventListener("change", renderAds);
+    if ($("refreshAdsApi")) $("refreshAdsApi").addEventListener("click", refreshAdsApi);
     if ($("adDateFrom")) $("adDateFrom").addEventListener("change", (event) => {
       adDateFrom = event.target.value || adDateFrom;
       if (adDateFrom > adDateTo) adDateTo = adDateFrom;
