@@ -43,6 +43,14 @@ function textAmount(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizeAdKey(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, "")
+    .replaceAll("，", ",")
+    .replace(/[{}()[\]₽₽.:%]/g, "")
+    .toLowerCase();
+}
+
 function dateRange(searchParams) {
   const today = new Date();
   const to = searchParams.get("dateTo") || today.toISOString().slice(0, 10);
@@ -513,10 +521,17 @@ function adObjectValue(row, names) {
   for (const name of names) {
     if (row[name] !== undefined && row[name] !== null && row[name] !== "") return row[name];
   }
-  const normalized = new Map(Object.entries(row).map(([key, value]) => [String(key).replace(/\s+/g, "").toLowerCase(), value]));
+  const normalized = new Map(Object.entries(row).map(([key, value]) => [normalizeAdKey(key), value]));
   for (const name of names) {
-    const key = String(name).replace(/\s+/g, "").toLowerCase();
+    const key = normalizeAdKey(name);
     if (normalized.has(key)) return normalized.get(key);
+  }
+  for (const [rawKey, value] of Object.entries(row)) {
+    const key = normalizeAdKey(rawKey);
+    for (const name of names) {
+      const wanted = normalizeAdKey(name);
+      if (wanted.length >= 4 && (key.includes(wanted) || wanted.includes(key))) return value;
+    }
   }
   return "";
 }
@@ -557,27 +572,27 @@ function adsReportCampaignIds(campaigns) {
 function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
   return adArrayFromPayload(payload).map((row) => {
-    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "id", "广告活动 ID", "ID кампании", "Кампания ID", "__campaignId"]) || "");
+    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "广告活动 ID", "ID кампании", "Кампания ID", "Campaign ID", "CampaignId", "__campaignId"]) || "");
     const campaign = campaignMap.get(campaignId) || {};
-    const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт."]));
-    const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量", "Клики", "Клики, шт."]));
-    const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%"])) || (impressions ? clicks / impressions * 100 : 0);
-    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "促销销售", "Выручка", "Продажи", "Заказы, ₽"]));
-    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Затраты"]));
-    const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "id", "Артикул", "Ozon ID"]) || campaignId);
+    const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт.", "Impressions", "Shows"]));
+    const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量", "Клики", "Клики, шт.", "Clicks"]));
+    const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%", "Кликабельность"])) || (impressions ? clicks / impressions * 100 : 0);
+    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Revenue", "Sales"]));
+    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Затраты", "Expense", "Cost", "Spend"]));
+    const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Ozon ID"]) || campaignId);
     return {
-      date: toIsoDate(String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата"]) || to), to),
+      date: toIsoDate(String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Period", "Период"]) || to), to),
       dateFrom: String(adObjectValue(row, ["dateFrom"]) || from),
       dateTo: String(adObjectValue(row, ["dateTo"]) || to),
       store: account.name,
       campaignId,
-      campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动"]) || campaign.campaignName || ""),
+      campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
       sku,
-      name: String(adObjectValue(row, ["name", "title", "productName", "商品名称"]) || ""),
+      name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Наименование", "Product name"]) || ""),
       adCost,
       adRevenue,
       revenue: adRevenue,
-      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量", "Заказы", "Количество заказов", "Продажи, шт."])),
+      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量", "已售商品数量，件", "Заказы", "Количество заказов", "Продажи, шт.", "Orders", "Items sold"])),
       impressions,
       clicks,
       ctr,
@@ -645,9 +660,16 @@ function toIsoDate(value, fallback = "") {
   return fallback;
 }
 
+function detectCsvDelimiter(text) {
+  const sample = String(text || "").split(/\r?\n/).slice(0, 20).join("\n");
+  return [";", "\t", ","].map((delimiter) => ({
+    delimiter,
+    count: sample.split(delimiter).length,
+  })).sort((a, b) => b.count - a.count)[0]?.delimiter || ",";
+}
+
 function parseCsv(text) {
-  const firstLine = String(text || "").split(/\r?\n/).find((line) => line.trim()) || "";
-  const delimiter = [";", "\t", ","].sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0];
+  const delimiter = detectCsvDelimiter(text);
   const rows = [];
   let row = [];
   let cell = "";
@@ -701,6 +723,18 @@ function csvObjectsFromText(text, fileName = "") {
   }).filter((item) => Object.values(item).some((value) => String(value || "").trim()));
 }
 
+function decodeReportText(bytes) {
+  const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const utf8 = new TextDecoder("utf-8").decode(array);
+  const badUtf8 = (utf8.match(/\uFFFD/g) || []).length;
+  if (badUtf8 < 3) return utf8;
+  try {
+    return new TextDecoder("windows-1251").decode(array);
+  } catch {
+    return utf8;
+  }
+}
+
 async function inflateZipEntry(bytes) {
   if (typeof DecompressionStream === "undefined") return null;
   for (const format of ["deflate-raw", "deflate"]) {
@@ -746,7 +780,7 @@ async function csvObjectsFromZip(buffer) {
     const compressed = bytes.slice(dataStart, dataStart + compressedSize);
     const content = method === 0 ? compressed : method === 8 ? await inflateZipEntry(compressed) : null;
     if (!content) continue;
-    output.push(...csvObjectsFromText(decoder.decode(content), fileName));
+    output.push(...csvObjectsFromText(decodeReportText(content), fileName));
   }
   return output;
 }
@@ -760,7 +794,7 @@ async function fetchAdsStatisticsReport(headers, uuid) {
   for (const url of urls) {
     const response = await fetch(url, { method: "GET", headers });
     const buffer = await response.arrayBuffer();
-    const text = new TextDecoder("utf-8").decode(buffer);
+    const text = decodeReportText(new Uint8Array(buffer));
     let payload = null;
     try {
       payload = JSON.parse(text);
@@ -825,10 +859,20 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         meta.push({ store: account.name, state: "REPORT_PENDING", uuid: task.uuid, rows: 0, campaigns: campaignIds.length, error: report.error });
         continue;
       }
+      const rawRows = adArrayFromPayload(report.payload);
       const normalized = normalizeAdsReportRows(report.payload, account, campaigns, from, to);
       ADS_REPORT_ROWS.set(key, normalized);
       rows.push(...normalized);
-      meta.push({ store: account.name, state: "READY", uuid: task.uuid, rows: normalized.length, campaigns: campaignIds.length });
+      const sample = rawRows[0] || {};
+      meta.push({
+        store: account.name,
+        state: "READY",
+        uuid: task.uuid,
+        rows: normalized.length,
+        campaigns: campaignIds.length,
+        sampleKeys: Object.keys(sample).slice(0, 24),
+        sampleValues: Object.fromEntries(Object.entries(sample).slice(0, 8)),
+      });
     } catch (error) {
       meta.push({ store: account.name, state: "ERROR", rows: 0, error: error.message || String(error) });
     }
@@ -946,7 +990,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-19-cloudflare-ads-v4",
+    version: "2026-06-19-cloudflare-ads-v5",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
