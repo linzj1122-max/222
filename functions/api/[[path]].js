@@ -1,4 +1,4 @@
-﻿const PRODUCTS = [
+const PRODUCTS = [
   { code: "HS", sku: "3555785455", name: "Product HS", purchase: 28, domestic: 5, firstFreight: 4.18, lastMile: 4, rate: 11.5, platform: "Ozon" },
   { code: "HX", sku: "3592078186", name: "Product HX", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
   { code: "HX", sku: "3903949202", name: "Product HX", purchase: 37, domestic: 5, firstFreight: 6.27, lastMile: 4, rate: 11.5, platform: "Ozon" },
@@ -312,7 +312,7 @@ function analyticsRowBase(row, storeName) {
 async function fetchStoreAnalytics(env, from, to) {
   const rows = [];
   for (const store of ozonStores(env)) {
-    const data = await fetchOzonAnalyticsData(from, to, store, ["day"]);
+    const data = await fetchOzonAnalyticsData(from, to, store, ["sku"]);
     const total = data.reduce((acc, row) => {
       const item = analyticsRowBase(row, store.name);
       acc.revenue += item.revenue;
@@ -322,9 +322,9 @@ async function fetchStoreAnalytics(env, from, to) {
       acc.naturalCartAdds += item.naturalCartAdds;
       return acc;
     }, { store: store.name, revenue: 0, orderedUnits: 0, totalClicks: 0, naturalImpressions: 0, naturalCartAdds: 0 });
-    total.totalImpressions = 0;
-    total.totalCtr = 0;
-    total.naturalCartRate = total.naturalImpressions ? total.naturalCartAdds / total.naturalImpressions * 100 : 0;
+   total.totalImpressions = total.naturalImpressions;
+   total.totalCtr = total.totalImpressions ? (total.totalClicks / total.totalImpressions * 100) : 0;
+   total.naturalCartRate = total.naturalImpressions ? total.naturalCartAdds / total.naturalImpressions * 100 : 0;
     rows.push(total);
   }
   return rows;
