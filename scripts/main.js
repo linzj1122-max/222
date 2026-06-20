@@ -1334,15 +1334,25 @@ const initialProducts = [
         const debugMap = new Map();
         adRowsArray().forEach((row) => {
           const k = `${row.date}|${row.store}|${row.sku}`;
-          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0, adRevenue: 0, rawKeys: row.rawKeys || [] };
+          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0, adRevenue: 0, rawKeys: row.rawKeys || [], count: 0, campaigns: new Set() };
           cur.adCost += Number(row.adCost || 0);
           cur.adRevenue += Number(row.adRevenue || 0);
+          cur.count += 1;
+          if (row.campaignId) cur.campaigns.add(row.campaignId);
           debugMap.set(k, cur);
         });
-        const debugText = [...debugMap.values()].slice(0, 12).map((r) => {
+        const skuTotalMap = new Map();
+        [...debugMap.values()].forEach((r) => {
+          const cur = skuTotalMap.get(r.sku) || { sku: r.sku, adCost: 0, count: 0, campaigns: new Set() };
+          cur.adCost += r.adCost;
+          cur.count += r.count;
+          r.campaigns.forEach((c) => cur.campaigns.add(c));
+          skuTotalMap.set(r.sku, cur);
+        });
+        const debugText = [...skuTotalMap.values()].map((r) => {
           const product = productBySku(r.sku);
           const label = product ? product.code : "(未匹配)";
-          return `${r.date}/${r.sku}→${label} 费${r.adCost.toFixed(2)}/额${r.adRevenue.toFixed(2)}`;
+          return `${r.sku}→${label} 合计${r.adCost.toFixed(2)} 行数${r.count} 活动${r.campaigns.size}`;
         }).join("；");
         const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
         const sourceTextClean = apiVisibleCount
