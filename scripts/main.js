@@ -340,7 +340,10 @@ const initialProducts = [
       try {
         adPollAttempts = 0;
         clearTimeout(adPollTimer);
-        await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
+        const key = `${adDateFrom}|${adDateTo}`;
+        delete adsTaskCache[key];
+        save();
+        await loadBackendAds({ forceCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
         renderAds();
       } finally {
         setAdsLoading(false);

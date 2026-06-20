@@ -996,7 +996,7 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         meta.push({ store: account.name, state: "CACHED", rows: cachedRows.length, campaigns: campaignIds.length });
         continue;
       }
-      if (!options.uuid && !options.force) {
+      if (!options.uuid) {
         const direct = await fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, from, to);
         if (direct.rows.length) {
           ADS_REPORT_ROWS.set(key, direct.rows);
@@ -1004,7 +1004,7 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
           meta.push({ store: account.name, state: "DIRECT_JSON", rows: direct.rows.length, campaigns: campaignIds.length, attempts: direct.attempts.slice(-3), sampleKeys: direct.sampleKeys, sample: direct.sample });
           continue;
         }
-        if (!options.create) {
+        if (!options.create && !options.force) {
           meta.push({ store: account.name, state: "DIRECT_EMPTY", rows: 0, campaigns: campaignIds.length, attempts: direct.attempts.slice(-6), note: "Direct JSON statistics returned no metric rows. Click refresh once to create an async report task." });
           continue;
         }
