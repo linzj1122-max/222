@@ -1139,6 +1139,7 @@ const initialProducts = [
       $("adCalendar").addEventListener("click", (event) => {
         const button = event.target.closest("[data-ad-date]");
         if (!button) return;
+        event.stopPropagation();
         setAdDate(button.dataset.adDate).catch((error) => alert(error.message));
       });
       wrapper.querySelectorAll("[data-ad-picker-range]").forEach((button) => {
@@ -1170,14 +1171,12 @@ const initialProducts = [
         adDateFrom = value;
         adDateTo = value;
         updateAdDateInputs();
-        renderAdCalendar();
         return;
       }
       const sorted = [pendingAdDateAnchor, value].sort();
       pendingAdDateAnchor = null;
       adDateFrom = sorted[0];
       adDateTo = sorted[1];
-      $("adDateRangePanel")?.classList.remove("open");
       updateAdDateInputs();
       await refreshAdsApi();
     }
@@ -1383,19 +1382,10 @@ const initialProducts = [
         const totalDays = daysInclusive(from, to);
         const map = new Map();
         for (let i = 0; i < totalDays; i += 1) map.set(addDays(from, i), 0);
-        const rows = adRowsForRange(from, to);
-        const inRangeRows = [];
-        const aggregatedRows = [];
-        rows.forEach((row) => {
+        adRowsForRange(from, to).forEach((row) => {
           const date = row.date || row.dateTo || to;
-          if (map.has(date)) inRangeRows.push({ date, value: Number(row.adCost || 0) });
-          else aggregatedRows.push({ value: Number(row.adCost || 0) });
+          if (map.has(date)) map.set(date, map.get(date) + Number(row.adCost || 0));
         });
-        inRangeRows.forEach((item) => map.set(item.date, map.get(item.date) + item.value));
-        if (aggregatedRows.length && totalDays > 0) {
-          const share = aggregatedRows.reduce((sum, item) => sum + item.value, 0) / totalDays;
-          for (const [date] of map) map.set(date, map.get(date) + share);
-        }
         const days = [];
         for (let i = 0; i < totalDays; i += 1) {
           const date = addDays(from, i);

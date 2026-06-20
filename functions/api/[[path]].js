@@ -602,7 +602,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
     const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Расход, ₽, с НДС", "Затраты", "Expense", "Cost", "Spend"]));
     const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Ozon ID"]) || campaignId);
     const rawDate = String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Date", "Day", "Period", "Период", "at"]) || "");
-    const rowDate = toIsoDate(rawDate, "");
+    const rowDate = toIsoDate(rawDate, "") || detectRowDate(row);
     return {
       date: rowDate || to,
       dateFrom: rowDate || from,
@@ -780,6 +780,15 @@ function toIsoDate(value, fallback = "") {
   const iso = text.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   return fallback;
+}
+
+function detectRowDate(row) {
+  if (!row || typeof row !== "object") return "";
+  for (const value of Object.values(row)) {
+    const iso = toIsoDate(value, "");
+    if (iso) return iso;
+  }
+  return "";
 }
 
 function detectCsvDelimiter(text) {
