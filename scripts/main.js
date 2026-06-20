@@ -23,6 +23,7 @@ const initialProducts = [
     const importedAdsKey = "ozon_wb_imported_ads_v1";
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
     const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
+    const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v1";
     const orderRangeCacheKey = "ozon_wb_order_range_cache_v1";
     const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v1";
     const skuFeeModels = {
@@ -74,6 +75,7 @@ const initialProducts = [
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
+    let adsRowsCache = JSON.parse(localStorage.getItem(adsRowsCacheKey) || "{}");
     let adsStatusRows = [];
     let adImageCache = JSON.parse(localStorage.getItem(adImageCacheKey) || "{}");
     let orderRangeCache = JSON.parse(localStorage.getItem(orderRangeCacheKey) || "{}");
@@ -85,8 +87,8 @@ const initialProducts = [
     let activeAdChartIndex = null;
     let adPollTimer = null;
     let adPollAttempts = 0;
-    let adDateFrom = addDays(adsTodayIso(), -27);
-    let adDateTo = adsTodayIso();
+    let adDateFrom = addDays(adsTodayIso(), -28);
+    let adDateTo = addDays(adsTodayIso(), -1);
     let adCalendarCursor = new Date(`${adDateFrom}T00:00:00`);
     let pendingAdDateAnchor = null;
     let adCompareEnabled = true;
@@ -232,6 +234,7 @@ const initialProducts = [
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
       localStorage.setItem(adsTaskCacheKey, JSON.stringify(adsTaskCache));
+      try { localStorage.setItem(adsRowsCacheKey, JSON.stringify(adsRowsCache)); } catch {}
       localStorage.setItem(adImageCacheKey, JSON.stringify(adImageCache));
       localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
       localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
@@ -272,15 +275,23 @@ const initialProducts = [
     }
 
     async function loadBackendAds(options = {}) {
-      backendAds = [];
-      adsStatusRows = [];
-      if (!backendEnabled) return;
+      if (!backendEnabled) {
+        backendAds = [];
+        adsStatusRows = [];
+        return;
+      }
       const from = options.dateFrom || adDateFrom || orderDateFrom;
       const to = options.dateTo || adDateTo || orderDateTo;
+      const key = `${from}|${to}`;
+      if (!options.forceCreate && adsRowsCache[key]) {
+        backendAds = adsRowsCache[key].rows || [];
+        adsStatusRows = adsRowsCache[key].status || [];
+      }
+      if (options.cacheOnly) return;
+      if (backendAds.length === 0) { backendAds = []; adsStatusRows = []; }
       const params = new URLSearchParams();
       if (from) params.set("dateFrom", from);
       if (to) params.set("dateTo", to);
-      const key = `${from}|${to}`;
       const task = adsTaskCache[key];
       if (options.uuid && !options.forceCreate) params.set("uuid", options.uuid);
       else if (task?.uuid && !options.forceCreate) params.set("uuid", task.uuid);
@@ -290,6 +301,10 @@ const initialProducts = [
         const payload = await apiRequest(`/api/ads/daily-products?${params.toString()}`);
         backendAds = Array.isArray(payload) ? payload : (Array.isArray(payload?.rows) ? payload.rows : []);
         adsStatusRows = Array.isArray(payload) ? [] : (Array.isArray(payload?.meta) ? payload.meta : []);
+        if (backendAds.length) {
+          adsRowsCache[key] = { rows: backendAds, status: adsStatusRows, updatedAt: new Date().toISOString() };
+          save();
+        }
         fetchAdImagesForRows(backendAds).then(renderAds);
         const found = adsStatusRows.find((row) => row.uuid);
         if (found?.uuid) {
@@ -302,8 +317,10 @@ const initialProducts = [
           return loadBackendAds({ forceCreate: true, dateFrom: from, dateTo: to });
         }
       } catch (error) {
-        backendAds = [];
-        adsStatusRows = [{ store: "API", state: "ERROR", error: error.message || String(error) }];
+        if (!adsRowsCache[key]) {
+          backendAds = [];
+          adsStatusRows = [{ store: "API", state: "ERROR", error: error.message || String(error) }];
+        }
       }
     }
 
@@ -372,7 +389,7 @@ const initialProducts = [
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
       mergeIntoTrendOrders(orders);
-      loadBackendAds();
+      loadBackendAds({ cacheOnly: true });
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
       save();
@@ -388,7 +405,7 @@ const initialProducts = [
       }
       if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
         orders = orderRangeCache[key];
-        loadBackendAds();
+        loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单。`;
         return;
@@ -399,7 +416,7 @@ const initialProducts = [
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
       mergeIntoTrendOrders(orders);
-      loadBackendAds();
+      loadBackendAds({ cacheOnly: true });
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已抓取并缓存 ${orders.length} 条订单。`;
