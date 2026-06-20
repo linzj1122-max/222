@@ -1324,13 +1324,23 @@ const initialProducts = [
         const apiVisibleCount = adRowsArray().filter(adRowVisible).length;
         const apiMetricCount = adMetricRows().length;
         const xlsxCount = importedAds.length;
+        const directMeta = adsStatusRows.find((row) => row.sampleKeys && row.sampleKeys.length);
+        const sampleInfo = directMeta ? ` 原始字段：[${directMeta.sampleKeys.map((k) => escapeHtml(String(k))).join(", ")}]。样例：${JSON.stringify(directMeta.sample || {}).slice(0, 300)}` : "";
+        const debugMap = new Map();
+        adRowsArray().forEach((row) => {
+          const k = `${row.date}|${row.store}|${row.sku}`;
+          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0 };
+          cur.adCost += Number(row.adCost || 0);
+          debugMap.set(k, cur);
+        });
+        const debugText = [...debugMap.values()].slice(0, 12).map((r) => `${r.date}/${r.sku}=${r.adCost.toFixed(2)}`).join("；");
         const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
         const sourceTextClean = apiVisibleCount
           ? `当前显示 API 广告数据 ${apiVisibleCount} 条，其中可识别指标 ${apiMetricCount} 条。`
           : xlsxCount
             ? `API 暂无可用明细，当前显示已上传 Excel 数据 ${xlsxCount} 条。`
             : "暂无广告明细。";
-        $("adImportStatus").textContent = sourceTextClean + (statusTextClean ? ` API 状态：${statusTextClean}` : "");
+        $("adImportStatus").textContent = sourceTextClean + (statusTextClean ? ` API 状态：${statusTextClean}` : "") + sampleInfo + (debugText ? ` 明细：${debugText}` : "");
       }
 
       const summaryMap = new Map();

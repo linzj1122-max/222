@@ -670,7 +670,7 @@ async function postAdsJsonStatistics(headers, endpoint, body) {
 }
 
 async function fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, from, to) {
-  if (!campaignIds.length) return { rows: [], attempts: [] };
+  if (!campaignIds.length) return { rows: [], attempts: [], sampleKeys: [], sample: {} };
   const bodies = [
     { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: "DATE" },
     { campaigns: campaignIds, from, to, groupBy: "DATE" },
@@ -684,18 +684,21 @@ async function fetchAdsDirectJsonRows(headers, account, campaigns, campaignIds, 
   for (const endpoint of endpoints) {
     for (const body of bodies) {
       const result = await postAdsJsonStatistics(headers, endpoint, body);
+      const rawRows = adArrayFromPayload(result.payload);
       const normalized = result.ok ? normalizeAdsReportRows(result.payload, account, campaigns, from, to) : [];
       attempts.push({
         endpoint,
         ok: result.ok,
         status: result.status,
         rows: normalized.length,
+        rawRows: rawRows.length,
+        rawKeys: rawRows[0] ? Object.keys(rawRows[0]) : [],
         error: result.error || "",
       });
-      if (normalized.length) return { rows: normalized, attempts };
+      if (normalized.length) return { rows: normalized, attempts, sampleKeys: rawRows[0] ? Object.keys(rawRows[0]) : [], sample: rawRows[0] || {} };
     }
   }
-  return { rows: [], attempts };
+  return { rows: [], attempts, sampleKeys: [], sample: {} };
 }
 
 async function fetchOzonProductImages(env, skus) {
@@ -784,7 +787,8 @@ function toIsoDate(value, fallback = "") {
 
 function detectRowDate(row) {
   if (!row || typeof row !== "object") return "";
-  for (const value of Object.values(row)) {
+  const dateKeys = Object.entries(row).filter(([key]) => /date|day|дата|день|период|period/i.test(key));
+  for (const [, value] of dateKeys) {
     const iso = toIsoDate(value, "");
     if (iso) return iso;
   }
@@ -997,7 +1001,7 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         if (direct.rows.length) {
           ADS_REPORT_ROWS.set(key, direct.rows);
           rows.push(...direct.rows);
-          meta.push({ store: account.name, state: "DIRECT_JSON", rows: direct.rows.length, campaigns: campaignIds.length, attempts: direct.attempts.slice(-3) });
+          meta.push({ store: account.name, state: "DIRECT_JSON", rows: direct.rows.length, campaigns: campaignIds.length, attempts: direct.attempts.slice(-3), sampleKeys: direct.sampleKeys, sample: direct.sample });
           continue;
         }
         if (!options.create) {
