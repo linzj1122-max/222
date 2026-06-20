@@ -59,6 +59,7 @@ const initialProducts = [
 
     let products = JSON.parse(localStorage.getItem(productKey) || "null") || initialProducts;
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
+    let trendOrders = JSON.parse(localStorage.getItem("ozon_wb_trend_orders_v1") || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
@@ -195,9 +196,29 @@ const initialProducts = [
       $("orderDateRangePanel")?.classList.remove("open");
       await reloadOrdersForRange(orderDateFrom, orderDateTo);
     };
+    const trendOrdersKey = "ozon_wb_trend_orders_v1";
+    const orderIdentity = (order) => `${order.date}|${order.store}|${order.orderNo}|${order.sku}`;
+    const mergeIntoTrendOrders = (newOrders) => {
+      if (!Array.isArray(newOrders) || !newOrders.length) return;
+      const seen = new Set(trendOrders.map(orderIdentity));
+      let appended = false;
+      for (const order of newOrders) {
+        const id = orderIdentity(order);
+        if (!seen.has(id)) {
+          trendOrders.push(order);
+          seen.add(id);
+          appended = true;
+        }
+      }
+      if (appended) {
+        trendOrders.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        localStorage.setItem(trendOrdersKey, JSON.stringify(trendOrders));
+      }
+    };
     const save = () => {
       localStorage.setItem(productKey, JSON.stringify(products));
       localStorage.setItem(orderKey, JSON.stringify(orders));
+      localStorage.setItem(trendOrdersKey, JSON.stringify(trendOrders));
       localStorage.setItem(competitorKey, JSON.stringify(competitors));
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
@@ -277,25 +298,45 @@ const initialProducts = [
       }
     }
 
-    async function refreshAdsApi() {
+    function setAdsLoading(loading) {
       const button = $("refreshAdsApi");
+      const buttonWrap = button?.parentElement;
       const status = $("adImportStatus");
-      const oldText = button?.textContent || "刷新 API 广告数据";
-      if (button) {
-        button.disabled = true;
-        button.textContent = "正在请求...";
+      const adsTab = $("ads");
+      if (loading) {
+        if (adsTab) adsTab.classList.add("ads-loading");
+        if (button) {
+          button.disabled = true;
+          button.classList.add("loading");
+          button.innerHTML = '<span class="btn-spinner"></span> 正在抓取广告数据...';
+        }
+        if (buttonWrap && !buttonWrap.querySelector(".ads-fetch-hint")) {
+          const hint = document.createElement("span");
+          hint.className = "ads-fetch-hint";
+          hint.innerHTML = '<span class="inline-spinner"></span> 正在向 Ozon 请求广告报表，最长可能需要 1-2 分钟…';
+          buttonWrap.appendChild(hint);
+        }
+        if (status) status.innerHTML = '<span class="inline-spinner"></span> 正在向 Ozon 请求广告报表，最长可能需要 1-2 分钟…';
+      } else {
+        if (adsTab) adsTab.classList.remove("ads-loading");
+        if (button) {
+          button.disabled = false;
+          button.classList.remove("loading");
+          button.textContent = "刷新 API 广告数据";
+        }
+        buttonWrap?.querySelector(".ads-fetch-hint")?.remove();
       }
-      if (status) status.textContent = "正在向 Ozon 请求广告报表，请稍等。";
+    }
+
+    async function refreshAdsApi() {
+      setAdsLoading(true);
       try {
         adPollAttempts = 0;
         clearTimeout(adPollTimer);
         await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
         renderAds();
       } finally {
-        if (button) {
-          button.disabled = false;
-          button.textContent = oldText;
-        }
+        setAdsLoading(false);
       }
     }
 
@@ -318,6 +359,7 @@ const initialProducts = [
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
+      mergeIntoTrendOrders(orders);
       loadBackendAds();
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
@@ -344,6 +386,7 @@ const initialProducts = [
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
+      mergeIntoTrendOrders(orders);
       loadBackendAds();
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = orders;
@@ -627,14 +670,28 @@ const initialProducts = [
       select.value = selectedStore;
     }
 
+    function trendOrdersScoped() {
+      return selectedStore === "all" ? trendOrders : trendOrders.filter((order) => order.store === selectedStore);
+    }
+
     function dailyTotals(daysNeeded = chartConfig.period * 2) {
       const map = new Map();
-      filteredOrders().forEach((order) => {
-        const current = map.get(order.date) || { revenue: 0, orders: 0 };
-        current.revenue += calcOrder(order).sale;
-        current.orders += 1;
-        map.set(order.date, current);
-      });
+      const source = trendOrdersScoped();
+      if (source.length) {
+        source.forEach((order) => {
+          const current = map.get(order.date) || { revenue: 0, orders: 0 };
+          current.revenue += calcOrder(order).sale;
+          current.orders += 1;
+          map.set(order.date, current);
+        });
+      } else {
+        filteredOrders().forEach((order) => {
+          const current = map.get(order.date) || { revenue: 0, orders: 0 };
+          current.revenue += calcOrder(order).sale;
+          current.orders += 1;
+          map.set(order.date, current);
+        });
+      }
       const end = new Date(todayIso());
       const days = [];
       for (let i = daysNeeded - 1; i >= 0; i--) days.push(addDays(end, -i));
@@ -877,8 +934,19 @@ const initialProducts = [
     }
 
     function dateInRange(date, from, to) {
-      const value = String(date || "");
+      const value = normalizeAdDate(date);
+      if (!value) return false;
       return (!from || value >= from) && (!to || value <= to);
+    }
+
+    function normalizeAdDate(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const iso = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+      const ru = text.match(/(\d{2})[.\/](\d{2})[.\/](\d{4})/);
+      if (ru) return `${ru[3]}-${ru[2]}-${ru[1]}`;
+      return "";
     }
 
     function daysInclusive(from, to) {
@@ -903,7 +971,7 @@ const initialProducts = [
     }
 
     function adRowsForRange(from = adDateFrom, to = adDateTo) {
-      return baseAdRows().filter((row) => dateInRange(row.dateTo || row.date, from, to));
+      return baseAdRows().filter((row) => dateInRange(row.date || row.dateTo, from, to));
     }
 
     function adSourceRows() {
@@ -1019,8 +1087,6 @@ const initialProducts = [
 
     function ensureAdDatePicker() {
       if ($("adDateRangeButton") || !$("adStoreSelect")?.parentElement) return;
-      if ($("adDateFrom")?.parentElement) $("adDateFrom").parentElement.style.display = "none";
-      if ($("adDateTo")?.parentElement) $("adDateTo").parentElement.style.display = "none";
       const wrapper = document.createElement("div");
       wrapper.className = "date-range-picker ad-date-picker";
       wrapper.innerHTML = `
@@ -1063,10 +1129,10 @@ const initialProducts = [
       $("adCalendar").addEventListener("click", (event) => {
         const button = event.target.closest("[data-ad-date]");
         if (!button) return;
-        setAdDate(button.dataset.adDate);
+        setAdDate(button.dataset.adDate).catch((error) => alert(error.message));
       });
       wrapper.querySelectorAll("[data-ad-picker-range]").forEach((button) => {
-        button.addEventListener("click", () => {
+        button.addEventListener("click", async () => {
           const value = button.dataset.adPickerRange;
           const today = todayIso();
           const yesterday = addDays(today, -1);
@@ -1083,12 +1149,12 @@ const initialProducts = [
           }
           $("adDateRangePanel")?.classList.remove("open");
           updateAdDateInputs();
-          renderAds();
+          await refreshAdsApi();
         });
       });
     }
 
-    function setAdDate(value) {
+    async function setAdDate(value) {
       if (!pendingAdDateAnchor) {
         pendingAdDateAnchor = value;
         adDateFrom = value;
@@ -1103,7 +1169,7 @@ const initialProducts = [
       adDateTo = sorted[1];
       $("adDateRangePanel")?.classList.remove("open");
       updateAdDateInputs();
-      renderAds();
+      await refreshAdsApi();
     }
 
     function updateAdDateInputs() {
@@ -1117,15 +1183,16 @@ const initialProducts = [
         button.addEventListener("click", refreshAdsApi);
       }
       ensureAdDatePicker();
-      if ($("adDateFrom")) $("adDateFrom").value = adDateFrom;
-      if ($("adDateTo")) $("adDateTo").value = adDateTo;
       if ($("adDateRangeButton")) $("adDateRangeButton").textContent = `${adDateFrom} - ${adDateTo}`;
       if ($("adDateFromDisplay")) $("adDateFromDisplay").textContent = adDateFrom.replaceAll("-", "/");
       if ($("adDateToDisplay")) $("adDateToDisplay").textContent = adDateTo.replaceAll("-", "/");
       if ($("adCompareToggle")) $("adCompareToggle").checked = adCompareEnabled;
+      const currentDays = daysInclusive(adDateFrom, adDateTo);
       document.querySelectorAll("[data-ad-range]").forEach((button) => {
-        button.classList.toggle("active", daysInclusive(adDateFrom, adDateTo) === Number(button.dataset.adRange));
+        button.classList.toggle("active", currentDays === Number(button.dataset.adRange));
       });
+      const adRangePanel = $("adDateRangePanel");
+      if (adRangePanel) adRangePanel.classList.toggle("custom-range", ![7, 14, 28].includes(currentDays));
       renderAdCalendar();
     }
 
@@ -1247,8 +1314,11 @@ const initialProducts = [
       const summaryMap = new Map();
       adSourceRows().forEach((row) => {
         const product = productBySku(row.sku);
-        const key = (row.dateFrom || row.date) + "|" + (row.dateTo || row.date) + "|" + row.store + "|" + row.sku;
-        const existing = summaryMap.get(key) || { date: row.date, dateFrom: row.dateFrom || row.date, dateTo: row.dateTo || row.date, store: row.store, sku: row.sku, name: row.name || product?.name || "", image: adImageFor({ ...row, product }), product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
+        const isApiRow = row.source === "api";
+        const periodFrom = isApiRow ? adDateFrom : (row.dateFrom || row.date);
+        const periodTo = isApiRow ? adDateTo : (row.dateTo || row.date);
+        const key = periodFrom + "|" + periodTo + "|" + row.store + "|" + row.sku;
+        const existing = summaryMap.get(key) || { date: row.date, dateFrom: periodFrom, dateTo: periodTo, store: row.store, sku: row.sku, name: row.name || product?.name || "", image: adImageFor({ ...row, product }), product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
         existing.revenue += Number(row.revenue || 0);
         existing.adCost += Number(row.adCost || 0);
         existing.adOrders += Number(row.adOrders || 0);
@@ -1289,7 +1359,7 @@ const initialProducts = [
       const makeSeries = (from, to) => {
         const map = new Map();
         adRowsForRange(from, to).forEach((row) => {
-          const date = row.dateTo || row.date || to;
+          const date = row.date || row.dateTo || to;
           map.set(date, (map.get(date) || 0) + Number(row.adCost || 0));
         });
         const days = [];
@@ -1402,6 +1472,7 @@ const initialProducts = [
         }
       }
       orders = newOrders;
+      mergeIntoTrendOrders(newOrders);
       renderAll();
     }
 
@@ -1420,11 +1491,7 @@ const initialProducts = [
       renderCalendar();
       await loadBackendOrders();
       await loadStoreAnalytics();
-      await loadStoreAnalytics();
-      adDateFrom = orderDateFrom;
-      adDateTo = orderDateTo;
-      updateAdDateInputs();
-      await loadBackendAds();
+      renderAll();
     }
     async function applySummaryRange(value) {
       const today = todayIso();
@@ -1455,6 +1522,18 @@ const initialProducts = [
 
     document.addEventListener("click", (event) => {
       if (!event.target.closest(".chart-select")) $("chartMenu").classList.remove("open");
+      const orderPicker = event.target.closest("#orderDateRangeButton, #orderDateRangePanel");
+      if (!orderPicker && $("orderDateRangePanel")?.classList.contains("open")) {
+        $("orderDateRangePanel").classList.remove("open");
+        pendingOrderDateAnchor = null;
+        renderCalendar();
+      }
+      const adPicker = event.target.closest("#adDateRangeButton, #adDateRangePanel");
+      if (!adPicker && $("adDateRangePanel")?.classList.contains("open")) {
+        $("adDateRangePanel").classList.remove("open");
+        pendingAdDateAnchor = null;
+        renderAdCalendar();
+      }
     });
 
     document.querySelectorAll(".menu-option").forEach((option) => {
@@ -1806,26 +1885,17 @@ const initialProducts = [
     });
     $("adStoreSelect").addEventListener("change", renderAds);
     if ($("refreshAdsApi")) $("refreshAdsApi").addEventListener("click", refreshAdsApi);
-    if ($("adDateFrom")) $("adDateFrom").addEventListener("change", (event) => {
-      adDateFrom = event.target.value || adDateFrom;
-      if (adDateFrom > adDateTo) adDateTo = adDateFrom;
-      renderAds();
-    });
-    if ($("adDateTo")) $("adDateTo").addEventListener("change", (event) => {
-      adDateTo = event.target.value || adDateTo;
-      if (adDateTo < adDateFrom) adDateFrom = adDateTo;
-      renderAds();
-    });
     if ($("adCompareToggle")) $("adCompareToggle").addEventListener("change", (event) => {
       adCompareEnabled = event.target.checked;
       renderAds();
     });
     document.querySelectorAll("[data-ad-range]").forEach((button) => {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
         const days = Number(button.dataset.adRange || 28);
         adDateTo = todayIso();
         adDateFrom = addDays(adDateTo, -(days - 1));
-        renderAds();
+        updateAdDateInputs();
+        await refreshAdsApi();
       });
     });
     if ($("adChart")) {
