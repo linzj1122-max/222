@@ -365,7 +365,6 @@ const initialProducts = [
         if (orderDateFrom) params.set("dateFrom", orderDateFrom);
         if (orderDateTo) params.set("dateTo", orderDateTo);
         storeAnalyticsRows = await apiRequest(`/api/analytics/store?${params.toString()}`);
-        } catch(e) {}
         storeAnalyticsCache[key] = storeAnalyticsRows;
         save();
       } catch {
