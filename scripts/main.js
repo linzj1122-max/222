@@ -299,10 +299,17 @@ const initialProducts = [
       if (options.forceCreate) params.set("force", "1");
       try {
         const payload = await apiRequest(`/api/ads/daily-products?${params.toString()}`);
-        backendAds = Array.isArray(payload) ? payload : (Array.isArray(payload?.rows) ? payload.rows : []);
-        adsStatusRows = Array.isArray(payload) ? [] : (Array.isArray(payload?.meta) ? payload.meta : []);
+        const newRows = Array.isArray(payload) ? payload : (Array.isArray(payload?.rows) ? payload.rows : []);
+        const newStatus = Array.isArray(payload) ? [] : (Array.isArray(payload?.meta) ? payload.meta : []);
+        if (!newRows.length && !newStatus.some((row) => /READY|DIRECT_JSON/i.test(String(row.state || ""))) && backendAds.length) {
+          adsStatusRows = newStatus;
+        } else {
+          backendAds = newRows;
+          adsStatusRows = newStatus;
+        }
         if (backendAds.length) {
-          adsRowsCache[key] = { rows: backendAds, status: adsStatusRows, updatedAt: new Date().toISOString() };
+          const cleanStatus = adsStatusRows.filter((row) => !row.uuid || /READY|OK|SUCCESS|DONE|COMPLETED|CACHED/i.test(String(row.state || "")));
+          adsRowsCache[key] = { rows: backendAds, status: cleanStatus, updatedAt: new Date().toISOString() };
           save();
         }
         fetchAdImagesForRows(backendAds).then(renderAds);
@@ -375,14 +382,12 @@ const initialProducts = [
       adsAutoRefreshing = true;
       try {
         const key = `${adDateFrom}|${adDateTo}`;
-        const cached = adsRowsCache[key];
-        const today = adsTodayIso();
-        const needsRefresh = !cached || adDateTo >= today || adDateFrom >= today;
-        if (needsRefresh) {
-          await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
-        } else {
-          await loadBackendAds({ dateFrom: adDateFrom, dateTo: adDateTo });
+        if (adsRowsCache[key]?.rows?.length && backendAds.length === 0) {
+          backendAds = adsRowsCache[key].rows;
+          adsStatusRows = adsRowsCache[key].status || [];
         }
+        renderAds();
+        await loadBackendAds({ forceCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
         renderAds();
       } catch {} finally {
         adsAutoRefreshing = false;
