@@ -1332,11 +1332,12 @@ const initialProducts = [
         const debugMap = new Map();
         adRowsArray().forEach((row) => {
           const k = `${row.date}|${row.store}|${row.sku}`;
-          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0 };
+          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0, adRevenue: 0, rawKeys: row.rawKeys || [] };
           cur.adCost += Number(row.adCost || 0);
+          cur.adRevenue += Number(row.adRevenue || 0);
           debugMap.set(k, cur);
         });
-        const debugText = [...debugMap.values()].slice(0, 12).map((r) => `${r.date}/${r.sku}=${r.adCost.toFixed(2)}`).join("；");
+        const debugText = [...debugMap.values()].slice(0, 12).map((r) => `${r.date}/${r.sku} 费${r.adCost.toFixed(2)}/额${r.adRevenue.toFixed(2)} [${r.rawKeys.join(",")}]`).join("；");
         const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
         const sourceTextClean = apiVisibleCount
           ? `当前显示 API 广告数据 ${apiVisibleCount} 条，其中可识别指标 ${apiMetricCount} 条。`
