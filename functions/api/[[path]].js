@@ -591,9 +591,10 @@ function adsReportCampaignIds(campaigns) {
 
 function normalizeAdsReportRows(payload, account, campaigns, from, to) {
   const campaignMap = new Map(campaigns.map((campaign) => [String(campaign.campaignId), campaign]));
+  const knownCampaignIds = new Set(campaigns.map((campaign) => String(campaign.campaignId)));
   return adArrayFromPayload(payload).map((row, index) => {
     const raw = compactAdRaw(row);
-    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "广告活动 ID", "ID кампании", "Кампания ID", "Campaign ID", "CampaignId", "__campaignId"]) || "");
+    const campaignId = String(adObjectValue(row, ["campaignId", "campaign_id", "campaign", "广告活动 ID", "ID кампании", "Кампания ID", "Campaign ID", "CampaignId", "__campaignId", "ID", "campaigns"]) || "");
     const campaign = campaignMap.get(campaignId) || {};
     const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт.", "Impressions", "Shows"]));
     const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量", "Клики", "Клики, шт.", "Clicks"]));
@@ -610,7 +611,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       store: account.name,
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
-      sku: sku || campaignId || `api-row-${index + 1}`,
+      sku: sku || campaignId,
       name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Название товара", "Наименование", "Product name"]) || ""),
       adCost,
       adRevenue,
@@ -623,7 +624,10 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       raw,
       rawKeys: Object.keys(raw),
     };
-  }).filter((row) => row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId || Object.keys(row.raw || {}).length);
+  }).filter((row) => {
+    if (!row.campaignId && !row.sku) return false;
+    return row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders;
+  });
 }
 
 function adRowHasMetrics(row) {
