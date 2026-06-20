@@ -365,6 +365,25 @@ const initialProducts = [
         if (orderDateFrom) params.set("dateFrom", orderDateFrom);
         if (orderDateTo) params.set("dateTo", orderDateTo);
         storeAnalyticsRows = await apiRequest(`/api/analytics/store?${params.toString()}`);
+
+        // Merge ad performance data (impressions, clicks) from Performance API
+        try {
+          const adsResp = await apiRequest(`/api/ads/daily-products?${String(params)}$amp;force=0`);
+          const adsRows = (adsResp && adsResp.rows) || [];
+          const storeImps = {}, storeClks = {};
+          adsRows.forEach(function(r) {
+            const s = r.store || \"\";
+            storeImps[s] = (storeImps[s] || 0) + (Number(r.impressions) || 0);
+            storeClks[s] = (storeClks[s] || 0) + (Number(r.clicks) || 0);
+          });
+          storeAnalyticsRows.forEach(function(sa) {
+            if (storeImps[sa.store]) {
+              sa.totalImpressions = storeImps[sa.store];
+              sa.totalClicks = storeClks[sa.store] || 0;
+              sa.totalCtr = sa.totalImpressions ? (sa.totalClicks / sa.totalImpressions * 100) : 0;
+            }
+          });
+        } catch(e) {}
         storeAnalyticsCache[key] = storeAnalyticsRows;
         save();
       } catch {
@@ -592,9 +611,9 @@ const initialProducts = [
       const rows = [...map.values()].sort((a, b) => b.revenue - a.revenue);
       body.innerHTML = rows.length ? rows.map((row) => {
         const analytics = analyticsForStore(row.store) || {};
-        const exposure = Number(analytics.impressions || analytics.sessions || 0);
-        const clicks = Number(analytics.sessions || analytics.cartAdds || 0);
-        const conversion = exposure ? row.orders / exposure * 100 : Number(analytics.cartConversion || 0);
+        const exposure = Number(analytics.totalImpressions || analytics.naturalImpressions || analytics.impressions || 0);
+        const clicks = Number(analytics.totalClicks || analytics.clicks || 0);
+        const conversion = Number(analytics.naturalCartRate || analytics.cartConversion || 0);
         const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
         const profitClass = row.profit >= 0 ? "positive" : "negative";
         return '<tr>' +
