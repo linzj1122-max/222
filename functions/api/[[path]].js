@@ -829,7 +829,21 @@ function parseCsv(text) {
 function csvObjectsFromText(text, fileName = "") {
   const rows = parseCsv(text).filter((row) => row.some((cell) => String(cell).trim()));
   if (!rows.length) return [];
-  const headerIndex = rows.findIndex((row) => row.some((cell) => /date|день|дата|campaign|кампан|расход|показы|клики|sku/i.test(String(cell))));
+  const headerScore = (row) => {
+    if (!Array.isArray(row) || row.length < 2) return 0;
+    const joined = row.map((cell) => String(cell || "").trim().toLowerCase()).join(" | ");
+    let score = 0;
+    if (/(^|\|)\s*sku\s*(\||$)|артикул|ozon id|offer/i.test(joined)) score += 50;
+    if (/date|день|дата|period|период/i.test(joined)) score += 20;
+    if (/expense|cost|spend|расход|затрат|费用/i.test(joined)) score += 20;
+    if (/impressions|shows|показы|展示|展现/i.test(joined)) score += 15;
+    if (/clicks|клики|点击/i.test(joined)) score += 15;
+    if (/ctr|кликабель/i.test(joined)) score += 10;
+    if (/orders|sales|заказ|продаж|выруч|销售/i.test(joined)) score += 10;
+    return score;
+  };
+  const scored = rows.map((row, index) => ({ index, score: headerScore(row) })).sort((a, b) => b.score - a.score || a.index - b.index);
+  const headerIndex = scored[0]?.score >= 50 ? scored[0].index : rows.findIndex((row) => row.length > 1 && row.some((cell) => /date|день|дата|sku|расход|показы|клики/i.test(String(cell))));
   if (headerIndex < 0) return [];
   const headers = rows[headerIndex].map((cell) => String(cell || "").trim());
   const campaignId = String(fileName).match(/^(\d+)/)?.[1] || "";
@@ -1128,7 +1142,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-20-cloudflare-ads-v8-raw",
+    version: "2026-06-20-cloudflare-ads-v9-csv-header",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
