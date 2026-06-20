@@ -1172,12 +1172,18 @@ const initialProducts = [
             adDateFrom = yesterday;
             adDateTo = yesterday;
           } else {
-            adDateTo = today;
+            adDateTo = yesterday;
             adDateFrom = addDays(adDateTo, -(Number(value || 28) - 1));
+          }
+          const key = `${adDateFrom}|${adDateTo}`;
+          if (adsRowsCache[key]) {
+            backendAds = adsRowsCache[key].rows || [];
+            adsStatusRows = adsRowsCache[key].status || [];
           }
           $("adDateRangePanel")?.classList.remove("open");
           updateAdDateInputs();
-          await refreshAdsApi();
+          renderAds();
+          await autoRefreshAds();
         });
       });
     }
