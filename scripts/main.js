@@ -1420,7 +1420,11 @@ const initialProducts = [
       renderCalendar();
       await loadBackendOrders();
       await loadStoreAnalytics();
-      renderAll();
+      await loadStoreAnalytics();
+      adDateFrom = orderDateFrom;
+      adDateTo = orderDateTo;
+      updateAdDateInputs();
+      await loadBackendAds();
     }
     async function applySummaryRange(value) {
       const today = todayIso();
