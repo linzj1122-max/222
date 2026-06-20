@@ -597,8 +597,8 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
     const impressions = textAmount(adObjectValue(row, ["impressions", "views", "shows", "展示量", "展现量", "Показы", "Показы, шт.", "Impressions", "Shows"]));
     const clicks = textAmount(adObjectValue(row, ["clicks", "click", "点击次数", "点击量", "Клики", "Клики, шт.", "Clicks"]));
     const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%", "Кликабельность"])) || (impressions ? clicks / impressions * 100 : 0);
-    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Revenue", "Sales"]));
-    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Затраты", "Expense", "Cost", "Spend"]));
+    const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Продажи в продвижении, ₽", "Продажи в продвижении с заказов модели, ₽", "Заказано на сумму, ₽", "Revenue", "Sales"]));
+    const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Расход, ₽, с НДС", "Затраты", "Expense", "Cost", "Spend"]));
     const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Ozon ID"]) || campaignId);
     return {
       date: toIsoDate(String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Period", "Период"]) || to), to),
@@ -608,11 +608,11 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
       sku: sku || campaignId || `api-row-${index + 1}`,
-      name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Наименование", "Product name"]) || ""),
+      name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Название товара", "Наименование", "Product name"]) || ""),
       adCost,
       adRevenue,
       revenue: adRevenue,
-      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量", "已售商品数量，件", "Заказы", "Количество заказов", "Продажи, шт.", "Orders", "Items sold"])),
+      adOrders: textAmount(adObjectValue(row, ["orders", "orderedUnits", "units", "soldItems", "已售商品数量", "已售商品数量，件", "Заказы", "Количество заказов", "Продано товаров", "Продано товаров модели", "Продажи, шт.", "Orders", "Items sold"])),
       impressions,
       clicks,
       ctr,
@@ -1142,7 +1142,7 @@ function debugStatus(env) {
   const adAccounts = ozonAdAccounts(env);
   const envNames = Object.keys(env).filter((name) => /OZON|WB|WILDBERRIES/i.test(name)).sort();
   return {
-    version: "2026-06-20-cloudflare-ads-v9-csv-header",
+    version: "2026-06-20-cloudflare-ads-v10-russian-fields",
     cloudflarePagesFunction: true,
     ozon: {
       storeCount: stores.length,
