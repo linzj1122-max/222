@@ -601,7 +601,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
     const ctr = textAmount(adObjectValue(row, ["ctr", "CTR", "CTR, %", "CTR,%", "Кликабельность"])) || (impressions ? clicks / impressions * 100 : 0);
     const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Продажи в продвижении, ₽", "Продажи в продвижении с заказов модели, ₽", "Заказано на сумму, ₽", "Revenue", "Sales"]));
     const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Расход, ₽, с НДС", "Затраты", "Expense", "Cost", "Spend"]));
-    const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Ozon ID"]) || campaignId);
+    const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Артикул продавца", "Ozon ID", "Ozon Product Id", "fbo", "fbs", "ID товара"]) || campaignId) || detectRowSku(row);
     const rawDate = String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Date", "Day", "Period", "Период", "at"]) || "");
     const rowDate = toIsoDate(rawDate, "") || detectRowDate(row);
     return {
@@ -612,6 +612,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
       sku: sku || campaignId,
+      hasValidSku: /^\d{8,13}$/.test(String(sku || "")),
       name: String(adObjectValue(row, ["name", "title", "productName", "商品名称", "Название товара", "Наименование", "Product name"]) || ""),
       adCost,
       adRevenue,
@@ -794,6 +795,16 @@ function detectRowDate(row) {
   for (const [, value] of dateKeys) {
     const iso = toIsoDate(value, "");
     if (iso) return iso;
+  }
+  return "";
+}
+
+function detectRowSku(row) {
+  if (!row || typeof row !== "object") return "";
+  const skuKeys = Object.entries(row).filter(([key]) => /sku|артикул|offer|product|товар|id/i.test(key));
+  for (const [, value] of skuKeys) {
+    const text = String(value || "").trim();
+    if (/^\d{8,13}$/.test(text)) return text;
   }
   return "";
 }

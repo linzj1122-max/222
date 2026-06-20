@@ -970,7 +970,12 @@ const initialProducts = [
 
     function baseAdRows() {
       const selected = $("adStoreSelect")?.value || "all";
-      const apiRows = adRowsArray().filter((row) => (selected === "all" || row.store === selected) && adRowVisible(row));
+      const apiRows = adRowsArray().filter((row) => {
+        if (selected !== "all" && row.store !== selected) return false;
+        if (!adRowVisible(row)) return false;
+        if (row.source === "api" && row.hasValidSku === false) return false;
+        return true;
+      });
       if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
       const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
