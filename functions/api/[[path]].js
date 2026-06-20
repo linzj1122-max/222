@@ -625,8 +625,7 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
       rawKeys: Object.keys(raw),
     };
   }).filter((row) => {
-    if (!row.campaignId && !row.sku) return false;
-    return row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders;
+    return row.adCost || row.adRevenue || row.impressions || row.clicks || row.adOrders || row.sku || row.campaignId;
   });
 }
 
