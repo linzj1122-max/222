@@ -584,6 +584,7 @@ function campaignRowsFromPayload(payload) {
 
 function adsReportCampaignIds(campaigns) {
   const running = campaigns.filter((campaign) => /RUNNING/i.test(campaign.state));
+  if (running.length) return [...new Set(running.map((campaign) => campaign.campaignId).filter(Boolean))];
   const ordered = [...running, ...campaigns.filter((campaign) => !/RUNNING/i.test(campaign.state))];
   return [...new Set(ordered.map((campaign) => campaign.campaignId).filter(Boolean))].slice(0, 10);
 }
@@ -919,30 +920,43 @@ async function csvObjectsFromZip(buffer) {
 }
 
 async function fetchAdsStatisticsReport(headers, uuid) {
-  const urls = [
-    `https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(uuid)}`,
-    `https://api-performance.ozon.ru/api/client/statistics/report?uuid=${encodeURIComponent(uuid)}`,
-    `https://api-performance.ozon.ru/api/client/statistics/${encodeURIComponent(uuid)}/report`,
-  ];
-  for (const url of urls) {
-    const response = await fetch(url, { method: "GET", headers });
-    const buffer = await response.arrayBuffer();
-    const text = decodeReportText(new Uint8Array(buffer));
-    let payload = null;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = null;
-    }
-    if (response.ok) {
-      const bytes = new Uint8Array(buffer);
-      if (bytes[0] === 0x50 && bytes[1] === 0x4b) return { ok: true, status: response.status, url, payload: await csvObjectsFromZip(buffer) };
-      if (payload) return { ok: true, status: response.status, url, payload };
-      return { ok: true, status: response.status, url, payload: csvObjectsFromText(text) };
-    }
-    if (!/not found|404/i.test(text) && response.status !== 404) return { ok: false, status: response.status, url, error: payload?.error || text.slice(0, 240) };
+  const response = await fetch(`https://api-performance.ozon.ru/api/client/statistics/report?UUID=${encodeURIComponent(uuid)}`, { method: "GET", headers });
+  const buffer = await response.arrayBuffer();
+  const text = decodeReportText(new Uint8Array(buffer));
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
   }
-  return { ok: false, status: 404, error: "report not found" };
+  if (response.ok) {
+    const bytes = new Uint8Array(buffer);
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b) return { ok: true, status: response.status, payload: await csvObjectsFromZip(buffer) };
+    if (payload) return { ok: true, status: response.status, payload };
+    return { ok: true, status: response.status, payload: csvObjectsFromText(text) };
+  }
+  return { ok: false, status: response.status, error: payload?.error || text.slice(0, 240) };
+}
+
+async function pollAdsStatisticsStatus(headers, uuid, { maxAttempts = 20, intervalMs = 3000 } = {}) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const status = await fetchAdsStatisticsStatus(headers, uuid);
+    if (/OK|SUCCESS|DONE|COMPLETED/i.test(status.state)) return { ok: true, state: status.state };
+    if (/ERROR|FAIL|CANCEL/i.test(status.state)) return { ok: false, state: status.state, error: status.error || status.state };
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return { ok: false, state: "TIMEOUT", error: `still not ready after ${maxAttempts * intervalMs / 1000}s` };
+}
+
+async function fetchAdsCampaignReport(headers, account, campaignId, from, to) {
+  const created = await createAdsStatisticsReport(headers, [campaignId], from, to);
+  if (!created.ok) return { campaignId, ok: false, error: created.error, activeLimit: created.activeLimit };
+  const uuid = created.uuid;
+  const polled = await pollAdsStatisticsStatus(headers, uuid);
+  if (!polled.ok) return { campaignId, ok: false, uuid, error: polled.error, state: polled.state };
+  const report = await fetchAdsStatisticsReport(headers, uuid);
+  if (!report.ok) return { campaignId, ok: false, uuid, error: report.error, state: "REPORT_PENDING" };
+  return { campaignId, ok: true, uuid, payload: report.payload };
 }
 
 async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
@@ -981,49 +995,49 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         }
       }
       let task = options.uuid ? { uuid: options.uuid, from, to, store: account.name, status: "EXTERNAL", createdAt: "" } : ADS_REPORT_TASKS.get(key);
-      if (!task && !options.create && !options.force) {
-        meta.push({ store: account.name, state: "NO_REPORT_TASK", rows: 0, campaigns: campaignIds.length, note: "Pass create=1 once to create a report task." });
-        continue;
-      }
-      if (!task || options.force) {
-        if (!campaignIds.length) {
-          meta.push({ store: account.name, state: "NO_CAMPAIGNS", rows: 0, campaigns: 0 });
-          continue;
+      if (options.uuid) {
+        const status = await fetchAdsStatisticsStatus(headers, options.uuid);
+        if (/OK|SUCCESS|DONE|COMPLETED/i.test(status.state)) {
+          const report = await fetchAdsStatisticsReport(headers, options.uuid);
+          if (report.ok) {
+            const normalized = normalizeAdsReportRows(report.payload, account, campaigns, from, to);
+            rows.push(...normalized);
+            meta.push({ store: account.name, state: "READY", uuid: options.uuid, rows: normalized.length, campaigns: campaignIds.length });
+          } else {
+            meta.push({ store: account.name, state: "REPORT_PENDING", uuid: options.uuid, rows: 0, campaigns: campaignIds.length, error: report.error });
+          }
+        } else {
+          meta.push({ store: account.name, state: status.state, uuid: options.uuid, rows: 0, campaigns: campaignIds.length });
         }
-        const created = await createAdsStatisticsReport(headers, campaignIds, from, to);
-        if (!created.ok) {
-          meta.push({ store: account.name, state: created.activeLimit ? "WAIT_ACTIVE_REPORT" : "ERROR", rows: 0, campaigns: campaignIds.length, error: created.error });
-          continue;
+        continue;
+      }
+      if (!options.create && !options.force) {
+        meta.push({ store: account.name, state: "NO_REPORT_TASK", rows: 0, campaigns: campaignIds.length, note: "Pass create=1 once to create per-campaign report tasks." });
+        continue;
+      }
+      if (!campaignIds.length) {
+        meta.push({ store: account.name, state: "NO_CAMPAIGNS", rows: 0, campaigns: 0 });
+        continue;
+      }
+      const reportResults = await Promise.all(campaignIds.slice(0, 10).map((campaignId) => fetchAdsCampaignReport(headers, account, campaignId, from, to)));
+      const perCampaignMeta = [];
+      for (const result of reportResults) {
+        if (result.ok) {
+          const normalized = normalizeAdsReportRows(result.payload, account, campaigns, from, to);
+          rows.push(...normalized);
+          perCampaignMeta.push({ campaignId: result.campaignId, uuid: result.uuid, rows: normalized.length, state: "READY" });
+        } else {
+          perCampaignMeta.push({ campaignId: result.campaignId, uuid: result.uuid || "", rows: 0, state: result.activeLimit ? "WAIT_ACTIVE_REPORT" : (result.state || "ERROR"), error: result.error || "" });
         }
-        task = { uuid: created.uuid, from, to, store: account.name, status: "CREATED", createdAt: new Date().toISOString() };
-        ADS_REPORT_TASKS.set(key, task);
       }
-      const status = await fetchAdsStatisticsStatus(headers, task.uuid);
-      task.status = status.state;
-      task.updatedAt = new Date().toISOString();
-      ADS_REPORT_TASKS.set(key, task);
-      if (!/OK|SUCCESS|DONE|COMPLETED/i.test(status.state)) {
-        meta.push({ store: account.name, state: status.state, uuid: task.uuid, rows: 0, campaigns: campaignIds.length });
-        continue;
-      }
-      const report = await fetchAdsStatisticsReport(headers, task.uuid);
-      if (!report.ok) {
-        meta.push({ store: account.name, state: "REPORT_PENDING", uuid: task.uuid, rows: 0, campaigns: campaignIds.length, error: report.error });
-        continue;
-      }
-      const rawRows = adArrayFromPayload(report.payload);
-      const normalized = normalizeAdsReportRows(report.payload, account, campaigns, from, to);
-      ADS_REPORT_ROWS.set(key, normalized);
-      rows.push(...normalized);
-      const sample = rawRows[0] || {};
+      if (rows.length) ADS_REPORT_ROWS.set(key, rows);
+      ADS_REPORT_TASKS.set(key, { uuid: "multi", from, to, store: account.name, status: rows.length ? "COMPLETED" : "EMPTY", updatedAt: new Date().toISOString() });
       meta.push({
         store: account.name,
-        state: "READY",
-        uuid: task.uuid,
-        rows: normalized.length,
+        state: rows.length ? "READY" : "EMPTY",
+        rows: rows.length,
         campaigns: campaignIds.length,
-        sampleKeys: Object.keys(sample).slice(0, 24),
-        sampleValues: Object.fromEntries(Object.entries(sample).slice(0, 8)),
+        perCampaign: perCampaignMeta,
       });
     } catch (error) {
       meta.push({ store: account.name, state: "ERROR", rows: 0, error: error.message || String(error) });
