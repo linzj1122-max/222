@@ -10,7 +10,7 @@ const initialProducts = [
       {code:"JW", sku:"4526520053", name:"脚腕按摩器", purchase:28, domestic:5, firstFreight:3.52, lastMile:3.5, rate:11.5, platform:"Ozon"},
       {code:"CDAM", sku:"4539993573", name:"床垫按摩器", purchase:150, domestic:5, firstFreight:120.6, lastMile:5, rate:11.5, platform:"Ozon"},
       {code:"AMY", sku:"4488765265", name:"按摩椅", purchase:950, domestic:5, firstFreight:1587.2, lastMile:0, rate:11.5, platform:"Ozon"},
-      {code:"QB60-GRAY", sku:"4675959653", name:"水泵", purchase:74.5, domestic:12, firstFreight:43.2, lastMile:5, rate:11.5, platform:"Ozon"},
+      {code:"HQB60", sku:"4675959653", name:"水泵", purchase:74.5, domestic:12, firstFreight:43.2, lastMile:5, rate:11.5, platform:"Ozon"},
       {code:"QB-60", sku:"4509788886", name:"水泵", purchase:70.5, domestic:12, firstFreight:43.2, lastMile:5, rate:11.5, platform:"Ozon"},
       {code:"PK-750", sku:"4509718786", name:"水泵", purchase:104.5, domestic:12, firstFreight:76.61, lastMile:7, rate:11.5, platform:"Ozon"},
       {code:"GP-130", sku:"4509770907", name:"水泵", purchase:104.5, domestic:12, firstFreight:141.86, lastMile:10, rate:11.5, platform:"Ozon"}
@@ -65,6 +65,8 @@ const initialProducts = [
     };
 
     let products = JSON.parse(localStorage.getItem(productKey) || "null") || initialProducts;
+    const codeRenames = { "4675959653": "HQB60" };
+    products.forEach((p) => { if (codeRenames[String(p.sku)]) p.code = codeRenames[String(p.sku)]; });
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
     let trendOrders = JSON.parse(localStorage.getItem("ozon_wb_trend_orders_v1") || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
@@ -1337,7 +1339,11 @@ const initialProducts = [
           cur.adRevenue += Number(row.adRevenue || 0);
           debugMap.set(k, cur);
         });
-        const debugText = [...debugMap.values()].slice(0, 12).map((r) => `${r.date}/${r.sku} 费${r.adCost.toFixed(2)}/额${r.adRevenue.toFixed(2)} [${r.rawKeys.join(",")}]`).join("；");
+        const debugText = [...debugMap.values()].slice(0, 12).map((r) => {
+          const product = productBySku(r.sku);
+          const label = product ? product.code : "(未匹配)";
+          return `${r.date}/${r.sku}→${label} 费${r.adCost.toFixed(2)}/额${r.adRevenue.toFixed(2)}`;
+        }).join("；");
         const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
         const sourceTextClean = apiVisibleCount
           ? `当前显示 API 广告数据 ${apiVisibleCount} 条，其中可识别指标 ${apiMetricCount} 条。`
@@ -1373,8 +1379,9 @@ const initialProducts = [
       $("adProductCount").textContent = productCount;
       $("adRows").innerHTML = summaryRows.map((row) => {
         const period = formatAdPeriod(row.dateFrom, row.dateTo);
-        const image = row.image ? '<img src="' + escapeHtml(row.image) + '" alt="' + escapeHtml(row.product?.code || row.sku) + '" />' : '<span class="ad-product-placeholder">' + escapeHtml(String(row.product?.code || row.sku || "?").slice(0, 3)) + '</span>';
-        const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></div></div>';
+        const label = row.product?.code || row.sku;
+        const image = row.image ? '<img src="' + escapeHtml(row.image) + '" alt="' + escapeHtml(label) + '" />' : '<span class="ad-product-placeholder">' + escapeHtml(String(label || "?").slice(0, 3)) + '</span>';
+        const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(label) + '</strong><div class="sku">' + escapeHtml(row.sku) + '</div></div></div>';
         return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
       }).join("");
       renderAdRawPreview(adSourceRows());
