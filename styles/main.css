@@ -833,6 +833,27 @@
       cursor: progress;
     }
 
+    .panel { transition: box-shadow .2s ease, transform .2s ease; }
+    .panel:hover { box-shadow: 0 8px 28px rgba(15, 23, 42, .08); }
+    .tab-btn { transition: all .18s ease; }
+    .tab-btn.active { background: linear-gradient(90deg, rgba(0,91,255,.28), rgba(0,91,255,.04)); }
+    .range-pills button, .period-tabs button { transition: all .15s ease; }
+    .range-pills button:hover:not(.active), .period-tabs button:hover:not(.active) { color: #334155; background: rgba(255,255,255,.5); }
+    table tbody tr { transition: background .12s ease; }
+    table tbody tr:hover { background: #f8fafc; }
+    .topbar { backdrop-filter: blur(8px); background: rgba(255,255,255,.85); }
+    aside { background: linear-gradient(180deg, #0b0f19 0%, #070a12 100%); }
+    .brand-mark { background: linear-gradient(90deg, #60a5fa, #fff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px; }
+    .live-chip { background: linear-gradient(90deg, #eff6ff, #f0f9ff); }
+    .metric-card, .kpi-card { position: relative; overflow: hidden; }
+    .metric-card::before, .kpi-card::before { content: ""; position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: var(--brand); opacity: .8; }
+    button { transition: all .15s ease; }
+    button:hover:not(:disabled) { transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    .ads-metric-card { border-radius: 12px; padding: 18px; background: #fff; border: 1px solid #e2e8f0; transition: all .2s ease; }
+    .ads-metric-card:hover { box-shadow: 0 8px 24px rgba(15,23,42,.07); border-color: #cbd5e1; }
+    .ad-product img { border-radius: 8px; object-fit: cover; }
+
     @media (max-width: 1100px) {
       .app { grid-template-columns: 1fr; }
       aside { min-height: auto; }

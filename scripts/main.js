@@ -51,14 +51,19 @@ const initialProducts = [
       const day = String(d.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
-    const todayIso = () => localIso(new Date());
     const mskTodayIso = () => {
       const now = new Date();
       const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
       const mskDate = new Date(utcMs + 3 * 3600000);
       return localIso(mskDate);
     };
+    const todayIso = () => mskTodayIso();
     const adsTodayIso = () => mskTodayIso();
+    const mskNowString = () => {
+      const now = new Date();
+      const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+      return new Date(utcMs + 3 * 3600000).toLocaleString("zh-CN", { timeZone: "UTC" });
+    };
     const addDays = (date, days) => {
       const d = new Date(`${date}T00:00:00`);
       d.setDate(d.getDate() + days);
@@ -1073,46 +1078,6 @@ const initialProducts = [
       return String(value);
     }
 
-    function ensureAdRawPanel() {
-      if ($("adRawRows")) return;
-      const anchor = $("adRows")?.closest("section");
-      if (!anchor) return;
-      const panel = document.createElement("section");
-      panel.className = "panel";
-      panel.id = "adRawPanel";
-      panel.innerHTML = `
-        <div class="toolbar">
-          <h3>API 原始数据预览</h3>
-          <span class="status" id="adRawStatus">后台返回什么字段，这里就先显示什么字段。</span>
-        </div>
-        <div class="table-wrap raw-table-wrap">
-          <table id="adRawTable">
-            <thead id="adRawHead"></thead>
-            <tbody id="adRawRows"></tbody>
-          </table>
-        </div>`;
-      anchor.insertAdjacentElement("afterend", panel);
-    }
-
-    function renderAdRawPreview(rows) {
-      ensureAdRawPanel();
-      if (!$("adRawRows")) return;
-      const rawRows = rows.filter((row) => row.source === "api").slice(0, 30);
-      const columns = adRawColumns(rawRows);
-      if (!rawRows.length || !columns.length) {
-        $("adRawHead").innerHTML = "";
-        $("adRawRows").innerHTML = '<tr><td>暂无 API 原始行。现在显示的是 Excel 上传数据，或 API 只返回了报表状态。</td></tr>';
-        if ($("adRawStatus")) $("adRawStatus").textContent = "等待 API 返回明细行。";
-        return;
-      }
-      $("adRawHead").innerHTML = '<tr>' + columns.map((key) => '<th>' + escapeHtml(key) + '</th>').join("") + '</tr>';
-      $("adRawRows").innerHTML = rawRows.map((row) => {
-        const raw = adRawObject(row);
-        return '<tr>' + columns.map((key) => '<td>' + escapeHtml(rawDisplayValue(raw[key])).slice(0, 220) + '</td>').join("") + '</tr>';
-      }).join("");
-      if ($("adRawStatus")) $("adRawStatus").textContent = `显示 API 原始字段 ${columns.length} 列，预览 ${rawRows.length} 行。字段太多时先截取前 14 列。`;
-    }
-
     function renderAdCalendar() {
       const box = $("adCalendar");
       if (!box) return;
@@ -1362,58 +1327,13 @@ const initialProducts = [
         if (allStores.includes(importCurrent)) $("adImportStore").value = importCurrent;
       }
       if ($("adImportStatus")) {
-        const statusText = adsStatusRows.length
-          ? adsStatusRows.map((row) => row.store + ": " + row.state + (row.uuid ? " / " + row.uuid : "") + (row.error ? " / " + row.error : "")).join("；")
-          : "";
-        if (adRowsArray().length) $("adImportStatus").textContent = "\u5DF2\u8BFB\u53D6 API \u5E7F\u544A\u6570\u636E " + adRowsArray().length + " \u6761\u3002" + (statusText ? " " + statusText : "");
-        else if (importedAds.length) $("adImportStatus").textContent = "\u672C\u673A\u5DF2\u4FDD\u5B58 " + importedAds.length + " \u6761\u4E0A\u4F20\u5E7F\u544A\u6570\u636E\u3002" + (statusText ? " API: " + statusText : "");
-        else $("adImportStatus").textContent = statusText || "\u5C1A\u672A\u5BFC\u5165\u5E7F\u544A\u6570\u636E\u3002";
-      }
-
-      if ($("adImportStatus")) {
         const apiCount = adMetricRows().length;
         const xlsxCount = importedAds.length;
-        const statusText = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
-        const sourceText = apiCount ? `当前显示 API 广告数据 ${apiCount} 条。` : xlsxCount ? `API 暂无可用明细，当前显示已上传 Excel 数据 ${xlsxCount} 条。` : "暂无广告明细。";
-        $("adImportStatus").textContent = sourceText + (statusText ? ` API 状态：${statusText}` : "");
-      }
-
-      if ($("adImportStatus")) {
-        const apiVisibleCount = adRowsArray().filter(adRowVisible).length;
-        const apiMetricCount = adMetricRows().length;
-        const xlsxCount = importedAds.length;
-        const directMeta = adsStatusRows.find((row) => row.sampleKeys && row.sampleKeys.length);
-        const sampleInfo = directMeta ? ` 原始字段：[${directMeta.sampleKeys.map((k) => escapeHtml(String(k))).join(", ")}]。样例：${JSON.stringify(directMeta.sample || {}).slice(0, 300)}` : "";
-        const debugMap = new Map();
-        adRowsArray().forEach((row) => {
-          const k = `${row.date}|${row.store}|${row.sku}`;
-          const cur = debugMap.get(k) || { date: row.date, store: row.store, sku: row.sku, adCost: 0, adRevenue: 0, rawKeys: row.rawKeys || [], count: 0, campaigns: new Set() };
-          cur.adCost += Number(row.adCost || 0);
-          cur.adRevenue += Number(row.adRevenue || 0);
-          cur.count += 1;
-          if (row.campaignId) cur.campaigns.add(row.campaignId);
-          debugMap.set(k, cur);
-        });
-        const skuTotalMap = new Map();
-        [...debugMap.values()].forEach((r) => {
-          const cur = skuTotalMap.get(r.sku) || { sku: r.sku, adCost: 0, count: 0, campaigns: new Set() };
-          cur.adCost += r.adCost;
-          cur.count += r.count;
-          r.campaigns.forEach((c) => cur.campaigns.add(c));
-          skuTotalMap.set(r.sku, cur);
-        });
-        const debugText = [...skuTotalMap.values()].map((r) => {
-          const product = productBySku(r.sku);
-          const label = product ? product.code : "(未匹配)";
-          return `${r.sku}→${label} 合计${r.adCost.toFixed(2)} 行数${r.count} 活动${r.campaigns.size}`;
-        }).join("；");
-        const statusTextClean = adsStatusRows.map((row) => `${row.store || "API"}: ${row.state || "-"}${row.uuid ? " / " + row.uuid : ""}${row.error ? " / " + row.error : ""}`).join("；");
-        const sourceTextClean = apiVisibleCount
-          ? `当前显示 API 广告数据 ${apiVisibleCount} 条，其中可识别指标 ${apiMetricCount} 条。`
+        $("adImportStatus").textContent = apiCount
+          ? `已读取 API 广告数据 ${apiCount} 条`
           : xlsxCount
-            ? `API 暂无可用明细，当前显示已上传 Excel 数据 ${xlsxCount} 条。`
-            : "暂无广告明细。";
-        $("adImportStatus").textContent = sourceTextClean + (statusTextClean ? ` API 状态：${statusTextClean}` : "") + sampleInfo + (debugText ? ` 明细：${debugText}` : "");
+            ? `显示已上传 Excel 数据 ${xlsxCount} 条`
+            : "暂无广告数据，点击刷新按钮获取";
       }
 
       const summaryMap = new Map();
@@ -1447,7 +1367,6 @@ const initialProducts = [
         const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(label) + '</strong><div class="sku">' + escapeHtml(row.sku) + '</div></div></div>';
         return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
       }).join("");
-      renderAdRawPreview(adSourceRows());
       drawAdChart();
     }
 
@@ -2109,7 +2028,7 @@ const initialProducts = [
         apiConfigs.unshift({
           id: crypto.randomUUID(),
           ...payload,
-          createdAt: new Date().toLocaleString("zh-CN")
+          createdAt: mskNowString()
         });
       }
       $("apiForm").reset();
