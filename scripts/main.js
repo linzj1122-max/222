@@ -369,6 +369,26 @@ const initialProducts = [
       }
     }
 
+    let adsAutoRefreshing = false;
+    async function autoRefreshAds() {
+      if (!backendEnabled || adsAutoRefreshing) return;
+      adsAutoRefreshing = true;
+      try {
+        const key = `${adDateFrom}|${adDateTo}`;
+        const cached = adsRowsCache[key];
+        const today = adsTodayIso();
+        const needsRefresh = !cached || adDateTo >= today || adDateFrom >= today;
+        if (needsRefresh) {
+          await loadBackendAds({ allowCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
+        } else {
+          await loadBackendAds({ dateFrom: adDateFrom, dateTo: adDateTo });
+        }
+        renderAds();
+      } catch {} finally {
+        adsAutoRefreshing = false;
+      }
+    }
+
     async function loadBackendOrders(options = {}) {
       if (!backendEnabled) return;
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
@@ -1204,8 +1224,14 @@ const initialProducts = [
       pendingAdDateAnchor = null;
       adDateFrom = sorted[0];
       adDateTo = sorted[1];
+      const key = `${adDateFrom}|${adDateTo}`;
+      if (adsRowsCache[key]) {
+        backendAds = adsRowsCache[key].rows || [];
+        adsStatusRows = adsRowsCache[key].status || [];
+      }
       updateAdDateInputs();
-      await refreshAdsApi();
+      renderAds();
+      await autoRefreshAds();
     }
 
     function updateAdDateInputs() {
@@ -1969,10 +1995,16 @@ const initialProducts = [
     document.querySelectorAll("[data-ad-range]").forEach((button) => {
       button.addEventListener("click", async () => {
         const days = Number(button.dataset.adRange || 28);
-        adDateTo = adsTodayIso();
+        adDateTo = addDays(adsTodayIso(), -1);
         adDateFrom = addDays(adDateTo, -(days - 1));
+        const key = `${adDateFrom}|${adDateTo}`;
+        if (adsRowsCache[key]) {
+          backendAds = adsRowsCache[key].rows || [];
+          adsStatusRows = adsRowsCache[key].status || [];
+        }
         updateAdDateInputs();
-        await refreshAdsApi();
+        renderAds();
+        await autoRefreshAds();
       });
     });
     if ($("adChart")) {
@@ -2173,6 +2205,7 @@ const initialProducts = [
       resetCostForm();
       updateChartMenuText();
       renderAll();
+      if (backendEnabled) autoRefreshAds();
     }
 
     bootstrap();
