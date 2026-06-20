@@ -51,6 +51,13 @@ const initialProducts = [
       return `${year}-${month}-${day}`;
     };
     const todayIso = () => localIso(new Date());
+    const mskTodayIso = () => {
+      const now = new Date();
+      const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+      const mskDate = new Date(utcMs + 3 * 3600000);
+      return localIso(mskDate);
+    };
+    const adsTodayIso = () => mskTodayIso();
     const addDays = (date, days) => {
       const d = new Date(`${date}T00:00:00`);
       d.setDate(d.getDate() + days);
@@ -76,8 +83,8 @@ const initialProducts = [
     let activeAdChartIndex = null;
     let adPollTimer = null;
     let adPollAttempts = 0;
-    let adDateFrom = addDays(todayIso(), -27);
-    let adDateTo = todayIso();
+    let adDateFrom = addDays(adsTodayIso(), -27);
+    let adDateTo = adsTodayIso();
     let adCalendarCursor = new Date(`${adDateFrom}T00:00:00`);
     let pendingAdDateAnchor = null;
     let adCompareEnabled = true;
@@ -971,7 +978,10 @@ const initialProducts = [
     }
 
     function adRowsForRange(from = adDateFrom, to = adDateTo) {
-      return baseAdRows().filter((row) => dateInRange(row.date || row.dateTo, from, to));
+      return baseAdRows().filter((row) => {
+        if (row.source === "api") return true;
+        return dateInRange(row.date || row.dateTo, from, to);
+      });
     }
 
     function adSourceRows() {
@@ -1071,7 +1081,7 @@ const initialProducts = [
           const iso = localIso(day);
           const classes = [
             "calendar-day",
-            iso === todayIso() ? "today" : "",
+            iso === adsTodayIso() ? "today" : "",
             iso === rangeFrom || iso === rangeTo || iso === pendingAdDateAnchor ? "selected" : "",
             iso > rangeFrom && iso < rangeTo ? "in-range" : "",
           ].filter(Boolean).join(" ");
@@ -1134,7 +1144,7 @@ const initialProducts = [
       wrapper.querySelectorAll("[data-ad-picker-range]").forEach((button) => {
         button.addEventListener("click", async () => {
           const value = button.dataset.adPickerRange;
-          const today = todayIso();
+          const today = adsTodayIso();
           const yesterday = addDays(today, -1);
           pendingAdDateAnchor = null;
           if (value === "today") {
@@ -1268,6 +1278,19 @@ const initialProducts = [
       }
     }
 
+    function formatAdPeriod(from, to) {
+      if (!from || !to) return from || to || "-";
+      if (from === to) return from;
+      const today = adsTodayIso();
+      const days = daysInclusive(from, to);
+      const isEndToday = to === today;
+      const isStartContinuous = from === addDays(today, -(days - 1));
+      if (isEndToday && isStartContinuous && [7, 14, 28].includes(days)) {
+        return `近 ${days} 天（${from} - ${to}）`;
+      }
+      return `${from} - ${to}`;
+    }
+
     function renderAds() {
       if (!$("adStoreSelect")) return;
       updateAdDateInputs();
@@ -1336,7 +1359,7 @@ const initialProducts = [
       $("adRatio").textContent = (revenue ? adTotal / revenue * 100 : 0).toFixed(2) + "%";
       $("adProductCount").textContent = productCount;
       $("adRows").innerHTML = summaryRows.map((row) => {
-        const period = row.dateFrom === row.dateTo ? row.dateTo : row.dateFrom + " - " + row.dateTo;
+        const period = formatAdPeriod(row.dateFrom, row.dateTo);
         const image = row.image ? '<img src="' + escapeHtml(row.image) + '" alt="' + escapeHtml(row.product?.code || row.sku) + '" />' : '<span class="ad-product-placeholder">' + escapeHtml(String(row.product?.code || row.sku || "?").slice(0, 3)) + '</span>';
         const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(row.product?.code || row.sku) + '</strong><div class="sku">' + escapeHtml(row.name || row.product?.name || "") + '</div></div></div>';
         return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
@@ -1357,13 +1380,24 @@ const initialProducts = [
       const previousTo = addDays(adDateFrom, -1);
       const previousFrom = addDays(previousTo, -(period - 1));
       const makeSeries = (from, to) => {
+        const totalDays = daysInclusive(from, to);
         const map = new Map();
-        adRowsForRange(from, to).forEach((row) => {
+        for (let i = 0; i < totalDays; i += 1) map.set(addDays(from, i), 0);
+        const rows = adRowsForRange(from, to);
+        const inRangeRows = [];
+        const aggregatedRows = [];
+        rows.forEach((row) => {
           const date = row.date || row.dateTo || to;
-          map.set(date, (map.get(date) || 0) + Number(row.adCost || 0));
+          if (map.has(date)) inRangeRows.push({ date, value: Number(row.adCost || 0) });
+          else aggregatedRows.push({ value: Number(row.adCost || 0) });
         });
+        inRangeRows.forEach((item) => map.set(item.date, map.get(item.date) + item.value));
+        if (aggregatedRows.length && totalDays > 0) {
+          const share = aggregatedRows.reduce((sum, item) => sum + item.value, 0) / totalDays;
+          for (const [date] of map) map.set(date, map.get(date) + share);
+        }
         const days = [];
-        for (let i = 0; i < daysInclusive(from, to); i += 1) {
+        for (let i = 0; i < totalDays; i += 1) {
           const date = addDays(from, i);
           days.push({ date, value: map.get(date) || 0 });
         }
@@ -1892,7 +1926,7 @@ const initialProducts = [
     document.querySelectorAll("[data-ad-range]").forEach((button) => {
       button.addEventListener("click", async () => {
         const days = Number(button.dataset.adRange || 28);
-        adDateTo = todayIso();
+        adDateTo = adsTodayIso();
         adDateFrom = addDays(adDateTo, -(days - 1));
         updateAdDateInputs();
         await refreshAdsApi();

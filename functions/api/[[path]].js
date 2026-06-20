@@ -601,10 +601,12 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
     const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Продажи в продвижении, ₽", "Продажи в продвижении с заказов модели, ₽", "Заказано на сумму, ₽", "Revenue", "Sales"]));
     const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Расход, ₽, с НДС", "Затраты", "Expense", "Cost", "Spend"]));
     const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Ozon ID"]) || campaignId);
+    const rawDate = String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Date", "Day", "Period", "Период", "at"]) || "");
+    const rowDate = toIsoDate(rawDate, "");
     return {
-      date: toIsoDate(String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Period", "Период"]) || to), to),
-      dateFrom: String(adObjectValue(row, ["dateFrom"]) || from),
-      dateTo: String(adObjectValue(row, ["dateTo"]) || to),
+      date: rowDate || to,
+      dateFrom: rowDate || from,
+      dateTo: rowDate || to,
       store: account.name,
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
