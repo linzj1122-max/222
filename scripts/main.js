@@ -834,6 +834,19 @@ const initialProducts = [
       $("weekAgoRevenue").textContent = rub(weekRevenue);
       $("todayProfit").textContent = rub(todayProfit);
       $("todayOrderCount").textContent = rangeOrders.length;
+      // 诊断:当范围数据为 0 时,在"范围总营业额"下方提示具体原因
+      const revLabel = $("revenueMetricLabel");
+      if (revLabel) {
+        if (!orders.length) {
+          revLabel.textContent = `范围总营业额（提示:未拉取到任何订单,共 ${orders.length} 条）`;
+        } else if (!scopedOrders.length) {
+          revLabel.textContent = `范围总营业额（提示:订单 ${orders.length} 条,但当前店铺筛选后为 0,请检查店铺筛选）`;
+        } else if (!rangeOrders.length) {
+          revLabel.textContent = `范围总营业额（提示:订单 ${orders.length} 条,但范围内为 0,可能该时间段无订单。范围 ${orderDateFrom} 至 ${orderDateTo}）`;
+        } else {
+          revLabel.textContent = "范围总营业额";
+        }
+      }
       if ($("summaryRangeText")) $("summaryRangeText").textContent = `当前统计范围：${orderDateFrom} 至 ${orderDateTo}`;
       if ($("orderRangeStatus")) {
         // 诊断信息:总订单数 / 过滤后 / 范围内,便于排查为何显示 0
