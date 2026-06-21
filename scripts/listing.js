@@ -244,15 +244,6 @@
         <label>商品图片(至少 1 张,建议 3:4 竖图,最多 15 张,第一张为首图)<input id="lst_images" type="file" accept="image/*" multiple /></label>
         <div class="listing-thumb-row" id="lst_thumbRow"></div>
 
-        <div class="listing-copy-helper">
-          <div class="listing-copy-helper-title">💡 去 ChatGPT 生成文案?点这里复制提示词</div>
-          <textarea id="lst_copyPrompt" rows="3" readonly placeholder="点下方按钮生成提示词…"></textarea>
-          <div class="actions">
-            <button class="secondary" type="button" id="lst_genPrompt">生成提示词</button>
-            <button class="secondary" type="button" id="lst_copyPromptBtn">复制提示词</button>
-          </div>
-        </div>
-
         <label>产品标题(俄文)<textarea id="lst_title" rows="2" placeholder="Ozon 标题,建议 60~110 字符"></textarea></label>
         <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
         <label>搜索标签(<strong>每行一个</strong>,每个标签 ≤ 30 字符,最多 20 个)<textarea id="lst_tags" rows="4" placeholder="每行输入一个标签,例如:&#10;массажер&#10;для шеи"></textarea></label>
@@ -802,44 +793,6 @@
     renderThumbs();
   }
 
-  // ---- ChatGPT 提示词生成(辅助用户去 ChatGPT 手动生成文案) ----
-  function genCopyPrompt() {
-    const ta = $("lst_copyPrompt");
-    if (!ta) return;
-    const prompt = [
-      "你是 Ozon 资深俄文电商文案,请根据以下产品信息生成上架所需的俄文内容。",
-      "要求:",
-      "- 标题:60~110 字符,包含品牌/型号/核心卖点/适用场景",
-      "- 描述:300~600 字符,卖点分点列出,自然融入关键词,地道俄文",
-      "- 标签:10~15 个,每个不超过 30 字符",
-      "",
-      "产品信息:",
-      `品牌:${draft.brand || "-"}`,
-      `型号:${draft.model || "-"}`,
-      `货号:${draft.code || "-"}`,
-      `类目:${draft.categoryFullPath || draft.categoryNameZh || "-"}`,
-      `售价:${draft.price || "-"} RUB`,
-      `尺寸:${[draft.length, draft.width, draft.height].filter(Boolean).join("×") || "-"} mm`,
-      `重量:${draft.weight || "-"} g`,
-      "",
-      '请用 JSON 输出:{"title":"","description":"","tags":""}',
-    ].join("\n");
-    ta.value = prompt;
-  }
-
-  async function copyPromptToClipboard() {
-    const ta = $("lst_copyPrompt");
-    if (!ta || !ta.value) { alert("请先点「生成提示词」"); return; }
-    try {
-      await navigator.clipboard.writeText(ta.value);
-      alert("提示词已复制!粘贴到 ChatGPT 生成文案后,把结果填回下方标题/描述/标签。");
-    } catch {
-      ta.select();
-      document.execCommand("copy");
-      alert("提示词已复制!");
-    }
-  }
-
   // ---- 第三步:发布 ----
   async function runPublish() {
     readStep2Form();
@@ -1123,10 +1076,6 @@
       goToStep(3);
       log("进入发布步骤,请核对店铺与货号。");
     });
-
-    // ChatGPT 提示词辅助
-    $("lst_genPrompt")?.addEventListener("click", genCopyPrompt);
-    $("lst_copyPromptBtn")?.addEventListener("click", copyPromptToClipboard);
 
     $("lst_publish")?.addEventListener("click", runPublish);
     $("lst_newDraft")?.addEventListener("click", () => {
