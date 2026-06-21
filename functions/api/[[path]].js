@@ -547,45 +547,64 @@ async function probeAnalyticsMetrics(env, from, to) {
     // 其他可能
     "price", "discount_percent",
   ];
-  const dimensions = [["sku"], ["day"]];   // 测试两种维度(无维度会报错)
+  const dimensions = [["sku"]];   // 只测 sku 维度(避免子请求超限)
   const result = { store: store.name, from, to, dimensions: {} };
-  // Ozon API 会因一个无效指标名拒绝整个请求,所以逐个指标单独测试
-  // 用 [revenue, 候选指标] 两两测试,revenue 作为基准(已知有效)
+  // 分批测试:每批最多 10 个指标,一个请求测一批
+  // 如果整批 400(有无效字段),降级为逐个测该批
+  const batchSize = 10;
   for (const dim of dimensions) {
     const dimKey = dim.join("+");
-    const found = [];
-    const errors = [];
-    for (const metric of candidates) {
-      try {
-        const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
-          method: "POST",
-          headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-          body: JSON.stringify({ date_from: from, date_to: to, metrics: [metric], dimension: dim, filters: [], limit: 5, offset: 0 }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          errors.push({ metric, error: `${response.status}`, detail: String(payload.message || payload.error || "").slice(0, 120) });
-          continue;
-        }
-        // 汇总该指标
-        let total = 0;
-        for (const row of (payload.result?.data || [])) {
-          total += amount((row.metrics || [])[0]);
-        }
-        found.push({ metric, value: total, nonzero: total > 0 });
-      } catch (e) {
-        errors.push({ metric, error: e.message || String(e) });
-      }
+    const allFound = [];
+    const allInvalid = [];
+    for (let i = 0; i < candidates.length; i += batchSize) {
+      const batch = candidates.slice(i, i + batchSize);
+      const batchFound = await probeMetricsBatch(store, from, to, dim, batch, allInvalid);
+      allFound.push(...batchFound);
     }
     result.dimensions[dimKey] = {
-      // 只列非0的(有真实数据的)
-      nonzeroMetrics: found.filter((f) => f.nonzero).map((f) => ({ metric: f.metric, value: f.value })),
-      // 所有有效指标(无论是否为0)
-      validMetrics: found.map((f) => f.metric),
-      invalidMetrics: errors.map((e) => ({ metric: e.metric, error: e.error })),
+      nonzeroMetrics: allFound.filter((f) => f.nonzero).map((f) => ({ metric: f.metric, value: f.value })),
+      validMetrics: allFound.map((f) => f.metric),
+      invalidMetrics: allInvalid.map((m) => ({ metric: m, error: "400" })),
     };
   }
   return result;
+}
+
+// 辅助:测一批指标。若整批失败(有无效字段),降级逐个测
+async function probeMetricsBatch(store, from, to, dim, batch, invalidSink) {
+  const tryOnce = async (metrics) => {
+    const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+      body: JSON.stringify({ date_from: from, date_to: to, metrics, dimension: dim, filters: [], limit: 5, offset: 0 }),
+    });
+    const payload = await response.json();
+    if (!response.ok) return { ok: false, payload };
+    return { ok: true, payload };
+  };
+  const r = await tryOnce(batch);
+  if (r.ok) {
+    // 整批成功,汇总每个指标
+    const totals = {};
+    batch.forEach((m) => (totals[m] = 0));
+    for (const row of (r.payload.result?.data || [])) {
+      (row.metrics || []).forEach((val, i) => { totals[batch[i]] += amount(val); });
+    }
+    return batch.map((m) => ({ metric: m, value: totals[m], nonzero: totals[m] > 0 }));
+  }
+  // 整批失败,降级逐个测(区分有效/无效)
+  const found = [];
+  for (const m of batch) {
+    const sr = await tryOnce([m]);
+    if (sr.ok) {
+      let total = 0;
+      for (const row of (sr.payload.result?.data || [])) total += amount((row.metrics || [])[0]);
+      found.push({ metric: m, value: total, nonzero: total > 0 });
+    } else {
+      invalidSink.push(m);
+    }
+  }
+  return found;
 }
 
 // 按天+店铺维度抓取分析数据(曝光/点击/转化/销售额/件数)
