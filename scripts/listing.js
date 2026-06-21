@@ -17,10 +17,45 @@
   "use strict";
 
   const STORAGE_KEY = "ozon_wb_listing_drafts_v1";
+  const CAT_CACHE_KEY = "ozon_wb_listing_cat_cache_v1";
+  const STORE_KEY = "ozon_wb_api_configs_v1";
   const TAB_ID = "listing";
   const TAB_LABEL = "🚀 商品上架";
 
   const API = (sub) => `/api/listing/${sub}`;
+
+  // 读取「店铺设置」里手动添加的店铺(localStorage),结构与 main.js 一致
+  function readLocalStores() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]") || []; }
+    catch { return []; }
+  }
+  // 当前选中的店铺对象(含凭证),供请求后端时塞进 header
+  function currentStoreCreds() {
+    const platform = draft.platform;
+    const idx = Number(draft.storeIndex || 0);
+    const list = readLocalStores().filter((s) => normalizePlatform(s.platform) === platform);
+    const store = list[idx] || list[0] || null;
+    if (!store) return null;
+    return {
+      name: store.name || "",
+      platform,
+      clientId: store.clientId || "",
+      secret: store.secret || store.apiKey || store.token || "",
+    };
+  }
+  const normalizePlatform = (v) => (String(v || "").toLowerCase() === "wb" ? "WB" : "Ozon");
+  // 构造带店铺凭证的请求头(localStorage 店铺走 header;环境变量店铺走 storeIndex)
+  function storeHeaders(extra = {}) {
+    const creds = currentStoreCreds();
+    const h = { "content-type": "application/json", ...extra };
+    if (creds && creds.clientId && creds.secret) {
+      h["x-store-platform"] = creds.platform;
+      h["x-store-name"] = creds.name;
+      h["x-store-client-id"] = creds.clientId;
+      h["x-store-secret"] = creds.secret;
+    }
+    return h;
+  }
 
   // ---- 局部工具（避免污染全局） ----
   const $ = (id) => document.getElementById(id);
@@ -50,6 +85,8 @@
     categoryId: "",
     categoryName: "",
     categoryNameZh: "",
+    typeId: 0,
+    descriptionCategoryId: 0,
     source: "single", // single | tray
     // 单个产品
     code: "",
@@ -142,8 +179,9 @@
       <section class="panel listing-step-pane active" data-listing-pane="1">
         <div class="toolbar">
           <h3>第一步 · 选择平台与类目</h3>
+          <button class="secondary" type="button" id="lst_refreshCat" title="清空缓存并重新抓取">↻ 刷新类目</button>
         </div>
-        <div class="cols-3">
+        <div class="cols-2">
           <label class="inline-select">平台
             <select id="lst_platform">
               <option value="Ozon">OZON</option>
@@ -153,12 +191,8 @@
           <label class="inline-select">店铺
             <select id="lst_storeIndex"></select>
           </label>
-          <label style="display:flex;align-items:flex-end;">
-            <button class="primary" type="button" id="lst_fetchCategory">抓取并翻译类目</button>
-          </label>
         </div>
-        <div id="lst_catStatus" class="table-status">提示:请先在 Cloudflare 环境变量配置店铺凭证与 OPENAI_API_KEY,然后点「抓取并翻译类目」。</div>
-        <input id="lst_catSearch" class="search" placeholder="搜索中/俄文类目名…" />
+        <div id="lst_catStatus" class="table-status">选择平台与店铺后会自动抓取类目(已缓存,类目一般不变,无需重复抓取)。</div>
         <div class="listing-cat-list" id="lst_catList"></div>
         <div class="actions">
           <button class="primary" type="button" id="lst_toStep2">下一步:产品信息 →</button>
@@ -309,66 +343,196 @@
     try { return JSON.parse(localStorage.getItem("ozon_wb_sourcing_v1") || "[]") || []; } catch { return []; }
   }
 
-  // ---- 渲染:平台/店铺下拉 ----
-  async function refreshStores() {
-    try {
-      const res = await fetch(API("stores"));
-      const data = await res.json();
-      const stores = data?.stores || [];
-      const sel = $("lst_storeIndex");
-      const pubSel = $("lst_pubStore");
-      const options = stores.length
-        ? stores.map((s) => `<option value="${s.index}">${escapeHtml(s.platform)} · ${escapeHtml(s.name)}</option>`).join("")
-        : `<option value="0">(未配置店铺,请在环境变量设置)</option>`;
-      if (sel) sel.innerHTML = options;
-      if (pubSel) pubSel.innerHTML = options;
-      if (sel) sel.value = String(draft.storeIndex);
-    } catch {
-      const opt = `<option value="0">(读取店铺列表失败)</option>`;
-      if ($("lst_storeIndex")) $("lst_storeIndex").innerHTML = opt;
-      if ($("lst_pubStore")) $("lst_pubStore").innerHTML = opt;
-    }
+  // ---- 渲染:平台/店铺下拉(从「店铺设置」localStorage 读取) ----
+  function refreshStores() {
+    const platform = draft.platform;
+    const all = readLocalStores().filter((s) => normalizePlatform(s.platform) === platform);
+    const options = all.length
+      ? all.map((s, i) => `<option value="${i}">${escapeHtml(s.name || `${platform} 店铺 ${i + 1}`)}</option>`).join("")
+      : `<option value="0">(未添加${platform}店铺,请到「店铺设置」添加)</option>`;
+    const sel = $("lst_storeIndex");
+    const pubSel = $("lst_pubStore");
+    if (sel) { sel.innerHTML = options; sel.value = String(Math.min(draft.storeIndex || 0, Math.max(all.length - 1, 0))); }
+    if (pubSel) { pubSel.innerHTML = options; }
+    // 店铺变化后,触发类目自动抓取(如果该平台类目未缓存)
+    autoLoadCategories();
   }
 
   // ---- 渲染:类目列表 ----
+  // ---- 类目缓存 + 自动抓取 ----
+  // 缓存结构: { "Ozon": { ts, storeKey, tree }, "WB": {...} }
+  // tree 是带 children 的多级树(用于级联展示)
   let categoryCache = [];
-  function renderCategoryList() {
-    const box = $("lst_catList");
-    if (!box) return;
-    const kw = ($("lst_catSearch")?.value || "").trim().toLowerCase();
-    const rows = categoryCache.filter((c) =>
-      !kw || (c.nameZh || "").toLowerCase().includes(kw) || (c.name || "").toLowerCase().includes(kw)
-    ).slice(0, 200);
-    if (!rows.length) {
-      box.innerHTML = `<div class="row muted-cell">暂无类目,请先点击「抓取并翻译类目」。</div>`;
+  let categoryTree = [];          // 当前平台的多级树
+  let cascadeState = { l1: "", l2: "", l3: "" }; // 级联选中状态
+  let catLoading = false;
+
+  function loadCatCacheAll() {
+    try { return JSON.parse(localStorage.getItem(CAT_CACHE_KEY) || "{}") || {}; }
+    catch { return {}; }
+  }
+  function saveCatCacheAll(obj) {
+    try { localStorage.setItem(CAT_CACHE_KEY, JSON.stringify(obj)); } catch (e) { console.warn(e); }
+  }
+  function currentStoreKey() {
+    const c = currentStoreCreds();
+    return c ? `${c.platform}|${c.clientId}` : draft.platform;
+  }
+
+  // 把后端返回的扁平类目(含 fullName/parentId/depth/isLeaf)组装成多级树
+  function buildTree(flat) {
+    const map = new Map();
+    const roots = [];
+    flat.forEach((item) => {
+      const node = { ...item, children: [] };
+      map.set(item.id, node);
+    });
+    flat.forEach((item) => {
+      const node = map.get(item.id);
+      const parent = map.get(item.parentId);
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    });
+    return roots;
+  }
+
+  // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
+  async function autoLoadCategories() {
+    const platform = draft.platform;
+    if (!platform) return;
+    if (catLoading) return;
+    const cache = loadCatCacheAll();
+    const storeKey = currentStoreKey();
+    const cached = cache[platform];
+    // 命中缓存(同一店铺,且缓存存在)直接用,不再请求
+    if (cached && cached.tree && cached.storeKey === storeKey) {
+      categoryTree = cached.tree;
+      categoryCache = cached.flat || [];
+      cascadeState = { l1: "", l2: "", l3: "" };
+      renderCascade();
+      const status = $("lst_catStatus");
+      if (status) status.textContent = `已加载缓存的 ${platform} 类目(共 ${cached.flat?.length || 0} 项,来自「${cached.storeName || "本地缓存"}」)。`;
       return;
     }
-    box.innerHTML = rows.map((c) => `
-      <div class="row ${c.id === draft.categoryId ? "selected" : ""}" data-cat-id="${escapeAttr(c.id)}">
-        <span><span class="zh">${escapeHtml(c.nameZh || c.name)}</span></span>
-        <span class="orig">${escapeHtml(c.name)}${c.childrenCount ? ` · 有子类目` : ""}</span>
-      </div>`).join("");
+    await fetchCategories();
   }
 
   async function fetchCategories() {
     const status = $("lst_catStatus");
-    const platform = $("lst_platform")?.value || draft.platform;
-    const storeIndex = Number($("lst_storeIndex")?.value || 0);
-    draft.platform = platform;
-    draft.storeIndex = storeIndex;
-    if (status) status.textContent = "正在抓取并翻译类目…";
+    const platform = draft.platform;
+    const storeIndex = Number(draft.storeIndex || 0);
+    if (status) status.textContent = `正在从 ${platform} 抓取类目并翻译为中文…`;
+    catLoading = true;
     try {
-      const res = await fetch(API(`categories?platform=${encodeURIComponent(platform)}&storeIndex=${storeIndex}`));
+      const res = await fetch(
+        API(`categories?platform=${encodeURIComponent(platform)}&storeIndex=${storeIndex}`),
+        { headers: storeHeaders() }
+      );
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "抓取失败");
       categoryCache = data.categories || [];
-      renderCategoryList();
-      if (status) status.textContent = `成功抓取 ${categoryCache.length} 个类目(来源:${data.storeName || "-"}),已翻译为中文。`;
+      categoryTree = buildTree(categoryCache);
+      cascadeState = { l1: "", l2: "", l3: "" };
+      // 写入缓存
+      const cache = loadCatCacheAll();
+      cache[platform] = { ts: Date.now(), storeKey: currentStoreKey(), storeName: data.storeName || "", flat: categoryCache, tree: categoryTree };
+      saveCatCacheAll(cache);
+      renderCascade();
+      if (status) status.textContent = `已抓取 ${categoryCache.length} 个 ${platform} 类目(来源:${data.storeName || "-"}),已翻译为中文并缓存。`;
     } catch (e) {
       categoryCache = [];
-      renderCategoryList();
+      categoryTree = [];
+      renderCascade();
       if (status) status.textContent = "抓取失败:" + (e.message || e);
+    } finally {
+      catLoading = false;
     }
+  }
+
+  // ---- 渲染:三级级联类目选择器 ----
+  function renderCascade() {
+    const box = $("lst_catList");
+    if (!box) return;
+    if (catLoading) {
+      box.innerHTML = `<div class="listing-cascade-empty">正在加载类目…</div>`;
+      return;
+    }
+    if (!categoryTree.length) {
+      box.innerHTML = `<div class="listing-cascade-empty">暂无类目。请确认已在「店铺设置」添加对应平台的店铺。</div>`;
+      return;
+    }
+    const l1Nodes = categoryTree;
+    const l2Nodes = (l1Nodes.find((n) => n.id === cascadeState.l1) || {}).children || [];
+    const l3Nodes = (l2Nodes.find((n) => n.id === cascadeState.l2) || {}).children || [];
+
+    const col = (nodes, level, selectedId) => {
+      if (!nodes.length && level > 1) {
+        return `<div class="listing-cascade-col empty"><div class="listing-cascade-hint">从左侧选择上级类目</div></div>`;
+      }
+      const items = nodes.map((n) => {
+        const isSel = n.id === selectedId;
+        const hasChild = (n.children && n.children.length) || n.childrenCount;
+        const leaf = n.isLeaf ? `<span class="leaf-tag">可上架</span>` : "";
+        const arrow = hasChild ? `<span class="arrow">▸</span>` : "";
+        const dispName = n.fullName && !n.isLeaf ? n.fullName.split(" / ").pop() : (n.nameZh || n.name);
+        return `<div class="listing-cascade-item ${isSel ? "selected" : ""} ${hasChild ? "has-child" : ""}" data-cascade-level="${level}" data-cascade-id="${escapeAttr(n.id)}">
+          <span class="name">${escapeHtml(dispName)}</span>
+          ${leaf}${arrow}
+        </div>`;
+      }).join("");
+      return `<div class="listing-cascade-col">${items}</div>`;
+    };
+
+    box.innerHTML = `
+      <div class="listing-cascade">
+        ${col(l1Nodes, 1, cascadeState.l1)}
+        ${col(l2Nodes, 2, cascadeState.l2)}
+        ${col(l3Nodes, 3, cascadeState.l3)}
+      </div>
+      <div class="listing-cascade-breadcrumb">${renderBreadcrumb()}</div>
+    `;
+  }
+
+  function renderBreadcrumb() {
+    const path = [];
+    const l1 = categoryTree.find((n) => n.id === cascadeState.l1);
+    if (l1) path.push(l1.nameZh || l1.name);
+    if (l1) {
+      const l2 = (l1.children || []).find((n) => n.id === cascadeState.l2);
+      if (l2) path.push(l2.nameZh || l2.name);
+      if (l2) {
+        const l3 = (l2.children || []).find((n) => n.id === cascadeState.l3);
+        if (l3) path.push(l3.nameZh || l3.name);
+      }
+    }
+    if (!path.length) return `<span class="muted-cell">尚未选择类目(选到最末级即可上架)</span>`;
+    return `已选类目:<strong>${path.map(escapeHtml).join(" / ")}</strong>`;
+  }
+
+  // 处理级联点击:有子类目则下钻,叶子则确认为最终类目
+  function onCascadeClick(level, id) {
+    const findIn = (nodes, fid) => {
+      for (const n of nodes) { if (n.id === fid) return n; if (n.children) { const f = findIn(n.children, fid); if (f) return f; } }
+      return null;
+    };
+    const node = findIn(categoryTree, id);
+    if (!node) return;
+    const hasChild = (node.children && node.children.length) || node.childrenCount;
+    if (level === 1) { cascadeState.l1 = id; cascadeState.l2 = ""; cascadeState.l3 = ""; }
+    else if (level === 2) { cascadeState.l2 = id; cascadeState.l3 = ""; }
+    else { cascadeState.l3 = id; }
+    // 叶子节点(isLeaf)或无子节点 → 确认为最终上架类目
+    if (node.isLeaf || !hasChild) {
+      draft.categoryId = node.id;
+      draft.categoryName = node.name;
+      draft.categoryNameZh = node.nameZh || node.name;
+      draft.typeId = node.typeId || 0;
+      draft.descriptionCategoryId = node.categoryId || 0;
+    } else {
+      draft.categoryId = "";  // 中间节点不能上架,清空
+    }
+    persistDraft();
+    renderCascade();
   }
 
   // ---- 渲染:参考图缩略 ----
@@ -474,7 +638,7 @@
     try {
       const res = await fetch(API("generate-images"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: storeHeaders(),
         body: JSON.stringify({
           count,
           referenceImages: draft.images,
@@ -518,7 +682,7 @@
     try {
       const res = await fetch(API("generate-copy"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: storeHeaders(),
         body: JSON.stringify({
           product: {
             title: draft.model || draft.code,
@@ -566,7 +730,7 @@
     try {
       const res = await fetch(API("publish"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: storeHeaders(),
         body: JSON.stringify({
           platform: draft.platform,
           storeIndex,
@@ -577,6 +741,8 @@
             code: draft.code,
             brand: draft.brand,
             categoryId: draft.categoryId,
+            typeId: draft.typeId || 0,
+            descriptionCategoryId: draft.descriptionCategoryId || 0,
             price: draft.price,
             oldPrice: draft.oldPrice,
             weight: draft.weight,
@@ -638,30 +804,29 @@
   function renderAll() {
     fillStep2Form();
     fillStep3Form();
-    renderCategoryList();
+    renderCascade();
     renderDraftList();
     goToStep(draft.step || 1);
   }
 
   // ---- 事件绑定 ----
   function bindEvents() {
-    $("lst_platform")?.addEventListener("change", (e) => { draft.platform = e.target.value; refreshStores(); });
-    $("lst_storeIndex")?.addEventListener("change", (e) => { draft.storeIndex = Number(e.target.value); });
-    $("lst_fetchCategory")?.addEventListener("click", fetchCategories);
-    $("lst_catSearch")?.addEventListener("input", renderCategoryList);
+    $("lst_platform")?.addEventListener("change", (e) => { draft.platform = e.target.value; draft.storeIndex = 0; refreshStores(); });
+    $("lst_storeIndex")?.addEventListener("change", (e) => { draft.storeIndex = Number(e.target.value); autoLoadCategories(); });
+    $("lst_refreshCat")?.addEventListener("click", () => {
+      // 清空当前平台缓存后重新抓取
+      const cache = loadCatCacheAll();
+      if (cache[draft.platform]) { delete cache[draft.platform]; saveCatCacheAll(cache); }
+      fetchCategories();
+    });
 
+    // 三级级联类目点击(事件委托)
     $("lst_catList")?.addEventListener("click", (e) => {
-      const row = e.target.closest("[data-cat-id]");
-      if (!row) return;
-      const id = row.getAttribute("data-cat-id");
-      const cat = categoryCache.find((c) => String(c.id) === String(id));
-      if (cat) {
-        draft.categoryId = cat.id;
-        draft.categoryName = cat.name;
-        draft.categoryNameZh = cat.nameZh || cat.name;
-        renderCategoryList();
-        persistDraft();
-      }
+      const item = e.target.closest("[data-cascade-id]");
+      if (!item) return;
+      const level = Number(item.getAttribute("data-cascade-level"));
+      const id = item.getAttribute("data-cascade-id");
+      onCascadeClick(level, id);
     });
 
     $("lst_toStep2")?.addEventListener("click", () => {

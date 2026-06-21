@@ -31,7 +31,7 @@ function json(body, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type,x-store-platform,x-store-name,x-store-client-id,x-store-secret,x-store-api-key,x-store-token",
     },
   });
 }
@@ -93,6 +93,28 @@ function storeList(env) {
     ...ozonStores(env).map((s, i) => ({ index: i, platform: "Ozon", name: s.name })),
     ...wbStores(env).map((s, i) => ({ index: i + 100, platform: "WB", name: s.name })),
   ];
+}
+
+// 解析店铺凭证:优先使用请求 header 里前端传入的(localStorage 手动添加的店铺),
+// 找不到再按 storeIndex 回退到环境变量配置。platform: "Ozon" | "WB"。
+function resolveStore(env, headers, platform, storeIndex) {
+  const pf = String(platform || "Ozon").toLowerCase();
+  const hPlatform = String(headers.get("x-store-platform") || "").toLowerCase();
+  const hClientId = headers.get("x-store-client-id");
+  const hSecret = headers.get("x-store-secret") || headers.get("x-store-api-key") || headers.get("x-store-token");
+  // header 带了凭证就用它(支持前端把 localStorage 店铺直接传过来)
+  if (hClientId && hSecret && (hPlatform === pf || !hPlatform)) {
+    return pf === "wb"
+      ? { name: headers.get("x-store-name") || "WB 店铺", token: hSecret }
+      : { name: headers.get("x-store-name") || "Ozon 店铺", clientId: hClientId, apiKey: hSecret };
+  }
+  // 否则回退到环境变量
+  if (pf === "wb") {
+    const stores = wbStores(env);
+    return stores[storeIndex] || stores[0] || null;
+  }
+  const stores = ozonStores(env);
+  return stores[storeIndex] || stores[0] || null;
 }
 
 // ---------- 类目抓取 ----------
@@ -212,7 +234,7 @@ async function translateBatch(env, texts) {
   return map;
 }
 
-async function getCategories(env, searchParams) {
+async function getCategories(env, searchParams, headers = {}) {
   const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
   const storeIndex = Number(searchParams.get("storeIndex") || "0");
   const translate = searchParams.get("translate") !== "0";
@@ -220,16 +242,13 @@ async function getCategories(env, searchParams) {
   let raw = [];
   let storeName = "";
   let nativeChinese = false;
+  const store = resolveStore(env, headers, platform, storeIndex);
   if (platform === "wb") {
-    const stores = wbStores(env);
-    const store = stores[storeIndex] || stores[0];
-    if (!store) return { ok: false, error: "未配置 WB 店铺 Token,请在 Cloudflare 环境变量配置 WB_API_TOKEN", categories: [] };
+    if (!store) return { ok: false, error: "未配置 WB 店铺,请在「店铺设置」添加,或在环境变量配置 WB_API_TOKEN", categories: [] };
     storeName = store.name;
     raw = await fetchWBCategories(store);
   } else {
-    const stores = ozonStores(env);
-    const store = stores[storeIndex] || stores[0];
-    if (!store) return { ok: false, error: "未配置 Ozon 店铺,请在 Cloudflare 环境变量配置 OZON_STORE_1_CLIENT_ID / API_KEY", categories: [] };
+    if (!store) return { ok: false, error: "未配置 Ozon 店铺,请在「店铺设置」添加,或在环境变量配置 OZON_STORE_1_CLIENT_ID / API_KEY", categories: [] };
     storeName = store.name;
     // /v1/description-category/tree 原生支持 ZH_HANS,直接返回中文,无需 OpenAI
     raw = await fetchOzonCategoryTree(store, "ZH_HANS");
@@ -491,21 +510,18 @@ async function publishWBProduct(env, store, draft) {
   return { ok: !payload?.error, raw: payload };
 }
 
-async function publish(env, body) {
+async function publish(env, body, headers = {}) {
   const platform = String(body?.platform || "Ozon").toLowerCase();
   const storeIndex = Number(body?.storeIndex || "0");
   const draft = body?.draft || {};
   if (!draft.title) return { ok: false, error: "缺少标题" };
   if (!Array.isArray(draft.images) || !draft.images.length) return { ok: false, error: "至少需要 1 张图片" };
 
+  const store = resolveStore(env, headers, platform, storeIndex);
   if (platform === "wb") {
-    const stores = wbStores(env);
-    const store = stores[storeIndex] || stores[0];
-    if (!store) return { ok: false, error: "未配置 WB Token" };
+    if (!store) return { ok: false, error: "未配置 WB 店铺" };
     return await publishWBProduct(env, store, draft);
   }
-  const stores = ozonStores(env);
-  const store = stores[storeIndex] || stores[0];
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
   // 前端存的 categoryId 可能是 "cat-123" / "type-456" / 纯数字。
   // 新版 Ozon 发布需要 description_category_id + type_id,这里做兼容解析。
@@ -540,7 +556,7 @@ export async function onRequest(context) {
         openaiTextModel: env.OPENAI_TEXT_MODEL || DEFAULT_TEXT_MODEL,
       });
     }
-    if (path === "categories") return json(await getCategories(env, url.searchParams));
+    if (path === "categories") return json(await getCategories(env, url.searchParams, request.headers));
     if (path === "stores") return json({ ok: true, stores: storeList(env) });
     if (path === "generate-images") {
       const body = await request.json().catch(() => ({}));
@@ -552,7 +568,7 @@ export async function onRequest(context) {
     }
     if (path === "publish") {
       const body = await request.json().catch(() => ({}));
-      return json(await publish(env, body));
+      return json(await publish(env, body, request.headers));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
