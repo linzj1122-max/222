@@ -3190,15 +3190,21 @@ const initialProducts = [
 
     // 每天调用一次后端 /api/precache,预热订单+店铺分析缓存(今天/7天/28天/本月/上月)
     // 记录上次调用的莫斯科日期,同一天内不重复调用
+    // 首次(或版本升级后)带 clean=1 清空旧坏缓存再预热
     async function precacheOrdersDaily() {
       try {
         const lastKey = "ozon_wb_precache_orders_day";
+        const cleanVerKey = "ozon_wb_precache_clean_ver";
         const boundary = mskFetchBoundaryDate();
         if (localStorage.getItem(lastKey) === boundary) return;   // 今天已预热过
         localStorage.setItem(lastKey, boundary);
-        const res = await fetch("/api/precache");
+        // clean=1 仅在版本号变化时触发一次,清掉早期 bug 存的坏缓存
+        const needClean = localStorage.getItem(cleanVerKey) !== "v2";
+        if (needClean) localStorage.setItem(cleanVerKey, "v2");
+        const url = needClean ? "/api/precache?clean=1" : "/api/precache";
+        const res = await fetch(url);
         const data = await res.json();
-        if (data.ok) console.log("[precache] 订单预热完成:", data.results);
+        if (data.ok) console.log("[precache] 订单预热完成:", data.results, needClean ? "(已清旧缓存)" : "");
       } catch (e) {
         console.warn("[precache] 预热失败:", e.message);
       }

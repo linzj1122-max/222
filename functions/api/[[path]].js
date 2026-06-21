@@ -427,6 +427,32 @@ async function fetchStoreAnalytics(env, from, to) {
   return rows;
 }
 
+// 清空所有订单/店铺分析的旧缓存(包括早期 withCache bug 存的坏数据)
+// 用 KV list 遍历,删除 data:orders:* 和 data:store:* 开头的 key
+async function cleanStaleDataCache(env) {
+  if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
+  const deleted = { orders: 0, store: 0, total: 0 };
+  const prefixes = ["data:orders:", "data:store:"];
+  try {
+    let cursor;
+    do {
+      const listResult = await env.LISTING_CACHE.list({ cursor });
+      cursor = listResult.list_complete ? null : listResult.cursor;
+      const keys = (listResult.keys || []).map((k) => k.name);
+      const toDelete = keys.filter((k) => prefixes.some((p) => k.startsWith(p)));
+      for (const k of toDelete) {
+        await env.LISTING_CACHE.delete(k);
+        if (k.startsWith("data:orders:")) deleted.orders++;
+        if (k.startsWith("data:store:")) deleted.store++;
+        deleted.total++;
+      }
+    } while (cursor);
+  } catch (e) {
+    return { error: e.message || String(e), deleted };
+  }
+  return deleted;
+}
+
 // 预热缓存:抓取常见日期范围的订单+店铺分析,写入 KV。
 // 范围:今天 / 7天 / 28天 / 本月 / 上月(均按莫斯科时间)。
 // 只缓存非空结果,避免把拉取失败缓存住。
@@ -1458,9 +1484,16 @@ export async function onRequest(context) {
     }
     // 定时预热缓存:抓取常见范围(今天/7天/28天/本月/上月)的订单+分析,写入 KV。
     // 前端打开页面时后台静默调用一次;也可配外部 cron 定时调用。
+    // ?clean=1 时先清空所有旧缓存再预热(用于修复历史坏缓存)
     if (path === "precache") {
+      const cleaned = url.searchParams.get("clean") === "1" ? await cleanStaleDataCache(env) : null;
       const results = await precacheCommonRanges(env);
-      return json({ ok: true, results, ts: Date.now() });
+      return json({ ok: true, results, cleaned, ts: Date.now() });
+    }
+    // 单独清空所有订单/分析缓存(不带预热)
+    if (path === "precache/clean") {
+      const cleaned = await cleanStaleDataCache(env);
+      return json({ ok: true, cleaned, ts: Date.now() });
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
