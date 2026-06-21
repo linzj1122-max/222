@@ -528,6 +528,7 @@ async function probeAnalyticsMetrics(env, from, to) {
   const store = ozonStores(env)[0];
   if (!store) return { error: "未配置店铺" };
   // 候选指标:Ozon /v1/analytics/data 支持的所有流量相关指标
+  // 重点测 united_* 系列(会员专属指标,对应后台「唯一身份访问者」等)
   const candidates = [
     "revenue", "ordered_units",
     "session_view", "session_position_category", "session_position_cart",
@@ -535,35 +536,54 @@ async function probeAnalyticsMetrics(env, from, to) {
     "hits_tocart", "hits_tocart_search", "hits_tocart_pdp", "hits_tocart_catalog",
     "conv_tocart", "conv_tocart_search", "conv_tocart_pdp", "conv_tocart_catalog",
     "returns", "cancellations",
-    "united_impressions", "united_clicks",
+    // 会员专属 united_* 系列(对应后台「唯一身份访问者」「转化率」等)
+    "united_impressions", "united_clicks", "united_sessions",
+    "united_session_view", "united_session_cart", "united_session_purchase",
+    "united_hits_view", "united_hits_view_pdp", "united_hits_view_search", "united_hits_view_catalog",
+    "united_hits_tocart", "united_hits_tocart_pdp", "united_hits_tocart_search", "united_hits_tocart_catalog",
+    "united_conv_tocart", "united_conv_tocart_pdp", "united_conv_tocart_search", "united_conv_tocart_catalog",
+    // position 系列(对应「搜索和目录中的位置」)
+    "position_category", "position_cart",
+    // 其他可能
+    "price", "discount_percent",
   ];
-  const dimensions = [["sku"], ["day"], []];   // 测试三种维度
+  const dimensions = [["sku"], ["day"]];   // 测试两种维度(无维度会报错)
   const result = { store: store.name, from, to, dimensions: {} };
+  // Ozon API 会因一个无效指标名拒绝整个请求,所以逐个指标单独测试
+  // 用 [revenue, 候选指标] 两两测试,revenue 作为基准(已知有效)
   for (const dim of dimensions) {
-    const dimKey = dim.length ? dim.join("+") : "none(店铺总览)";
-    try {
-      const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
-        method: "POST",
-        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-        body: JSON.stringify({ date_from: from, date_to: to, metrics: candidates, dimension: dim, filters: [], limit: 5, offset: 0 }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        result.dimensions[dimKey] = { error: `${response.status}`, detail: String(payload.message || payload.error || "").slice(0, 200) };
-        continue;
+    const dimKey = dim.join("+");
+    const found = [];
+    const errors = [];
+    for (const metric of candidates) {
+      try {
+        const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+          method: "POST",
+          headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+          body: JSON.stringify({ date_from: from, date_to: to, metrics: [metric], dimension: dim, filters: [], limit: 5, offset: 0 }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          errors.push({ metric, error: `${response.status}`, detail: String(payload.message || payload.error || "").slice(0, 120) });
+          continue;
+        }
+        // 汇总该指标
+        let total = 0;
+        for (const row of (payload.result?.data || [])) {
+          total += amount((row.metrics || [])[0]);
+        }
+        found.push({ metric, value: total, nonzero: total > 0 });
+      } catch (e) {
+        errors.push({ metric, error: e.message || String(e) });
       }
-      const data = payload.result?.data || [];
-      // 汇总每个指标的总和,找出非0的
-      const totals = {};
-      for (const m of candidates) totals[m] = 0;
-      for (const row of data) {
-        (row.metrics || []).forEach((val, i) => { totals[candidates[i]] += amount(val); });
-      }
-      const nonzero = Object.entries(totals).filter(([_, v]) => v > 0).map(([k, v]) => ({ metric: k, value: v }));
-      result.dimensions[dimKey] = { rowCount: data.length, nonzero, allTotals: totals };
-    } catch (e) {
-      result.dimensions[dimKey] = { error: e.message || String(e) };
     }
+    result.dimensions[dimKey] = {
+      // 只列非0的(有真实数据的)
+      nonzeroMetrics: found.filter((f) => f.nonzero).map((f) => ({ metric: f.metric, value: f.value })),
+      // 所有有效指标(无论是否为0)
+      validMetrics: found.map((f) => f.metric),
+      invalidMetrics: errors.map((e) => ({ metric: e.metric, error: e.error })),
+    };
   }
   return result;
 }
