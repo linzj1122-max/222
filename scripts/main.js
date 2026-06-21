@@ -158,10 +158,6 @@ const initialProducts = [
     let adCompareEnabled = true;
     let chartConfig = { unit: "rub" };
     let chartStore = "all";
-    // 趋势图拥有独立的时间段状态，便于与经营汇总范围解耦联动
-    let chartDateFrom = orderDateFrom;
-    let chartDateTo = orderDateTo;
-    let chartCalendarCursor = new Date(`${chartDateFrom}T00:00:00`);
     let pendingChartDateAnchor = null;
     // 记录最近一次时间选择的来源："summary" 或 "chart"，用于联动时另一边变暗
     let lastRangeSource = "summary";
@@ -170,6 +166,10 @@ const initialProducts = [
     let storeOverviewGroup = "all";
     let orderDateFrom = addDays(todayIso(), -28);
     let orderDateTo = addDays(todayIso(), -1);
+    // 趋势图拥有独立的时间段状态，便于与经营汇总范围解耦联动
+    let chartDateFrom = orderDateFrom;
+    let chartDateTo = orderDateTo;
+    let chartCalendarCursor = new Date(`${chartDateFrom}T00:00:00`);
     let calendarCursor = new Date(`${orderDateFrom}T00:00:00`);
     let pickingDateField = "from";
     let pendingOrderDateAnchor = null;
@@ -730,6 +730,20 @@ const initialProducts = [
       });
     }
 
+    function renderChartControls() {
+      const select = $("chartStoreSelect");
+      if (select) {
+        const stores = [...new Set([...orders, ...trendOrders].map((order) => order.store).filter(Boolean))].sort();
+        const nextHtml = [`<option value="all">全部店铺</option>`, ...stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`)].join("");
+        if (select.innerHTML !== nextHtml) select.innerHTML = nextHtml;
+        if (!stores.includes(chartStore) && chartStore !== "all") chartStore = "all";
+        select.value = chartStore;
+      }
+      updateChartMenuText();
+      syncChartRangePills();
+      syncSummaryRangePills();
+    }
+
     function renderAll() {
       normalizeCompetitorRecords();
       renderProductSelects();
@@ -738,6 +752,7 @@ const initialProducts = [
       renderDashboard();
       renderStoreOverview();
       renderStoreOverviewControls();
+      renderChartControls();
       renderAds();
       renderCompetitors();
       renderCompetitorProfit();
@@ -1792,14 +1807,24 @@ const initialProducts = [
     }
 
     function updateChartMenuText() {
-      const unitText = chartConfig.unit === "count" ? "件" : "卢布";
-      $("chartTitle").textContent = chartConfig.unit === "count" ? "订购商品数量" : "每日销量与销售额走势";
-      $("chartMenuButton").textContent = `以${unitText}为单位 周期为${chartConfig.periodLabel}⌄`;
+      const useCount = chartConfig.unit === "count";
+      $("chartTitle").textContent = useCount ? "每日订购商品数量走势" : "每日销量与销售额走势";
+      document.querySelectorAll("[data-chart-unit]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.chartUnit === chartConfig.unit);
+      });
+      if ($("chartDateRangeButton")) $("chartDateRangeButton").textContent = `${chartDateFrom} - ${chartDateTo}`;
+      if ($("chartDateFromDisplay")) $("chartDateFromDisplay").textContent = chartDateFrom.replaceAll("-", "/");
+      if ($("chartDateToDisplay")) $("chartDateToDisplay").textContent = chartDateTo.replaceAll("-", "/");
+      if ($("chartDateFrom")) $("chartDateFrom").value = chartDateFrom;
+      if ($("chartDateTo")) $("chartDateTo").value = chartDateTo;
+      renderChartCalendar();
     }
     async function reloadOrdersForRange(from, to) {
       if (from > to) [from, to] = [to, from];
       orderDateFrom = from;
       orderDateTo = to;
+      chartDateFrom = from;
+      chartDateTo = to;
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();
@@ -1820,11 +1845,100 @@ const initialProducts = [
       if (from === `${d.getFullYear()}-01-01` && to === yesterday) return "year";
       return "";
     }
+    // 经营汇总范围与趋势图共用同一时间段；lastRangeSource 决定哪一侧高亮，另一侧变暗
     function syncSummaryRangePills() {
-      const value = summaryRangeFromDates(orderDateFrom, orderDateTo);
+      const active = lastRangeSource === "summary";
+      const value = active ? summaryRangeFromDates(orderDateFrom, orderDateTo) : "";
       document.querySelectorAll("[data-summary-range]").forEach((item) => {
-        item.classList.toggle("active", item.dataset.summaryRange === value);
+        item.classList.toggle("active", active && item.dataset.summaryRange === value);
+        item.classList.toggle("dim", !active);
       });
+    }
+    function syncChartRangePills() {
+      const active = lastRangeSource === "chart";
+      const value = active ? summaryRangeFromDates(chartDateFrom, chartDateTo) : "";
+      document.querySelectorAll("[data-chart-picker-range]").forEach((item) => {
+        item.classList.toggle("active", active && item.dataset.chartPickerRange === value);
+        item.classList.toggle("dim", !active);
+      });
+    }
+
+    function renderChartCalendar() {
+      const box = $("chartCalendar");
+      if (!box) return;
+      const base = new Date(chartCalendarCursor.getFullYear(), chartCalendarCursor.getMonth(), 1);
+      const months = [0, 1].map((offset) => new Date(base.getFullYear(), base.getMonth() + offset, 1));
+      if ($("chartCalendarTitle")) $("chartCalendarTitle").textContent = `${monthLabel(months[0])} - ${monthLabel(months[1])}`;
+      const weeks = ["一", "二", "三", "四", "五", "六", "日"];
+      const rangeFrom = chartDateFrom <= chartDateTo ? chartDateFrom : chartDateTo;
+      const rangeTo = chartDateFrom <= chartDateTo ? chartDateTo : chartDateFrom;
+      box.innerHTML = months.map((month) => {
+        const first = new Date(month.getFullYear(), month.getMonth(), 1);
+        const startOffset = (first.getDay() + 6) % 7;
+        const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+        const days = [];
+        for (let i = 0; i < startOffset; i += 1) days.push(`<span class="calendar-empty"></span>`);
+        for (let date = 1; date <= daysInMonth; date += 1) {
+          const day = new Date(month.getFullYear(), month.getMonth(), date);
+          const iso = localIso(day);
+          const classes = [
+            "calendar-day",
+            iso === todayIso() ? "today" : "",
+            iso === rangeFrom || iso === rangeTo || iso === pendingChartDateAnchor ? "selected" : "",
+            iso > rangeFrom && iso < rangeTo ? "in-range" : "",
+          ].filter(Boolean).join(" ");
+          days.push(`<button type="button" class="${classes}" data-chart-date="${iso}">${day.getDate()}</button>`);
+        }
+        return `<div class="calendar-month">
+          <div class="calendar-title">${monthLabel(month)}</div>
+          <div class="calendar-week">${weeks.map((w) => `<span>${w}</span>`).join("")}</div>
+          <div class="calendar-days">${days.join("")}</div>
+        </div>`;
+      }).join("");
+    }
+    async function setChartDate(value) {
+      if (!pendingChartDateAnchor) {
+        pendingChartDateAnchor = value;
+        chartDateFrom = value;
+        chartDateTo = value;
+        lastRangeSource = "chart";
+        updateChartMenuText();
+        syncChartRangePills();
+        syncSummaryRangePills();
+        drawRevenueChart();
+        return;
+      }
+      const sorted = [pendingChartDateAnchor, value].sort();
+      pendingChartDateAnchor = null;
+      $("chartDateRangePanel")?.classList.remove("open");
+      lastRangeSource = "chart";
+      await reloadOrdersForRange(sorted[0], sorted[1]);
+    }
+    async function applyChartQuickRange(value) {
+      const today = todayIso();
+      const yesterday = addDays(today, -1);
+      pendingChartDateAnchor = null;
+      if (value === "today") {
+        chartDateFrom = today;
+        chartDateTo = today;
+      } else if (value === "yesterday") {
+        chartDateFrom = yesterday;
+        chartDateTo = yesterday;
+      } else if (value === "quarter") {
+        const d = new Date(`${today}T00:00:00`);
+        const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
+        chartDateFrom = localIso(new Date(d.getFullYear(), quarterStartMonth, 1));
+        chartDateTo = yesterday;
+      } else if (value === "year") {
+        chartDateFrom = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
+        chartDateTo = yesterday;
+      } else {
+        chartDateFrom = addDays(today, -Number(value));
+        chartDateTo = yesterday;
+      }
+      $("chartDateRangePanel")?.classList.remove("open");
+      lastRangeSource = "chart";
+      await reloadOrdersForRange(chartDateFrom, chartDateTo);
     }
 
     async function applySummaryRange(value) {
@@ -1847,15 +1961,17 @@ const initialProducts = [
         from = `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`;
         to = yesterday;
       }
+      lastRangeSource = "summary";
       await reloadOrdersForRange(from, to);
     }
 
-    $("chartMenuButton").addEventListener("click", () => {
-      $("chartMenu").classList.toggle("open");
-    });
-
     document.addEventListener("click", (event) => {
-      if (!event.target.closest(".chart-select")) $("chartMenu").classList.remove("open");
+      const chartPicker = event.target.closest("#chartDateRangeButton, #chartDateRangePanel");
+      if (!chartPicker && $("chartDateRangePanel")?.classList.contains("open")) {
+        $("chartDateRangePanel").classList.remove("open");
+        pendingChartDateAnchor = null;
+        renderChartCalendar();
+      }
       const orderPicker = event.target.closest("#orderDateRangeButton, #orderDateRangePanel");
       if (!orderPicker && $("orderDateRangePanel")?.classList.contains("open")) {
         $("orderDateRangePanel").classList.remove("open");
@@ -1870,40 +1986,31 @@ const initialProducts = [
       }
     });
 
-    document.querySelectorAll(".menu-option").forEach((option) => {
-      option.addEventListener("click", () => {
-        const key = option.dataset.config;
-        const value = option.dataset.value;
-        if (key === "period") {
-          chartConfig.period = Number(value);
-          chartConfig.periodLabel = option.dataset.label || option.textContent.trim();
-        } else {
-          chartConfig[key] = value;
-        }
-        document.querySelectorAll(`.menu-option[data-config="${key}"]`).forEach((item) => item.classList.remove("active"));
-        option.classList.add("active");
+    document.querySelectorAll("[data-chart-unit]").forEach((button) => {
+      button.addEventListener("click", () => {
+        chartConfig.unit = button.dataset.chartUnit;
+        activeChartIndex = null;
         updateChartMenuText();
         drawRevenueChart();
       });
     });
-    document.querySelectorAll("[data-chart-period]").forEach((button) => {
-      button.addEventListener("click", () => {
-        chartConfig.period = Number(button.dataset.chartPeriod);
-        chartConfig.periodLabel = `${chartConfig.period}天`;
-        document.querySelectorAll("[data-chart-period]").forEach((item) => item.classList.remove("active"));
-        button.classList.add("active");
-        document.querySelectorAll(`.menu-option[data-config="period"]`).forEach((item) => {
-          item.classList.toggle("active", Number(item.dataset.value) === chartConfig.period);
-        });
-        updateChartMenuText();
-        activeChartIndex = null;
-        drawRevenueChart();
+    document.querySelectorAll("[data-chart-picker-range]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        button.textContent = "抓取中...";
+        button.disabled = true;
+        try {
+          await applyChartQuickRange(button.dataset.chartPickerRange);
+        } catch (error) {
+          alert(error.message);
+        } finally {
+          const labels = { today: "今天", yesterday: "昨天", "7": "最近 7 天", "28": "最近 28 天", quarter: "本季度", year: "本年" };
+          button.textContent = labels[button.dataset.chartPickerRange] || "范围";
+          button.disabled = false;
+        }
       });
     });
     document.querySelectorAll("[data-summary-range]").forEach((button) => {
       button.addEventListener("click", async () => {
-        document.querySelectorAll("[data-summary-range]").forEach((item) => item.classList.remove("active"));
-        button.classList.add("active");
         button.textContent = "抓取中...";
         button.disabled = true;
         try {
@@ -1941,9 +2048,9 @@ const initialProducts = [
       }
       tooltip.innerHTML = `
         <strong>${hit.date}</strong><br>
-        今日销售额：${hit.formatSales(hit.revenue)}<br>
-        7天前销售额：${hit.formatSales(hit.previous)}<br>
-        今日订单数：${hit.formatOrders(hit.orders)}<br>
+        本期：${hit.formatSales(hit.primary)}<br>
+        上个周期：${hit.formatSales(hit.previous)}<br>
+        订单数：${hit.formatOrders(hit.orders)}<br>
         涨跌：<span style="color:${hit.change === null ? "#fde68a" : hit.change >= 0 ? "#ffd6d2" : "#d6f7df"}">${hit.changeLabel}</span>
       `;
       tooltip.style.display = "block";
@@ -2885,6 +2992,29 @@ const initialProducts = [
       if (!button) return;
       setOrderDate(button.dataset.date).catch((error) => alert(error.message));
     });
+    $("chartDateRangeButton")?.addEventListener("click", () => {
+      $("chartDateRangePanel")?.classList.toggle("open");
+      renderChartCalendar();
+    });
+    $("chartCalendarPrev")?.addEventListener("click", () => {
+      chartCalendarCursor = new Date(chartCalendarCursor.getFullYear(), chartCalendarCursor.getMonth() - 1, 1);
+      renderChartCalendar();
+    });
+    $("chartCalendarNext")?.addEventListener("click", () => {
+      chartCalendarCursor = new Date(chartCalendarCursor.getFullYear(), chartCalendarCursor.getMonth() + 1, 1);
+      renderChartCalendar();
+    });
+    $("chartCalendar")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-chart-date]");
+      if (!button) return;
+      event.stopPropagation();
+      setChartDate(button.dataset.chartDate).catch((error) => alert(error.message));
+    });
+    $("chartStoreSelect")?.addEventListener("change", (event) => {
+      chartStore = event.target.value;
+      activeChartIndex = null;
+      drawRevenueChart();
+    });
     document.querySelectorAll("[data-range]").forEach((button) => {
       button.addEventListener("click", async () => {
         const value = button.dataset.range;
@@ -3050,8 +3180,6 @@ const initialProducts = [
       }
       initCostScope();
       resetCostForm();
-      updateChartMenuText();
-      syncSummaryRangePills();
       renderAll();
       if (backendEnabled) autoRefreshAds();
       // 页面加载后静默预缓存28天广告数据（每日一次）

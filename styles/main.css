@@ -1440,6 +1440,17 @@ button:disabled {
     var(--bg-2);
 }
 
+/* 趋势图日期筛选器：面板靠右展开 */
+.chart-date-picker .date-range-panel { right: 0; }
+.chart-date-picker .date-range-button { min-width: 220px; }
+/* 联动变暗：未被选中来源的范围按钮降低视觉权重 */
+.range-pills button.dim,
+.quick-ranges button.dim,
+[data-summary-range].dim {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+}
+
 /* ========== 其他小细节 ========== */
 h1, h2, h3 { margin: 0; letter-spacing: 0; }
 .hint { color: var(--ink-3); line-height: 1.6; font-size: 13px; margin: 8px 0 0; }
