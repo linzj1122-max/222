@@ -1868,10 +1868,13 @@ const initialProducts = [
       chartDateTo = to;
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
-      updateOrderDateButton();
-      renderCalendar();
+      // 加载期间显示「加载中」,避免旧数据先闪现一次
+      if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在加载 ${from} 至 ${to} 的数据,请稍候…`;
+      // 先拉数据,再统一渲染,避免「旧数据先闪现一次再变正确」的观感问题
       await loadBackendOrders();
       await loadStoreAnalytics();
+      updateOrderDateButton();
+      renderCalendar();
       renderAll();
     }
     function summaryRangeFromDates(from, to) {
