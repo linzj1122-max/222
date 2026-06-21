@@ -382,14 +382,33 @@ const initialProducts = [
     }
 
     let adsAutoRefreshing = false;
+    function adsRowsCoverRange(from, to) {
+      for (const cacheKey of Object.keys(adsRowsCache)) {
+        const [cFrom, cTo] = cacheKey.split("|");
+        if (cFrom <= from && cTo >= to) return { rows: adsRowsCache[cacheKey].rows || [], status: adsRowsCache[cacheKey].status || [] };
+      }
+      if (backendAds.length) {
+        return { rows: backendAds, status: adsStatusRows };
+      }
+      return null;
+    }
     async function autoRefreshAds() {
       if (!backendEnabled || adsAutoRefreshing) return;
       adsAutoRefreshing = true;
       try {
         const key = `${adDateFrom}|${adDateTo}`;
-        if (adsRowsCache[key]?.rows?.length && backendAds.length === 0) {
-          backendAds = adsRowsCache[key].rows;
+        if (adsRowsCache[key]) {
+          backendAds = adsRowsCache[key].rows || [];
           adsStatusRows = adsRowsCache[key].status || [];
+          renderAds();
+          return;
+        }
+        const covered = adsRowsCoverRange(adDateFrom, adDateTo);
+        if (covered?.rows?.length) {
+          backendAds = covered.rows;
+          adsStatusRows = covered.status;
+          renderAds();
+          return;
         }
         renderAds();
         await loadBackendAds({ forceCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
@@ -1036,7 +1055,6 @@ const initialProducts = [
 
     function adRowsForRange(from = adDateFrom, to = adDateTo) {
       return baseAdRows().filter((row) => {
-        if (row.source === "api") return true;
         return dateInRange(row.date || row.dateTo, from, to);
       });
     }
@@ -1175,14 +1193,6 @@ const initialProducts = [
             adDateTo = today;
             adDateFrom = addDays(adDateTo, -(Number(value || 28) - 1));
           }
-          const key = `${adDateFrom}|${adDateTo}`;
-          if (adsRowsCache[key]) {
-            backendAds = adsRowsCache[key].rows || [];
-            adsStatusRows = adsRowsCache[key].status || [];
-          } else {
-            backendAds = [];
-            adsStatusRows = [];
-          }
           $("adDateRangePanel")?.classList.remove("open");
           updateAdDateInputs();
           renderAds();
@@ -1196,14 +1206,6 @@ const initialProducts = [
         pendingAdDateAnchor = value;
         adDateFrom = value;
         adDateTo = value;
-        const key = `${adDateFrom}|${adDateTo}`;
-        if (adsRowsCache[key]) {
-          backendAds = adsRowsCache[key].rows || [];
-          adsStatusRows = adsRowsCache[key].status || [];
-        } else {
-          backendAds = [];
-          adsStatusRows = [];
-        }
         updateAdDateInputs();
         renderAds();
         await autoRefreshAds();
@@ -1213,14 +1215,6 @@ const initialProducts = [
       pendingAdDateAnchor = null;
       adDateFrom = sorted[0];
       adDateTo = sorted[1];
-      const key = `${adDateFrom}|${adDateTo}`;
-      if (adsRowsCache[key]) {
-        backendAds = adsRowsCache[key].rows || [];
-        adsStatusRows = adsRowsCache[key].status || [];
-      } else {
-        backendAds = [];
-        adsStatusRows = [];
-      }
       updateAdDateInputs();
       renderAds();
       await autoRefreshAds();
@@ -1946,14 +1940,6 @@ const initialProducts = [
         const days = Number(button.dataset.adRange || 28);
         adDateTo = adsTodayIso();
         adDateFrom = addDays(adDateTo, -(days - 1));
-        const key = `${adDateFrom}|${adDateTo}`;
-        if (adsRowsCache[key]) {
-          backendAds = adsRowsCache[key].rows || [];
-          adsStatusRows = adsRowsCache[key].status || [];
-        } else {
-          backendAds = [];
-          adsStatusRows = [];
-        }
         updateAdDateInputs();
         renderAds();
         await autoRefreshAds();
