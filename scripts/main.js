@@ -389,23 +389,37 @@ const initialProducts = [
       const entryFetchDate = entry.fetchDate || "";
       return entryFetchDate !== mskFetchBoundaryDate();
     };
-    // 判断 trendOrders(累积全部历史订单)是否已覆盖目标范围[from,to]
-    // 覆盖 = 已有订单的最早日期 <= from 且已有订单的最晚日期 >= to
-    // 这样选子范围(如6-10~6-15)时,只要抓过更大的范围,就能本地秒出,不用再请求
+    // 判断是否已覆盖目标范围[from,to],两种来源:
+    // 1) trendOrders:累积全部历史订单(按订单实际日期判断边界)
+    // 2) orderRangeCache:已缓存的范围(边界更可靠,不受某天没订单影响)
+    // 任一来源覆盖即返回 true,这样选子范围(如6-4~6-11)能本地秒出
     const trendOrdersCoversRange = (from, to) => {
-      if (!Array.isArray(trendOrders) || !trendOrders.length) return false;
       if (!from || !to) return false;
       if (to >= todayIso()) return false;   // 包含今天的范围不本地筛(要实时)
+      // 来源1:trendOrders 按订单日期判断
       let minDate = "9999", maxDate = "0000";
-      for (const o of trendOrders) {
-        const d = String(o.date || "");
-        if (!d) continue;
-        if (d < minDate) minDate = d;
-        if (d > maxDate) maxDate = d;
+      if (Array.isArray(trendOrders) && trendOrders.length) {
+        for (const o of trendOrders) {
+          const d = String(o.date || "");
+          if (!d) continue;
+          if (d < minDate) minDate = d;
+          if (d > maxDate) maxDate = d;
+        }
+        if (minDate <= from && maxDate >= to) return true;
       }
-      const covered = minDate <= from && maxDate >= to;
-      if (!covered) console.log("[trendCover] 未覆盖:", { from, to, minDate, maxDate, today: todayIso() });
-      return covered;
+      // 来源2:orderRangeCache 的范围边界(更可靠,不受某天没订单影响)
+      // rangeCacheKey 格式: orders-v2|from|to,反解出 from/to
+      for (const k of Object.keys(orderRangeCache)) {
+        const parts = k.split("|");
+        if (parts.length < 3) continue;
+        const cf = parts[1], ct = parts[2];
+        const entry = orderRangeCache[k];
+        if (entry && Array.isArray(entry.orders) && entry.orders.length > 0 && cf <= from && ct >= to) {
+          return true;
+        }
+      }
+      console.log("[trendCover] 未覆盖:", { from, to, trendMin: minDate, trendMax: maxDate, today: todayIso(), cachedRanges: Object.keys(orderRangeCache) });
+      return false;
     };
     // 从 trendOrders 本地筛选指定范围(避免重复请求)
     const ordersFromTrend = (from, to) => {
