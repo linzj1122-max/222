@@ -431,8 +431,8 @@ async function fetchStoreAnalytics(env, from, to) {
 // 用 KV list 遍历,删除 data:orders:* 和 data:store:* 开头的 key
 async function cleanStaleDataCache(env) {
   if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
-  const deleted = { orders: 0, store: 0, total: 0 };
-  const prefixes = ["data:orders:", "data:store:"];
+  const deleted = { orders: 0, store: 0, daily: 0, total: 0 };
+  const prefixes = ["data:orders:", "data:store:", "data:daily:", "data:products:"];
   try {
     let cursor;
     do {
@@ -443,7 +443,8 @@ async function cleanStaleDataCache(env) {
       for (const k of toDelete) {
         await env.LISTING_CACHE.delete(k);
         if (k.startsWith("data:orders:")) deleted.orders++;
-        if (k.startsWith("data:store:")) deleted.store++;
+        else if (k.startsWith("data:store:")) deleted.store++;
+        else if (k.startsWith("data:daily:")) deleted.daily++;
         deleted.total++;
       }
     } while (cursor);
@@ -491,13 +492,13 @@ async function precacheCommonRanges(env) {
       if (r.cacheable && Array.isArray(orders) && orders.length > 0) {
         await kvPutData(env, ordersKey, orders, 7 * 24 * 3600);
       }
-      // 抓店铺分析
-      const analytics = await fetchStoreAnalytics(env, r.from, r.to);
-      const analyticsKey = dataCacheKey("store", null, r.from, r.to);
-      if (r.cacheable && Array.isArray(analytics) && analytics.length > 0) {
-        await kvPutData(env, analyticsKey, analytics, 7 * 24 * 3600);
+      // 抓按天分析数据(曝光/点击/转化),前端累积后可本地筛选任意子范围
+      const daily = await fetchDailyStoreAnalytics(env, r.from, r.to);
+      const dailyKey = dataCacheKey("daily", null, r.from, r.to);
+      if (r.cacheable && Array.isArray(daily) && daily.length > 0) {
+        await kvPutData(env, dailyKey, daily, 7 * 24 * 3600);
       }
-      results.push({ label: r.label, from: r.from, to: r.to, orders: orders.length, stores: analytics.length, cached: r.cacheable });
+      results.push({ label: r.label, from: r.from, to: r.to, orders: orders.length, dailyRows: daily.length, cached: r.cacheable });
     } catch (e) {
       results.push({ label: r.label, from: r.from, to: r.to, error: e.message || String(e) });
     }
