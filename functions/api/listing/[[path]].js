@@ -238,33 +238,57 @@ async function translateBatch(env, texts) {
   return map;
 }
 
-async function getCategories(env, searchParams, headers = {}) {
-  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
-  const storeIndex = Number(searchParams.get("storeIndex") || "0");
-  const translate = searchParams.get("translate") !== "0";
+// ---------- 类目云端缓存(Cloudflare KV) ----------
+// KV 绑定名:env.LISTING_CACHE(在 Cloudflare Pages 设置里绑定)。
+// 命中 KV 直接返回,不调 Ozon/WB;未绑定 KV 时优雅降级为每次抓取。
+// key 规则:cat:<平台>:<店铺clientId 或 token 标识>
+const CAT_KV_TTL = 60 * 60 * 24 * 30; // 30 天
 
+function catKvKey(platform, store) {
+  const idPart = store.clientId || store.token || "default";
+  return `cat:${platform}:${idPart}`;
+}
+
+async function kvGetCategories(env, platform, store) {
+  if (!env.LISTING_CACHE) return null;
+  try {
+    const raw = await env.LISTING_CACHE.get(catKvKey(platform, store), "json");
+    return raw && Array.isArray(raw.categories) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+async function kvPutCategories(env, platform, store, payload) {
+  if (!env.LISTING_CACHE) return;
+  try {
+    await env.LISTING_CACHE.put(catKvKey(platform, store), JSON.stringify(payload), { expirationTtl: CAT_KV_TTL });
+  } catch {
+    // 写入失败不阻塞
+  }
+}
+
+async function kvDeleteCategories(env, platform, store) {
+  if (!env.LISTING_CACHE) return false;
+  try {
+    await env.LISTING_CACHE.delete(catKvKey(platform, store));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 实际抓取类目(不经过缓存),供 getCategories 调用
+async function fetchCategoriesFromSource(env, platform, store, translate) {
   let raw = [];
-  let storeName = "";
   let nativeChinese = false;
-  const store = resolveStore(env, headers, platform, storeIndex);
   if (platform === "wb") {
-    if (!store) return { ok: false, error: "未配置 WB 店铺,请在「店铺设置」添加,或在环境变量配置 WB_API_TOKEN", categories: [] };
-    storeName = store.name;
     raw = await fetchWBCategories(store);
   } else {
-    if (!store) return { ok: false, error: "未配置 Ozon 店铺,请在「店铺设置」添加,或在环境变量配置 OZON_STORE_1_CLIENT_ID / API_KEY", categories: [] };
-    storeName = store.name;
-    // /v1/description-category/tree 原生支持 ZH_HANS,直接返回中文,无需 OpenAI
     raw = await fetchOzonCategoryTree(store, "ZH_HANS");
     nativeChinese = true;
   }
-
-  // 前端按 fullName '/' 分列重建三级树,需要完整的扁平类目。
-  // 不做排序(排序会把叶子优先排前,反而挤掉一级/中间类目),也不截断,
-  // 仅按 id 去重,确保所有一级类目及其子级完整保留。
   let items = dedupeCategories(raw);
-
-  // 仅当平台不提供原生中文(WB)且开启翻译时,才调用 OpenAI 兜底
   let translationMap = {};
   if (translate && !nativeChinese) {
     try { translationMap = await translateBatch(env, items.map((i) => i.name)); } catch { translationMap = {}; }
@@ -276,12 +300,70 @@ async function getCategories(env, searchParams, headers = {}) {
     return {
       ...item,
       nameZh: zh,
-      // 兼容前端旧字段:展示名 + 是否有子类目
       displayName: item.fullName || item.name,
       childrenCount: Number(item.childrenCount || 0),
     };
   });
-  return { ok: true, platform: platform === "wb" ? "WB" : "Ozon", storeName, nativeChinese, count: categories.length, categories };
+  return { categories, nativeChinese };
+}
+
+async function getCategories(env, searchParams, headers = {}) {
+  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
+  const storeIndex = Number(searchParams.get("storeIndex") || "0");
+  const translate = searchParams.get("translate") !== "0";
+  const forceRefresh = searchParams.get("refresh") === "1";
+
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (platform === "wb") {
+    if (!store) return { ok: false, error: "未配置 WB 店铺,请在「店铺设置」添加,或在环境变量配置 WB_API_TOKEN", categories: [] };
+  } else {
+    if (!store) return { ok: false, error: "未配置 Ozon 店铺,请在「店铺设置」添加,或在环境变量配置 OZON_STORE_1_CLIENT_ID / API_KEY", categories: [] };
+  }
+  const storeName = store.name;
+
+  // 1. 先读云端 KV 缓存(非强制刷新时)
+  if (!forceRefresh) {
+    const cached = await kvGetCategories(env, platform, store);
+    if (cached) {
+      return {
+        ok: true,
+        platform: platform === "wb" ? "WB" : "Ozon",
+        storeName: cached.storeName || storeName,
+        nativeChinese: cached.nativeChinese,
+        count: cached.categories.length,
+        maxDepth: cached.maxDepth || detectMaxDepth(cached.categories),
+        categories: cached.categories,
+        cachedAt: cached.ts,
+        source: "cloud-kv",
+      };
+    }
+  }
+
+  // 2. 缓存未命中 / 强制刷新 → 实际抓取
+  const { categories, nativeChinese } = await fetchCategoriesFromSource(env, platform, store, translate);
+  const maxDepth = detectMaxDepth(categories);   // 诊断:实际类目最大层级
+  const payload = {
+    platform: platform === "wb" ? "WB" : "Ozon",
+    storeName,
+    nativeChinese,
+    categories,
+    maxDepth,
+    ts: Date.now(),
+  };
+  // 3. 写回 KV 供全局共享
+  await kvPutCategories(env, platform, store, payload);
+
+  return { ok: true, ...payload, count: categories.length, source: "fresh" };
+}
+
+// 诊断:统计类目 fullName 按 "/" 分列后的最大层级数
+function detectMaxDepth(categories) {
+  let max = 0;
+  for (const c of categories) {
+    const segs = String(c.fullName || c.nameZh || c.name || "").split("/").filter(Boolean);
+    if (segs.length > max) max = segs.length;
+  }
+  return max;
 }
 
 // ---------- AI 生图 ----------
@@ -557,9 +639,19 @@ export async function onRequest(context) {
         openaiConfigured: Boolean(env.OPENAI_API_KEY),
         openaiImageModel: env.OPENAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
         openaiTextModel: env.OPENAI_TEXT_MODEL || DEFAULT_TEXT_MODEL,
+        kvBound: Boolean(env.LISTING_CACHE),
       });
     }
     if (path === "categories") return json(await getCategories(env, url.searchParams, request.headers));
+    if (path === "refresh-cache") {
+      // 清除指定平台+店铺的云端 KV 类目缓存(配合前端「刷新类目」按钮)
+      const platform = String(url.searchParams.get("platform") || "Ozon").toLowerCase();
+      const storeIndex = Number(url.searchParams.get("storeIndex") || "0");
+      const store = resolveStore(env, request.headers, platform, storeIndex);
+      if (!store) return json({ ok: false, error: "未配置店铺" });
+      const deleted = await kvDeleteCategories(env, platform, store);
+      return json({ ok: true, deleted, kvBound: Boolean(env.LISTING_CACHE) });
+    }
     if (path === "stores") return json({ ok: true, stores: storeList(env) });
     if (path === "generate-images") {
       const body = await request.json().catch(() => ({}));

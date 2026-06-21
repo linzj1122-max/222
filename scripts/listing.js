@@ -487,7 +487,9 @@
       cache[platform] = { v: CAT_CACHE_VERSION, ts: Date.now(), storeKey: currentStoreKey(), storeName: data.storeName || "", flat: categoryCache };
       saveCatCacheAll(cache);
       renderCascade();
-      if (status) status.textContent = `已抓取 ${categoryCache.length} 个 ${platform} 类目(来源:${data.storeName || "-"}),已翻译为中文并缓存。`;
+      const depthInfo = data.maxDepth ? `,类目最大 ${data.maxDepth} 级` : "";
+      const srcInfo = data.source === "cloud-kv" ? "(云端缓存) " : "";
+      if (status) status.textContent = `${srcInfo}已加载 ${categoryCache.length} 个 ${platform} 类目(来源:${data.storeName || "-"})${depthInfo}。`;
     } catch (e) {
       categoryCache = [];
       categoryTree = [];
@@ -875,11 +877,19 @@
   function bindEvents() {
     $("lst_platform")?.addEventListener("change", (e) => { draft.platform = e.target.value; draft.storeIndex = 0; refreshStores(); });
     $("lst_storeIndex")?.addEventListener("change", (e) => { draft.storeIndex = Number(e.target.value); autoLoadCategories(); });
-    $("lst_refreshCat")?.addEventListener("click", () => {
-      // 清空当前平台缓存后重新抓取
+    $("lst_refreshCat")?.addEventListener("click", async () => {
+      // 1. 清本地缓存 2. 清云端 KV 缓存 3. 强制重新抓取
       const cache = loadCatCacheAll();
       if (cache[draft.platform]) { delete cache[draft.platform]; saveCatCacheAll(cache); }
-      fetchCategories();
+      const btn = $("lst_refreshCat");
+      if (btn) btn.disabled = true;
+      try {
+        await fetch(API(`refresh-cache?platform=${encodeURIComponent(draft.platform)}&storeIndex=${draft.storeIndex || 0}`), {
+          headers: storeHeaders(),
+        });
+      } catch { /* 云端清除失败不阻塞本地重抓 */ }
+      await fetchCategories();
+      if (btn) btn.disabled = false;
     });
 
     // 三级级联类目点击(事件委托)
