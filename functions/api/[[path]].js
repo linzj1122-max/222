@@ -27,7 +27,7 @@ function json(body, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type,x-store-platform,x-store-name,x-store-client-id,x-store-secret,x-store-api-key,x-store-token",
     },
   });
 }
@@ -59,6 +59,63 @@ function dateRange(searchParams) {
   fromDate.setDate(fromDate.getDate() - 59);
   const from = searchParams.get("dateFrom") || fromDate.toISOString().slice(0, 10);
   return { from, to };
+}
+
+// ---------- 数据接口 KV 缓存 ----------
+// 绑定名 env.LISTING_CACHE(与 listing 模块共用同一个 KV namespace)。
+// 策略:历史数据(to 早于今天)长期缓存;含当天的数据不缓存(实时累加)。
+// 商品图等静态数据可长缓存。未绑定 KV 时优雅降级为每次实时拉取。
+const DATA_KV_BOUND = () => null; // 占位,实际用 env.LISTING_CACHE
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// 判断日期范围是否纯历史(to 早于今天)→ 可缓存
+function isHistoricalRange(to) {
+  return String(to || "").slice(0, 10) < todayStr();
+}
+
+// 生成缓存 key:接口名 + 店铺标识 + 日期范围 + 额外参数
+function dataCacheKey(prefix, store, from, to, extra = "") {
+  const storeId = (store && (store.clientId || store.token)) || "default";
+  return `data:${prefix}:${storeId}:${from}:${to}${extra ? ":" + extra : ""}`;
+}
+
+// 读缓存,返回 { data, ts } 或 null
+async function kvGetData(env, key) {
+  if (!env.LISTING_CACHE) return null;
+  try {
+    const raw = await env.LISTING_CACHE.get(key, "json");
+    return raw && raw.data !== undefined ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+// 写缓存,ttl 秒后过期
+async function kvPutData(env, key, data, ttl) {
+  if (!env.LISTING_CACHE) return;
+  try {
+    await env.LISTING_CACHE.put(key, JSON.stringify({ data, ts: Date.now() }), { expirationTtl: ttl });
+  } catch {
+    // 写入失败不阻塞
+  }
+}
+
+// 通用:带缓存的接口包装器
+// - historicalTtl: 纯历史范围的缓存时长(秒),默认 7 天
+// - forceRefresh: 强制跳过缓存
+async function withCache(env, key, historicalTtl, isCacheable, forceRefresh, loader) {
+  if (!forceRefresh && isCacheable) {
+    const cached = await kvGetData(env, key);
+    if (cached) return { ...cached.data, _cache: { hit: true, ts: cached.ts } };
+  }
+  const fresh = await loader();
+  if (isCacheable) {
+    await kvPutData(env, key, fresh, historicalTtl);
+  }
+  return { ...fresh, _cache: { hit: false } };
 }
 
 function ozonStores(env) {
@@ -1241,32 +1298,48 @@ export async function onRequest(context) {
   const url = new URL(request.url);
 
   try {
-    if (path === "health") return json({ ok: true, service: "cloudflare-ozon-wb-control-center" });
-    if (path === "debug") return json(debugStatus(env));
+    if (path === "health") return json({ ok: true, service: "cloudflare-ozon-wb-control-center", kvBound: Boolean(env.LISTING_CACHE) });
+    if (path === "debug") return json({ ...debugStatus(env), kvBound: Boolean(env.LISTING_CACHE) });
     if (path === "products") return json(PRODUCTS);
     if (path === "product-images") {
-      const skus = String(url.searchParams.get("skus") || "").split(",");
-      return json(await fetchOzonProductImages(env, skus));
+      const skus = String(url.searchParams.get("skus") || "").split(",").filter(Boolean).sort();
+      const force = url.searchParams.get("force") === "1";
+      const key = `data:images:${skus.join(",")}`;
+      // 商品图几乎不变,长期缓存 24 小时
+      return json(await withCache(env, key, 24 * 3600, skus.length > 0, force, () => fetchOzonProductImages(env, skus)));
     }
     if (path === "analytics/store") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await fetchStoreAnalytics(env, from, to));
+      const force = url.searchParams.get("force") === "1";
+      const cacheable = isHistoricalRange(to);
+      const key = dataCacheKey("store", null, from, to);
+      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => fetchStoreAnalytics(env, from, to)));
     }
     if (path === "analytics/products") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await fetchProductAnalytics(env, from, to));
+      const force = url.searchParams.get("force") === "1";
+      const cacheable = isHistoricalRange(to);
+      const key = dataCacheKey("products", null, from, to);
+      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => fetchProductAnalytics(env, from, to)));
     }
     if (path === "orders") {
       const { from, to } = dateRange(url.searchParams);
-      return json(filterRows(await fetchOzonOrders(env, from, to), url.searchParams));
+      const force = url.searchParams.get("force") === "1";
+      const cacheable = isHistoricalRange(to);
+      const key = dataCacheKey("orders", null, from, to);
+      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => filterRows(await fetchOzonOrders(env, from, to), url.searchParams)));
     }
     if (path === "ads/daily-products") {
       const { from, to } = dateRange(url.searchParams);
-      return json(await fetchOzonAdsDailyProducts(env, from, to, {
+      const force = url.searchParams.get("force") === "1";
+      const cacheable = isHistoricalRange(to);
+      const uuidExtra = url.searchParams.get("uuid") || "";
+      const key = dataCacheKey("ads", null, from, to, uuidExtra);
+      return json(await withCache(env, key, 6 * 3600, cacheable, force, () => fetchOzonAdsDailyProducts(env, from, to, {
         force: url.searchParams.get("force") === "1",
         create: url.searchParams.get("create") === "1",
-        uuid: url.searchParams.get("uuid") || "",
-      }));
+        uuid: uuidExtra,
+      })));
     }
     if (path === "competitors") return json([]);
     if (path === "integrations") {
