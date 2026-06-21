@@ -113,6 +113,7 @@
 
   let draft = emptyDraft();
   let drafts = [];
+  let selectedDrafts = new Set();   // 勾选的草稿 id 集合(批量删除用)
   try { drafts = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") || []; } catch { drafts = []; }
 
   const saveDraft = () => {
@@ -286,6 +287,11 @@
         <div class="toolbar">
           <h3>上架草稿</h3>
           <span class="status">本地保存,可继续编辑或删除。</span>
+          <div class="listing-draft-tools" id="lst_draftTools" hidden>
+            <label class="inline-check"><input type="checkbox" id="lst_draftSelectAll" /> 全选</label>
+            <button class="danger" type="button" id="lst_draftDelSelected">删除选中</button>
+            <button class="secondary" type="button" id="lst_draftClearSel">取消选择</button>
+          </div>
         </div>
         <div id="lst_draftList"></div>
       </section>
@@ -833,18 +839,62 @@
       const data = await res.json();
       draft.publishResult = data;
       if (data.ok) {
+        // 标记为上架中(Ozon 异步任务,需稍后检测)
+        draft.publishStatus = "pending";
+        draft.publishError = "";
+        draft.publishTaskId = data.taskId || "";
+        draft.publishedAt = nowIso();
         log(`发布请求已提交:${data.taskId ? "任务 ID " + data.taskId : "成功"}${data.offerId ? ",SKU=" + data.offerId : ""}`);
-        alert("发布请求已提交!请到店铺后台核对商品状态(Ozon 为异步任务,需稍等片刻)。");
+        alert("发布请求已提交!草稿状态已标记为「上架中」,可在草稿列表点击「检测状态」查看结果。");
+        // 5 秒后自动检测一次状态(Ozon 异步处理需要时间)
+        setTimeout(() => checkPublishStatus(draft.id), 5000);
       } else {
+        draft.publishStatus = "failed";
+        draft.publishError = data.error || "未知错误";
         log("发布失败:" + (data.error || JSON.stringify(data)));
         alert("发布失败:" + (data.error || "未知错误"));
       }
       persistDraft();
     } catch (e) {
+      draft.publishStatus = "failed";
+      draft.publishError = e.message || String(e);
       log("发布异常:" + (e.message || e));
       alert("发布异常:" + (e.message || e));
     } finally {
       btn.disabled = false;
+    }
+  }
+
+  // 检测草稿的上架状态(调后端查询 Ozon 任务结果)
+  async function checkPublishStatus(draftId) {
+    const d = drafts.find((x) => x.id === draftId);
+    if (!d) return;
+    const btn = document.querySelector(`[data-draft-check-status="${CSS.escape(draftId)}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = "检测中…"; }
+    try {
+      const res = await fetch(API(`publish-status?taskId=${encodeURIComponent(d.publishTaskId || "")}&offerId=${encodeURIComponent(d.code || "")}&storeIndex=${d.storeIndex || 0}&platform=${encodeURIComponent(d.platform || "Ozon")}`), {
+        headers: storeHeaders(),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        d.publishStatus = data.status || "pending";
+        d.publishError = data.error || "";
+        if (data.status === "done") log(`「${d.title || d.code}」上架成功!`);
+        else if (data.status === "failed") log(`「${d.title || d.code}」上架失败:${data.error || ""}`);
+        else log(`「${d.title || d.code}」仍在处理中…`);
+      } else {
+        log("状态检测失败:" + (data.error || ""));
+      }
+    } catch (e) {
+      log("状态检测异常:" + (e.message || e));
+    } finally {
+      // 同步当前 draft(若正在编辑的就是这个草稿)
+      if (draft.id === draftId) {
+        draft.publishStatus = d.publishStatus;
+        draft.publishError = d.publishError;
+      }
+      saveDraft();
+      renderDraftList();
     }
   }
 
@@ -860,22 +910,44 @@
   function renderDraftList() {
     const box = $("lst_draftList");
     if (!box) return;
+    const tools = $("lst_draftTools");
     if (!drafts.length) {
+      if (tools) tools.hidden = true;
+      selectedDrafts.clear();
       box.innerHTML = `<div class="listing-draft-row muted-cell">暂无草稿。</div>`;
       return;
     }
-    box.innerHTML = drafts.map((d) => `
-      <div class="listing-draft-row">
-        <span>
+    if (tools) tools.hidden = false;
+    // 清理已不存在草稿的选中状态
+    selectedDrafts = new Set([...selectedDrafts].filter((id) => drafts.some((d) => d.id === id)));
+    const allSel = $("lst_draftSelectAll");
+    if (allSel) allSel.checked = selectedDrafts.size === drafts.length;
+
+    const statusBadge = (d) => {
+      const st = d.publishStatus || "draft";
+      if (st === "pending") return `<span class="listing-status-badge is-pending" title="正在上架,点击检测状态">⏳ 上架中</span>`;
+      if (st === "done") return `<span class="listing-status-badge is-done" title="上架成功">✅ 已上架</span>`;
+      if (st === "failed") return `<span class="listing-status-badge is-failed" title="${escapeAttr(d.publishError || "上架失败")}">❌ 失败</span>`;
+      return `<span class="listing-status-badge is-draft">📝 草稿</span>`;
+    };
+
+    box.innerHTML = drafts.map((d) => {
+      const checked = selectedDrafts.has(d.id) ? "checked" : "";
+      return `<div class="listing-draft-row ${checked ? "is-selected" : ""}">
+        <label class="inline-check"><input type="checkbox" data-draft-check="${escapeAttr(d.id)}" ${checked} /></label>
+        <span class="listing-draft-info">
           <strong>${escapeHtml(d.platform)}</strong> ·
           ${escapeHtml(d.title || d.model || d.code || "未命名草稿")}
-          <small style="color:var(--muted,#94a3b8)"> · 第 ${d.step} 步 · ${escapeHtml(d.updatedAt || "")}</small>
+          <small style="color:var(--muted,#94a3b8)"> · ${escapeHtml(d.updatedAt || "")}</small>
+          ${statusBadge(d)}
         </span>
         <span class="actions">
           <button class="secondary" type="button" data-draft-load="${escapeAttr(d.id)}">继续</button>
+          ${d.publishStatus === "pending" ? `<button class="secondary" type="button" data-draft-check-status="${escapeAttr(d.id)}">检测状态</button>` : ""}
           <button class="danger" type="button" data-draft-del="${escapeAttr(d.id)}">删除</button>
         </span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   }
 
   function renderAll() {
@@ -929,9 +1001,18 @@
     });
 
     $("lst_toStep2")?.addEventListener("click", () => {
-      if (!draft.categoryId) { alert("请先选择一个类目。"); return; }
+      // 必须选到末级类目(有完整路径 + 数字 id),否则上架必失败
+      if (!draft.categoryFullPath) {
+        alert("请先选择类目(逐级选到最末级,带「可上架」标签的才是最终类目)。");
+        return;
+      }
+      if (!draft.descriptionCategoryId) {
+        alert("类目信息不完整,请重新选择末级类目。");
+        return;
+      }
       readStep2Form();
       goToStep(2);
+      log(`已选类目:${draft.categoryFullPath}`);
     });
 
     // 来源切换
@@ -1020,10 +1101,11 @@
       log("已新建草稿。");
     });
 
-    // 草稿列表事件
+    // 草稿列表:勾选 + 加载 + 删除 + 检测状态
     $("lst_draftList")?.addEventListener("click", (e) => {
       const load = e.target.closest("[data-draft-load]");
       const del = e.target.closest("[data-draft-del]");
+      const checkStatus = e.target.closest("[data-draft-check-status]");
       if (load) {
         const id = load.getAttribute("data-draft-load");
         const d = drafts.find((x) => x.id === id);
@@ -1032,10 +1114,45 @@
         const id = del.getAttribute("data-draft-del");
         if (confirm("确认删除该草稿?")) {
           drafts = drafts.filter((x) => x.id !== id);
+          selectedDrafts.delete(id);
           saveDraft();
           renderDraftList();
         }
+      } else if (checkStatus) {
+        const id = checkStatus.getAttribute("data-draft-check-status");
+        checkPublishStatus(id);
       }
+    });
+    // 勾选框变化(用 change 事件,避免点按钮时误触)
+    $("lst_draftList")?.addEventListener("change", (e) => {
+      const cb = e.target.closest("[data-draft-check]");
+      if (!cb) return;
+      const id = cb.getAttribute("data-draft-check");
+      if (cb.checked) selectedDrafts.add(id);
+      else selectedDrafts.delete(id);
+      renderDraftList();
+    });
+    // 全选
+    $("lst_draftSelectAll")?.addEventListener("change", (e) => {
+      if (e.target.checked) drafts.forEach((d) => selectedDrafts.add(d.id));
+      else selectedDrafts.clear();
+      renderDraftList();
+    });
+    // 删除选中
+    $("lst_draftDelSelected")?.addEventListener("click", () => {
+      if (!selectedDrafts.size) { alert("请先勾选要删除的草稿。"); return; }
+      if (!confirm(`确认删除选中的 ${selectedDrafts.size} 个草稿?`)) return;
+      const ids = new Set(selectedDrafts);
+      drafts = drafts.filter((x) => !ids.has(x.id));
+      selectedDrafts.clear();
+      saveDraft();
+      renderDraftList();
+      log(`已删除 ${ids.size} 个草稿。`);
+    });
+    // 取消选择
+    $("lst_draftClearSel")?.addEventListener("click", () => {
+      selectedDrafts.clear();
+      renderDraftList();
     });
 
     // 第三步字段实时回写

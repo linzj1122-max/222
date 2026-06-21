@@ -2151,6 +2151,22 @@ label.inline-select > select {
   color: var(--ink-1);
 }
 .listing-draft-row:last-child { border-bottom: none; }
+.listing-draft-row.is-selected { background: var(--accent-gold-soft, rgba(234,179,8,0.08)); }
+.listing-draft-row .listing-draft-info { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.listing-draft-tools { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.inline-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.inline-check input { margin: 0; }
+
+/* 上架状态徽章 */
+.listing-status-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  margin-left: 6px; white-space: nowrap;
+}
+.listing-status-badge.is-draft { background: var(--bg-4); color: var(--ink-3); }
+.listing-status-badge.is-pending { background: rgba(59,130,246,0.12); color: #2563eb; }
+.listing-status-badge.is-done { background: var(--accent-sage-soft); color: var(--accent-sage); }
+.listing-status-badge.is-failed { background: rgba(239,68,68,0.12); color: #dc2626; }
 
 /* 商品上架中的 search 与 table-status 间距 */
 .listing-step-pane .search { margin-top: 4px; }

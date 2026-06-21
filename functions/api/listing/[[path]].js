@@ -641,6 +641,63 @@ async function publish(env, body, headers = {}) {
   return await publishOzonProduct(env, store, draft);
 }
 
+// 检测上架任务状态(Ozon /v1/product/import/info)
+async function checkPublishStatus(env, searchParams, headers = {}) {
+  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
+  const storeIndex = Number(searchParams.get("storeIndex") || "0");
+  const taskId = String(searchParams.get("taskId") || "");
+  const offerId = String(searchParams.get("offerId") || "");
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置店铺" };
+
+  if (platform === "wb") {
+    // WB 同步创建,无任务 id,按货号查商品是否存在即可
+    return { ok: true, status: offerId ? "done" : "pending", note: "WB 暂不支持状态检测" };
+  }
+
+  if (!taskId) {
+    // 没有 taskId,尝试按 offer_id 查商品信息判断是否成功
+    if (!offerId) return { ok: true, status: "pending", note: "无任务 ID,无法检测" };
+    try {
+      const resp = await fetch("https://api-seller.ozon.ru/v3/product/info/list", {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+        body: JSON.stringify({ offer_id: [offerId], sku: [] }),
+      });
+      const info = await resp.json();
+      const items = info?.result?.items || [];
+      if (items.length) {
+        return { ok: true, status: "done", sku: items[0]?.product_id || 0 };
+      }
+      return { ok: true, status: "pending", note: "商品尚未出现在列表中" };
+    } catch (e) {
+      return { ok: false, error: "查询商品失败:" + (e.message || String(e)) };
+    }
+  }
+
+  // 有 taskId:查任务状态
+  try {
+    const resp = await fetch("https://api-seller.ozon.ru/v1/product/import/info", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+      body: JSON.stringify({ task_id: [Number(taskId)] }),
+    });
+    const data = await resp.json();
+    const result = data?.result?.items?.[0];
+    if (!result) return { ok: true, status: "pending", note: "任务尚未返回结果" };
+    // status: "pending" | "imported" | "failed"
+    const st = String(result.status || "").toLowerCase();
+    if (st === "imported") return { ok: true, status: "done", offerId: result.offer_id, productId: result.product_id };
+    if (st === "failed" || st === "error") {
+      const errs = (result.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ");
+      return { ok: true, status: "failed", error: errs || "上架被拒" };
+    }
+    return { ok: true, status: "pending", note: "处理中…" };
+  } catch (e) {
+    return { ok: false, error: "检测失败:" + (e.message || String(e)) };
+  }
+}
+
 // ---------- 入口 ----------
 
 export async function onRequest(context) {
@@ -683,6 +740,9 @@ export async function onRequest(context) {
     if (path === "publish") {
       const body = await request.json().catch(() => ({}));
       return json(await publish(env, body, request.headers));
+    }
+    if (path === "publish-status") {
+      return json(await checkPublishStatus(env, url.searchParams, request.headers));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
