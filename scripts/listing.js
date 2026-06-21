@@ -102,6 +102,7 @@
     params: "",
     sellingPoints: "",
     images: [],   // dataURL 数组（参考图/单图）
+    attrValues: {},   // 类目必填属性的值 { attrId: value }
     // 第三步产出
     generatedImages: [],
     title: "",
@@ -243,6 +244,12 @@
 
         <label>商品图片(至少 1 张,建议 3:4 竖图,最多 15 张,第一张为首图)<input id="lst_images" type="file" accept="image/*" multiple /></label>
         <div class="listing-thumb-row" id="lst_thumbRow"></div>
+
+        <hr class="listing-divider" />
+        <div id="lst_attrsWrap" class="listing-attrs-wrap">
+          <div class="table-status" id="lst_attrsStatus">选择末级类目后,将自动加载该类目的必填属性。</div>
+          <div id="lst_attrsList"></div>
+        </div>
 
         <label>产品标题(俄文)<textarea id="lst_title" rows="2" placeholder="Ozon 标题,建议 60~110 字符"></textarea></label>
         <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
@@ -632,6 +639,80 @@
     return true;
   }
 
+  // 加载类目的必填属性并渲染表单(进入第二步时触发)
+  let currentAttributes = [];   // 当前类目的属性列表
+  let attrValues = {};          // 用户填的属性值 { attrId: value }
+  async function loadCategoryAttributes() {
+    const box = $("lst_attrsList");
+    const status = $("lst_attrsStatus");
+    if (!draft.descriptionCategoryId || !draft.typeId) {
+      currentAttributes = [];
+      attrValues = {};
+      if (box) box.innerHTML = "";
+      if (status) status.textContent = "选择末级类目后,将自动加载该类目的必填属性。";
+      return;
+    }
+    if (status) status.textContent = "正在加载该类目的属性…";
+    try {
+      const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${draft.storeIndex || 0}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}`), {
+        headers: storeHeaders(),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "加载属性失败");
+      currentAttributes = data.attributes || [];
+      attrValues = { ...(draft.attrValues || {}) };   // 恢复已填的值
+      renderAttrForm();
+      const reqCount = currentAttributes.filter((a) => a.isRequired).length;
+      if (status) status.textContent = `该类目共 ${currentAttributes.length} 个属性(其中 ${reqCount} 个必填)。来源:${data.source === "cache" ? "缓存" : "实时"}。`;
+    } catch (e) {
+      if (status) status.textContent = "属性加载失败:" + (e.message || e);
+      if (box) box.innerHTML = "";
+    }
+  }
+
+  // 渲染属性表单(必填优先,折叠可选)
+  function renderAttrForm() {
+    const box = $("lst_attrsList");
+    if (!box) return;
+    if (!currentAttributes.length) { box.innerHTML = `<div class="table-status">该类目暂无必填属性。</div>`; return; }
+    // 必填在前,可选在后
+    const sorted = [...currentAttributes].sort((a, b) => Number(b.isRequired) - Number(a.isRequired));
+    box.innerHTML = sorted.map((a) => {
+      const val = escapeAttr(attrValues[a.id] || "");
+      const star = a.isRequired ? `<span style="color:#dc2626">*</span>` : "";
+      const isDict = a.dictionary || (a.values && a.values.length);
+      const field = isDict
+        ? `<select data-attr-id="${a.id}"><option value="">请选择</option>${(a.values || []).map((v) => `<option value="${escapeAttr(v.value)}" ${val === escapeAttr(v.value) ? "selected" : ""}>${escapeHtml(v.value)}</option>`).join("")}</select>`
+        : `<input type="text" data-attr-id="${a.id}" value="${val}" placeholder="${escapeAttr(a.description || a.name)}" />`;
+      return `<label class="listing-attr-row ${a.isRequired ? "is-required" : ""}">
+        <span class="listing-attr-name">${star} ${escapeHtml(a.name)}</span>
+        ${field}
+      </label>`;
+    }).join("");
+    // 绑定输入事件,实时保存值
+    box.querySelectorAll("[data-attr-id]").forEach((el) => {
+      el.addEventListener("input", () => {
+        attrValues[el.getAttribute("data-attr-id")] = el.value;
+        draft.attrValues = attrValues;
+      });
+      el.addEventListener("change", () => {
+        attrValues[el.getAttribute("data-attr-id")] = el.value;
+        draft.attrValues = attrValues;
+      });
+    });
+  }
+
+  // 校验必填属性是否都填了
+  function validateRequiredAttrs() {
+    const missing = currentAttributes.filter((a) => a.isRequired && !attrValues[a.id]);
+    if (missing.length) {
+      const names = missing.map((a) => a.name).join("、");
+      alert(`以下必填属性未填写:${names}`);
+      return false;
+    }
+    return true;
+  }
+
   // 收集树的所有节点(带路径),用于搜索
   function flattenTreeForSearch(nodes, parentPath = []) {
     const out = [];
@@ -828,6 +909,7 @@
             width: draft.width,
             height: draft.height,
             images,
+            attrValues: draft.attrValues || {},
           },
         }),
       });
@@ -1003,6 +1085,8 @@
       readStep2Form();
       goToStep(2);
       log(`已选类目:${draft.categoryFullPath}`);
+      // 加载该类目的必填属性(动态表单)
+      loadCategoryAttributes();
     });
 
     // 来源切换
@@ -1072,6 +1156,9 @@
         if (!draft.price) { alert("请填写售价。"); return; }
         if (!draft.title) { alert("请填写产品标题。"); return; }
       }
+      // 校验必填属性
+      if (!validateRequiredAttrs()) return;
+      draft.attrValues = attrValues;
       persistDraft();
       goToStep(3);
       log("进入发布步骤,请核对店铺与货号。");

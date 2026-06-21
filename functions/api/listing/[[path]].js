@@ -698,6 +698,59 @@ async function checkPublishStatus(env, searchParams, headers = {}) {
   }
 }
 
+// 查询类目的必填属性(Ozon /v3/category/attribute),带 KV 缓存。
+// 不同类目有不同的必填参数(颜色/材质/电池容量等),前端据此动态生成表单。
+async function getCategoryAttributes(env, searchParams, headers = {}) {
+  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
+  const storeIndex = Number(searchParams.get("storeIndex") || "0");
+  const categoryId = Number(searchParams.get("categoryId") || "0");
+  const typeId = Number(searchParams.get("typeId") || "0");
+  const force = searchParams.get("force") === "1";
+  if (!categoryId || !typeId) return { ok: false, error: "缺少 categoryId 或 typeId" };
+
+  // KV 缓存(类目属性变化极少,缓存 30 天)
+  const cacheKey = `attrs:${categoryId}:${typeId}`;
+  if (!force && env.LISTING_CACHE) {
+    try {
+      const cached = await env.LISTING_CACHE.get(cacheKey, "json");
+      if (cached && cached.attributes) {
+        return { ok: true, attributes: cached.attributes, source: "cache", categoryId, typeId };
+      }
+    } catch {}
+  }
+
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置店铺" };
+
+  try {
+    const resp = await fetch("https://api-seller.ozon.ru/v3/category/attribute", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+      body: JSON.stringify({ description_category_id: [categoryId], type_id: [typeId], language: "ZH_HANS" }),
+    });
+    const data = await resp.json();
+    const all = data?.result || [];
+    const rawAttrs = Array.isArray(all[0]?.attributes) ? all[0].attributes : [];
+    // 提取关键字段,精简后返回给前端
+    const attributes = rawAttrs.map((a) => ({
+      id: Number(a.id),
+      name: String(a.name || ""),
+      description: String(a.description || ""),
+      isRequired: Boolean(a.is_required),
+      type: String(a.type || "string"),   // string/integer/decimal/dictionary 等
+      dictionary: Number(a.dictionary_id || 0),
+      values: Array.isArray(a.values) ? a.values.slice(0, 200).map((v) => ({ id: v.id, value: v.value })) : [],
+    }));
+    // 缓存到 KV(30 天)
+    if (env.LISTING_CACHE) {
+      try { await env.LISTING_CACHE.put(cacheKey, JSON.stringify({ attributes, ts: Date.now() }), { expirationTtl: 30 * 24 * 3600 }); } catch {}
+    }
+    return { ok: true, attributes, source: "fresh", categoryId, typeId, total: attributes.length, required: attributes.filter((a) => a.isRequired).length };
+  } catch (e) {
+    return { ok: false, error: "查询属性失败:" + (e.message || String(e)) };
+  }
+}
+
 // ---------- 入口 ----------
 
 export async function onRequest(context) {
@@ -719,6 +772,7 @@ export async function onRequest(context) {
       });
     }
     if (path === "categories") return json(await getCategories(env, url.searchParams, request.headers));
+    if (path === "category-attributes") return json(await getCategoryAttributes(env, url.searchParams, request.headers));
     if (path === "refresh-cache") {
       // 清除指定平台+店铺的云端 KV 类目缓存(配合前端「刷新类目」按钮)
       const platform = String(url.searchParams.get("platform") || "Ozon").toLowerCase();

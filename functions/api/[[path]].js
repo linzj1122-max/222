@@ -1359,6 +1359,26 @@ export async function onRequest(context) {
       if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });
       return json({ ok: false, error: "Method not allowed" }, 405);
     }
+    // 店铺持久化到 KV(跨设备/跨部署共享)。POST 保存整个列表,GET 读取。
+    if (path === "stores") {
+      if (!env.LISTING_CACHE) return json({ ok: false, error: "未绑定 KV,无法持久化店铺" }, 503);
+      if (request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const stores = Array.isArray(body.stores) ? body.stores : [];
+        await env.LISTING_CACHE.put("stores:all", JSON.stringify({ stores, ts: Date.now() }));
+        return json({ ok: true, count: stores.length });
+      }
+      // GET:从 KV 读取
+      try {
+        const raw = await env.LISTING_CACHE.get("stores:all", "json");
+        if (raw && Array.isArray(raw.stores)) {
+          return json({ ok: true, stores: raw.stores, ts: raw.ts });
+        }
+        return json({ ok: true, stores: [], ts: 0 });
+      } catch (e) {
+        return json({ ok: false, error: "读取店铺失败:" + (e.message || String(e)) });
+      }
+    }
     if (path === "probe/ozon-analytics") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeOzonAnalytics(env, from, to));

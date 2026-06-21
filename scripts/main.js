@@ -317,7 +317,40 @@ const initialProducts = [
       localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
       try { localStorage.setItem(summarySnapshotKey, JSON.stringify(summarySnapshot)); } catch {}
       try { localStorage.setItem(platformFeesKey, JSON.stringify(platformFees)); } catch {}
+      // 店铺同步到云端 KV(去敏感字段:secret 完整保留,发布时需要)
+      syncStoresToCloud();
     };
+
+    // 店铺持久化到 KV(跨设备/跨部署共享)
+    let cloudStoresSyncing = false;
+    function syncStoresToCloud() {
+      if (cloudStoresSyncing) return;
+      cloudStoresSyncing = true;
+      fetch("/api/stores", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stores: apiConfigs }),
+      }).catch((e) => console.warn("[stores] 云端同步失败:", e.message))
+        .finally(() => { cloudStoresSyncing = false; });
+    }
+    // 启动时从 KV 加载店铺,与本地合并(KV 优先,因为可能是其他设备更新)
+    async function loadStoresFromCloud() {
+      try {
+        const res = await fetch("/api/stores");
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.stores) && data.stores.length) {
+          // KV 有数据:合并(以 id 为准,KV 覆盖本地,本地独有的保留)
+          const cloudIds = new Set(data.stores.map((s) => s.id));
+          const localOnly = apiConfigs.filter((s) => !cloudIds.has(s.id));
+          apiConfigs = [...data.stores, ...localOnly];
+          localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
+          return true;
+        }
+      } catch (e) {
+        console.warn("[stores] 云端加载失败:", e.message);
+      }
+      return false;
+    }
 
     async function apiRequest(path, options = {}) {
       const response = await fetch(path, {
@@ -577,16 +610,19 @@ const initialProducts = [
     }
 
     function mergeAdRowsIntoOrders(sourceOrders, adRows) {
+      // 防御:确保是数组(避免 sourceOrders.forEach is not a function)
+      const orders = Array.isArray(sourceOrders) ? sourceOrders : [];
+      const ads = Array.isArray(adRows) ? adRows : [];
       const adMap = new Map();
-      adRows.forEach((row) => {
+      ads.forEach((row) => {
         adMap.set(`${row.date}|${row.store}|${row.sku}`, Number(row.adCost || 0));
       });
       const groupCounts = new Map();
-      sourceOrders.forEach((order) => {
+      orders.forEach((order) => {
         const key = `${order.date}|${order.store}|${order.sku}`;
         groupCounts.set(key, (groupCounts.get(key) || 0) + 1);
       });
-      return sourceOrders.map((order) => {
+      return orders.map((order) => {
         const key = `${order.date}|${order.store}|${order.sku}`;
         const groupAd = adMap.get(key);
         if (groupAd === undefined) return order;
@@ -3183,6 +3219,10 @@ const initialProducts = [
       initCostScope();
       resetCostForm();
       renderAll();
+      // 启动时从云端 KV 加载店铺(若 KV 有数据则覆盖本地,解决重新部署/换设备丢失问题)
+      loadStoresFromCloud().then((loaded) => {
+        if (loaded) { renderApiConfigs(); renderAll(); }
+      });
       if (backendEnabled) autoRefreshAds();
       // 页面加载后静默预缓存28天广告数据（每日一次）
       if (backendEnabled) precacheAds28Days();
