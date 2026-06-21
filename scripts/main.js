@@ -1905,14 +1905,53 @@ const initialProducts = [
       chartDateTo = to;
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
-      // 加载期间显示「加载中」,避免旧数据先闪现一次
+      // 显示加载动画(转圈圈)
+      showGlobalLoader(`正在加载 ${from} 至 ${to} 的数据…`);
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在加载 ${from} 至 ${to} 的数据,请稍候…`;
-      // 先拉数据,再统一渲染,避免「旧数据先闪现一次再变正确」的观感问题
-      await loadBackendOrders();
-      await loadStoreAnalytics();
-      updateOrderDateButton();
-      renderCalendar();
-      renderAll();
+      try {
+        // 先拉数据,再统一渲染,避免「旧数据先闪现一次再变正确」的观感问题
+        await loadBackendOrders();
+        await loadStoreAnalytics();
+        updateOrderDateButton();
+        renderCalendar();
+        renderAll();
+      } finally {
+        hideGlobalLoader();
+      }
+    }
+
+    // 全局加载动画控制(智能延迟:数据快时不弹,慢了才弹)
+    let _loaderShowTimer = null;
+    let _loaderHideTimer = null;
+    let _loaderMinVisible = false;
+    // 延迟显示动画:超过 delay(默认 350ms)还没 hideGlobalLoader 才显示
+    function showGlobalLoader(text, delay = 350) {
+      const loader = $("globalLoader");
+      if (!loader) return;
+      if ($("globalLoaderText")) $("globalLoaderText").textContent = text || "正在加载…";
+      clearTimeout(_loaderShowTimer);
+      // 快路径:先不显示,等 delay 过后再显示
+      _loaderShowTimer = setTimeout(() => {
+        loader.hidden = false;
+        _loaderMinVisible = true;
+        // 显示后至少保持 300ms,避免一闪而过
+        clearTimeout(_loaderHideTimer);
+        _loaderHideTimer = setTimeout(() => { _loaderMinVisible = false; }, 300);
+        // 超过 30 秒还没完成,自动隐藏(防止卡死)
+        clearTimeout(_loaderShowTimer);
+        _loaderShowTimer = setTimeout(() => hideGlobalLoader(), 30000);
+      }, delay);
+    }
+    function hideGlobalLoader() {
+      const loader = $("globalLoader");
+      clearTimeout(_loaderShowTimer);
+      // 如果已经显示了,至少保持 300ms 再隐藏(避免闪烁)
+      const doHide = () => { if (loader) loader.hidden = true; _loaderMinVisible = false; };
+      if (_loaderMinVisible) {
+        setTimeout(doHide, 300);
+      } else {
+        doHide();
+      }
     }
     function summaryRangeFromDates(from, to) {
       const today = todayIso();
@@ -3265,6 +3304,7 @@ const initialProducts = [
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();
       renderCalendar();
+      showGlobalLoader("正在加载店铺数据…");
       if (backendEnabled) {
         try {
           const [backendProducts, backendCompetitors, backendIntegrations] = await Promise.all([
