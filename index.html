@@ -22,11 +22,11 @@
         <button class="tab-btn" data-tab="settings"><span>⚙️</span>店铺设置</button>
       </nav>
       <section class="side-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="side-card-row">
           <span>实时中控汇率 (RUB)</span>
           <span class="connection-dot">● Connected</span>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;color:#e2e8f0">
+        <div class="side-card-row">
           <span>已维护产品</span>
           <strong id="sideCount">0</strong>
         </div>
@@ -86,7 +86,7 @@
           <div class="toolbar">
             <div class="chart-heading">
               <h3 id="chartTitle">每日销量与销售额走势</h3>
-              <p>青蓝柱形：营业额（左轴） | 亮黄折线：订单量（右轴） | 灰色虚线：上个周期</p>
+              <p>雾蓝柱形：营业额（左轴） | 柔金折线：订单量（右轴） | 鼠尾草虚线：上个周期</p>
             </div>
             <div class="chart-controls">
               <label class="inline-select">店铺筛选
@@ -297,7 +297,7 @@
               <h3>产品成本清单</h3>
               <input class="search" id="costSearch" placeholder="搜索货号、SKU、产品名" />
             </div>
-            <div class="actions" style="margin-bottom:12px">
+            <div class="actions cost-list-actions">
               <button class="secondary" id="exportCosts" type="button">导出 CSV</button>
               <button class="secondary" id="importCosts" type="button">导入表格</button>
               <input id="importCostsFile" type="file" accept=".xlsx,.xls,.csv" hidden />
@@ -425,7 +425,7 @@
         <div class="grid split">
           <section class="panel">
             <h3>竞品抓取状态</h3>
-            <form id="competitorForm" style="margin-bottom:14px">
+            <form id="competitorForm" class="inline-form">
               <label>竞品链接<input id="competitorUrl" type="url" required placeholder="粘贴 Ozon / WB 竞品链接" /></label>
               <button class="primary" type="submit">保存链接并抓取</button>
             </form>
@@ -439,7 +439,7 @@
 
           <section class="panel">
             <h3>跟价利润窗口</h3>
-            <form id="priceCheckForm" style="margin-bottom:14px">
+            <form id="priceCheckForm" class="inline-form">
               <div class="cols-2">
                 <label>产品货号<input id="priceCheckCode" required placeholder="例如 HS" /></label>
                 <label>产品售价 RUB<input id="priceCheckPrice" type="number" step="0.01" min="0" value="0" /></label>
@@ -497,7 +497,7 @@
                 <button class="primary" type="submit">保存店铺</button>
               </div>
             </form>
-            <div class="notice" style="margin-top:14px">
+            <div class="notice api-notice">
               点击「验证可用性」会立即调用平台 API 校验 Client ID 与密钥是否有效，验证通过后即可保存。删除店铺会一并清除该店铺的订单、广告、分析与缓存数据。
             </div>
           </section>

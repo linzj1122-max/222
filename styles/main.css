@@ -1502,3 +1502,408 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
 @media (max-width: 560px) {
   nav { grid-template-columns: 1fr 1fr; }
 }
+
+/* =========================================================
+   新增功能对齐优化（不改动后端，仅前端排版修正）
+   ========================================================= */
+
+/* ---- 通用：工具栏右侧控件统一容器 ---- */
+.toolbar > .chart-controls,
+.toolbar > .store-overview-controls,
+.toolbar > .cost-scope-pills,
+.toolbar > .order-filters {
+  align-items: flex-end;
+}
+
+/* ---- 图表工具栏：多控件优雅换行 ---- */
+.trend-panel .toolbar {
+  align-items: flex-end;
+  gap: 18px;
+}
+.chart-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px 14px;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chart-controls > * {
+  margin: 0;
+}
+.chart-controls .inline-select {
+  height: 38px;
+}
+.chart-controls .inline-select select {
+  height: 38px;
+  min-width: 150px;
+}
+.chart-controls .chart-date-picker .date-range-button {
+  height: 38px;
+  min-width: 200px;
+  display: inline-flex;
+  align-items: center;
+}
+.chart-controls .segmented.small {
+  height: 38px;
+}
+.chart-controls .segmented.small button {
+  height: 100%;
+  padding: 0 14px;
+}
+.chart-controls .legend {
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
+  margin-left: 4px;
+}
+.chart-heading {
+  flex: 0 0 auto;
+  min-width: 240px;
+  max-width: 360px;
+}
+
+@media (max-width: 1280px) {
+  .chart-controls .legend {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+    width: 100%;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .trend-panel .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .chart-heading {
+    max-width: none;
+  }
+  .chart-controls {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .chart-controls .inline-select,
+  .chart-controls .chart-date-picker,
+  .chart-controls .segmented.small {
+    width: 100%;
+  }
+  .chart-controls .inline-select select,
+  .chart-controls .chart-date-picker .date-range-button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ---- 店铺概览：视图/分组选择器对齐 ---- */
+.store-overview-panel .toolbar {
+  align-items: flex-end;
+}
+.store-overview-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.store-overview-controls .inline-select {
+  height: 38px;
+}
+.store-overview-controls .inline-select select {
+  height: 38px;
+  width: 160px;
+  min-width: 140px;
+}
+
+/* ---- 成本总览范围：平台/模式/履约对齐 ---- */
+.cost-scope-panel .toolbar {
+  align-items: flex-end;
+}
+.cost-scope-pills {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cost-scope-pills .inline-select {
+  height: 38px;
+}
+.cost-scope-pills .inline-select select {
+  height: 38px;
+  width: 150px;
+  min-width: 130px;
+}
+
+/* ---- 成本表单：cols-3 与动态字段节奏统一 ---- */
+#costForm {
+  gap: 14px;
+}
+#costForm .cols-3,
+#costForm .cols-2 {
+  gap: 12px;
+}
+.cost-dynamic-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+}
+.cost-dynamic-fields:not(:empty) + .cols-2,
+.cost-dynamic-fields:not(:empty) {
+  padding-top: 0;
+}
+.cost-fee-hint {
+  min-height: 42px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ---- 费用表导入框：6 元素优雅排列 ---- */
+.cost-fee-import-box {
+  grid-template-columns: repeat(3, minmax(160px, 1fr)) minmax(240px, 1.4fr) auto auto;
+  gap: 14px;
+  align-items: end;
+}
+.cost-fee-import-box label {
+  min-width: 0;
+}
+.cost-fee-import-box input[type="file"] {
+  font-size: 12px;
+  padding: 9px 10px;
+}
+.cost-fee-import-box button {
+  height: 42px;
+}
+@media (max-width: 1100px) {
+  .cost-fee-import-box {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .cost-fee-import-box {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 设置页：API 表单按钮组对齐 ---- */
+#apiForm {
+  gap: 14px;
+}
+#apiForm .actions {
+  margin-top: 4px;
+}
+#apiForm .actions button {
+  height: 42px;
+  padding: 0 18px;
+}
+.api-verify-status {
+  margin: 0;
+}
+
+/* ---- 设置页：店铺分组表单对齐 ---- */
+.store-group-panel {
+  margin-top: 20px;
+}
+.store-group-form {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.store-group-form .cols-3 {
+  gap: 12px;
+}
+.store-group-form .cols-3 label,
+.store-group-form > label {
+  min-width: 0;
+}
+.store-group-form select[multiple] {
+  width: 100%;
+  min-height: 130px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--ink-1);
+  font-size: 13px;
+  cursor: pointer;
+}
+.store-group-form select[multiple] option {
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
+.store-group-form select[multiple] option:checked {
+  background: var(--brand-soft) linear-gradient(transparent, transparent);
+  color: var(--brand-dark);
+  font-weight: 600;
+}
+.store-group-form .muted {
+  color: var(--ink-3);
+  font-weight: 500;
+  margin-left: 8px;
+  font-size: 12px;
+}
+.store-group-form .actions {
+  margin-top: 4px;
+}
+.store-group-form .actions button {
+  height: 42px;
+  padding: 0 18px;
+}
+
+/* ---- 订单筛选：日期 + 店铺 + 刷新按钮高度统一 ---- */
+.order-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.order-filters > label {
+  min-width: 150px;
+}
+.order-filters select {
+  height: 38px;
+  min-width: 180px;
+}
+.order-filters .date-range-button {
+  height: 38px;
+  min-width: 220px;
+}
+.order-filters button#reloadOrders {
+  height: 38px;
+  padding: 0 16px;
+}
+
+/* ---- 广告费用工具栏：店铺选择 + 对比开关 + 分段 ---- */
+#ads .panel .toolbar {
+  align-items: flex-end;
+}
+#ads .inline-select {
+  height: 38px;
+}
+#ads .inline-select select {
+  height: 38px;
+  width: 200px;
+}
+.ad-filterbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ad-filterbar .switch-line,
+.ad-filterbar .segmented.small {
+  height: 38px;
+}
+.ad-filterbar .segmented.small button {
+  height: 100%;
+  padding: 0 14px;
+}
+
+/* ---- 通用：所有 inline-select 内 select 统一高度 ---- */
+.inline-select select,
+.inline-select + select,
+label.inline-select > select {
+  height: 38px;
+}
+
+/* ---- split 两列等高与最小宽度 ---- */
+.grid.split {
+  grid-template-columns: minmax(380px, 420px) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+@media (max-width: 1100px) {
+  .grid.split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 竞品跟价：表单与统计卡间距 ---- */
+#competitors .grid.split .panel form {
+  margin-bottom: 16px;
+}
+#competitors .grid {
+  gap: 14px;
+}
+
+/* ---- 面板标题统一节奏 ---- */
+.panel > h3:not(.toolbar h3) {
+  margin-bottom: 16px;
+}
+.panel > form + .grid,
+.panel > form + .table-wrap {
+  margin-top: 4px;
+}
+
+/* ---- 日期范围面板：避免被 chart-controls 容器裁剪 ---- */
+.chart-date-picker {
+  position: relative;
+  z-index: 20;
+}
+.chart-date-picker .date-range-panel {
+  right: 0;
+  top: 44px;
+}
+
+/* ---- 表格操作列按钮紧凑 ---- */
+.table-wrap td button,
+.table-wrap td .row-actions {
+  margin: 0;
+}
+.table-wrap td button.secondary {
+  padding: 6px 10px;
+  font-size: 12px;
+  height: auto;
+}
+
+/* ---- 范围联动变暗（保留但柔和化） ---- */
+.range-pills button.dim,
+.quick-ranges button.dim,
+[data-summary-range].dim {
+  opacity: 0.5;
+  filter: grayscale(0.3);
+}
+
+/* ---- 侧边卡片行（替代内联样式） ---- */
+.side-card .side-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.side-card .side-card-row + .side-card-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.side-card .side-card-row strong {
+  margin: 0;
+  font-size: 20px;
+}
+
+/* ---- 成本清单上方操作栏 ---- */
+.cost-list-actions {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---- 竞品表单：行内紧凑 ---- */
+.inline-form {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---- API 提示框间距 ---- */
+.api-notice {
+  margin-top: 16px;
+}
