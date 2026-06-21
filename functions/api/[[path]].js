@@ -1327,7 +1327,7 @@ export async function onRequest(context) {
       const force = url.searchParams.get("force") === "1";
       const cacheable = isHistoricalRange(to);
       const key = dataCacheKey("orders", null, from, to);
-      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => filterRows(await fetchOzonOrders(env, from, to), url.searchParams)));
+      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, async () => filterRows(await fetchOzonOrders(env, from, to), url.searchParams)));
     }
     if (path === "ads/daily-products") {
       const { from, to } = dateRange(url.searchParams);
