@@ -556,7 +556,9 @@ const initialProducts = [
       const cached = orderRangeCache[key];
       const includeToday = orderDateTo >= todayIso();
       // 防御:缓存数据可能被早期 withCache bug 破坏成对象,必须校验是数组
-      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && cached && Array.isArray(cached.orders)) {
+      // 另外:历史范围的缓存如果是空数组,可能是之前拉取失败,强制重新拉取
+      const cacheUsable = cached && Array.isArray(cached.orders) && cached.orders.length > 0;
+      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && cacheUsable) {
         orders = cached.orders;
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
@@ -567,6 +569,7 @@ const initialProducts = [
       const params = new URLSearchParams();
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
+      if (options.force) params.set("force", "1");   // 强制跳过云端 KV 缓存
       orders = await apiRequest(`/api/orders?${params.toString()}`);
       orders = Array.isArray(orders) ? orders : (Array.isArray(orders?.result) ? orders.result : []);
       mergeIntoTrendOrders(orders);
@@ -590,6 +593,7 @@ const initialProducts = [
         const params = new URLSearchParams();
         if (orderDateFrom) params.set("dateFrom", orderDateFrom);
         if (orderDateTo) params.set("dateTo", orderDateTo);
+        if (options.force) params.set("force", "1");   // 强制跳过云端 KV 缓存
         const resp = await apiRequest(`/api/analytics/store?${params.toString()}`);
         // 防御:确保是数组(API 可能返回 {result:[]} 或错误对象)
         storeAnalyticsRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);

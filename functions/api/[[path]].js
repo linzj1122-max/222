@@ -124,7 +124,8 @@ async function withCache(env, key, historicalTtl, isCacheable, forceRefresh, loa
   };
   if (!forceRefresh && isCacheable) {
     const cached = await kvGetData(env, key);
-    if (cached) return attachCache(cached.data, { hit: true, ts: cached.ts });
+    // 缓存里如果是空结果(之前 bug 存的),也跳过,重新拉取
+    if (cached && hasContent(cached.data)) return attachCache(cached.data, { hit: true, ts: cached.ts });
   }
   const fresh = await loader();
   // 只缓存有内容的结果(空结果可能是拉取失败,缓存了会误导 7 天)
