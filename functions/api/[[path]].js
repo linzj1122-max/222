@@ -427,6 +427,58 @@ async function fetchStoreAnalytics(env, from, to) {
   return rows;
 }
 
+// 预热缓存:抓取常见日期范围的订单+店铺分析,写入 KV。
+// 范围:今天 / 7天 / 28天 / 本月 / 上月(均按莫斯科时间)。
+// 只缓存非空结果,避免把拉取失败缓存住。
+async function precacheCommonRanges(env) {
+  if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
+  // 用莫斯科时间算今天
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const mskNow = new Date(utcMs + 3 * 3600000);
+  const mskDate = (d) => d.toISOString().slice(0, 10);
+  const addDaysStr = (iso, n) => {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + n);
+    return mskDate(d);
+  };
+  const today = mskDate(mskNow);
+  const yesterday = addDaysStr(today, -1);
+  const firstOfMonth = today.slice(0, 8) + "01";
+  const lastMonthEnd = addDaysStr(firstOfMonth, -1);
+  const lastMonthStart = lastMonthEnd.slice(0, 8) + "01";
+
+  const ranges = [
+    { label: "today", from: today, to: today, cacheable: false },     // 今天不缓存(实时)
+    { label: "7d", from: addDaysStr(today, -7), to: yesterday, cacheable: true },
+    { label: "28d", from: addDaysStr(today, -28), to: yesterday, cacheable: true },
+    { label: "month", from: firstOfMonth, to: yesterday, cacheable: true },
+    { label: "lastMonth", from: lastMonthStart, to: lastMonthEnd, cacheable: true },
+  ];
+
+  const results = [];
+  for (const r of ranges) {
+    try {
+      // 抓订单
+      const orders = await fetchOzonOrders(env, r.from, r.to);
+      const ordersKey = dataCacheKey("orders", null, r.from, r.to);
+      if (r.cacheable && Array.isArray(orders) && orders.length > 0) {
+        await kvPutData(env, ordersKey, orders, 7 * 24 * 3600);
+      }
+      // 抓店铺分析
+      const analytics = await fetchStoreAnalytics(env, r.from, r.to);
+      const analyticsKey = dataCacheKey("store", null, r.from, r.to);
+      if (r.cacheable && Array.isArray(analytics) && analytics.length > 0) {
+        await kvPutData(env, analyticsKey, analytics, 7 * 24 * 3600);
+      }
+      results.push({ label: r.label, from: r.from, to: r.to, orders: orders.length, stores: analytics.length, cached: r.cacheable });
+    } catch (e) {
+      results.push({ label: r.label, from: r.from, to: r.to, error: e.message || String(e) });
+    }
+  }
+  return results;
+}
+
 async function fetchProductAnalytics(env, from, to) {
   const rows = [];
   for (const store of ozonStores(env)) {
@@ -1403,6 +1455,12 @@ export async function onRequest(context) {
     if (path === "probe/ozon-ads") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeOzonAds(env, from, to, url.searchParams.get("uuid") || "", url.searchParams.get("create") === "1"));
+    }
+    // 定时预热缓存:抓取常见范围(今天/7天/28天/本月/上月)的订单+分析,写入 KV。
+    // 前端打开页面时后台静默调用一次;也可配外部 cron 定时调用。
+    if (path === "precache") {
+      const results = await precacheCommonRanges(env);
+      return json({ ok: true, results, ts: Date.now() });
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {

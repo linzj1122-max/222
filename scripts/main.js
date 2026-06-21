@@ -3188,6 +3188,22 @@ const initialProducts = [
       pruneStaleRangeCache([...ranges, { from: userFrom, to: userTo }]);
     }
 
+    // 每天调用一次后端 /api/precache,预热订单+店铺分析缓存(今天/7天/28天/本月/上月)
+    // 记录上次调用的莫斯科日期,同一天内不重复调用
+    async function precacheOrdersDaily() {
+      try {
+        const lastKey = "ozon_wb_precache_orders_day";
+        const boundary = mskFetchBoundaryDate();
+        if (localStorage.getItem(lastKey) === boundary) return;   // 今天已预热过
+        localStorage.setItem(lastKey, boundary);
+        const res = await fetch("/api/precache");
+        const data = await res.json();
+        if (data.ok) console.log("[precache] 订单预热完成:", data.results);
+      } catch (e) {
+        console.warn("[precache] 预热失败:", e.message);
+      }
+    }
+
     // 清理过期/无用的范围缓存：保留当前经营汇总标准范围 + 当前查看范围，其余删除
     function pruneStaleRangeCache(keepRanges) {
       const keepKeys = new Set(keepRanges.map((range) => rangeCacheKey(range.from, range.to)));
@@ -3271,6 +3287,8 @@ const initialProducts = [
       if (backendEnabled) precacheAds28Days();
       // 静默预缓存经营汇总范围数据（7/28/季/年），每天凌晨4点后抓取一次
       if (backendEnabled) precacheSummarySnapshots();
+      // 启动时后台预热订单+店铺分析缓存(今天/7天/28天/本月/上月),每天一次
+      if (backendEnabled) precacheOrdersDaily();
       // 启动定时器，在莫斯科凌晨4点边界越过时自动刷新缓存
       if (backendEnabled) scheduleSummaryRefresh();
     }
