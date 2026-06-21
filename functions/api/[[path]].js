@@ -116,12 +116,19 @@ async function withCache(env, key, historicalTtl, isCacheable, forceRefresh, loa
     }
     return { ...(payload || {}), _cache: cache };
   };
+  // 判断结果是否"有内容"(空数组/空对象不缓存,避免把拉取失败/未完成缓存住)
+  const hasContent = (payload) => {
+    if (Array.isArray(payload)) return payload.length > 0;
+    if (payload && typeof payload === "object") return Object.keys(payload).length > 0;
+    return Boolean(payload);
+  };
   if (!forceRefresh && isCacheable) {
     const cached = await kvGetData(env, key);
     if (cached) return attachCache(cached.data, { hit: true, ts: cached.ts });
   }
   const fresh = await loader();
-  if (isCacheable) {
+  // 只缓存有内容的结果(空结果可能是拉取失败,缓存了会误导 7 天)
+  if (isCacheable && hasContent(fresh)) {
     await kvPutData(env, key, fresh, historicalTtl);
   }
   return attachCache(fresh, { hit: false });
