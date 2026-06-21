@@ -106,16 +106,25 @@ async function kvPutData(env, key, data, ttl) {
 // 通用:带缓存的接口包装器
 // - historicalTtl: 纯历史范围的缓存时长(秒),默认 7 天
 // - forceRefresh: 强制跳过缓存
+// 注意:loader 可能返回数组(如 analytics)或对象。数组不能被展开成 {...arr},
+// 否则前端 .forEach 会报错。这里用 attachCache 保留原始类型,仅附加 _cache 字段。
 async function withCache(env, key, historicalTtl, isCacheable, forceRefresh, loader) {
+  const attachCache = (payload, cache) => {
+    if (Array.isArray(payload)) {
+      // 数组:直接返回(不附加字段,避免破坏 forEach);_cache 只在对象路径下生效
+      return payload;
+    }
+    return { ...(payload || {}), _cache: cache };
+  };
   if (!forceRefresh && isCacheable) {
     const cached = await kvGetData(env, key);
-    if (cached) return { ...cached.data, _cache: { hit: true, ts: cached.ts } };
+    if (cached) return attachCache(cached.data, { hit: true, ts: cached.ts });
   }
   const fresh = await loader();
   if (isCacheable) {
     await kvPutData(env, key, fresh, historicalTtl);
   }
-  return { ...fresh, _cache: { hit: false } };
+  return attachCache(fresh, { hit: false });
 }
 
 function ozonStores(env) {

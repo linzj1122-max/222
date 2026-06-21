@@ -549,6 +549,7 @@ const initialProducts = [
       if (orderDateFrom) params.set("dateFrom", orderDateFrom);
       if (orderDateTo) params.set("dateTo", orderDateTo);
       orders = await apiRequest(`/api/orders?${params.toString()}`);
+      orders = Array.isArray(orders) ? orders : (Array.isArray(orders?.result) ? orders.result : []);
       mergeIntoTrendOrders(orders);
       loadBackendAds({ cacheOnly: true });
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
@@ -570,7 +571,9 @@ const initialProducts = [
         const params = new URLSearchParams();
         if (orderDateFrom) params.set("dateFrom", orderDateFrom);
         if (orderDateTo) params.set("dateTo", orderDateTo);
-        storeAnalyticsRows = await apiRequest(`/api/analytics/store?${params.toString()}`);
+        const resp = await apiRequest(`/api/analytics/store?${params.toString()}`);
+        // 防御:确保是数组(API 可能返回 {result:[]} 或错误对象)
+        storeAnalyticsRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);
         storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
         save();
       } catch {
@@ -710,7 +713,7 @@ const initialProducts = [
       orders.forEach((order) => order.store && names.add(order.store));
       importedAds.forEach((row) => row.store && names.add(row.store));
       adRowsArray().forEach((row) => row.store && names.add(row.store));
-      storeAnalyticsRows.forEach((row) => row.store && names.add(row.store));
+      (Array.isArray(storeAnalyticsRows) ? storeAnalyticsRows : []).forEach((row) => row.store && names.add(row.store));
       return [...names].sort();
     }
 
@@ -872,7 +875,7 @@ const initialProducts = [
         if (Number(c.refundFee || 0) > 0) row.refunds += 1;
         map.set(store, row);
       });
-      storeAnalyticsRows.forEach((analytics) => {
+      (Array.isArray(storeAnalyticsRows) ? storeAnalyticsRows : []).forEach((analytics) => {
         const store = analytics.store || "未命名店铺";
         if (!map.has(store)) map.set(store, { store, revenue: 0, profit: 0, orders: 0, refunds: 0 });
       });
