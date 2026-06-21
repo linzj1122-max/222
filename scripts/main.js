@@ -799,16 +799,16 @@ const initialProducts = [
       const formatOrders = (value) => `${Math.round(value)} 单`;
 
       ctx.clearRect(0, 0, width, height);
-      // 深色背景 + 微弱渐变氛围
+      // 暖米白背景 + 微弱雾蓝氛围
       const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-      bgGrad.addColorStop(0, "#141a2e");
-      bgGrad.addColorStop(1, "#0a0e1a");
+      bgGrad.addColorStop(0, "#fdfbf6");
+      bgGrad.addColorStop(1, "#faf8f3");
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
-      // 左上角微光
+      // 左上角柔和光晕
       const glow = ctx.createRadialGradient(Math.min(width * 0.3, 240), 40, 20, Math.min(width * 0.3, 240), 40, Math.min(width * 0.6, 480));
-      glow.addColorStop(0, "rgba(91, 140, 255, 0.14)");
-      glow.addColorStop(1, "rgba(91, 140, 255, 0)");
+      glow.addColorStop(0, "rgba(107, 142, 175, 0.07)");
+      glow.addColorStop(1, "rgba(107, 142, 175, 0)");
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
@@ -821,9 +821,9 @@ const initialProducts = [
       const toOrderY = (value) => chartY + chartH - (Number(value || 0) / orderAxisMax) * chartH;
       const toX = (index) => chartX + index * xStep;
 
-      ctx.strokeStyle = "rgba(120, 140, 200, 0.10)";
+      ctx.strokeStyle = "rgba(120, 110, 90, 0.10)";
       ctx.lineWidth = 1;
-      ctx.fillStyle = "#7480a0";
+      ctx.fillStyle = "#948e84";
       ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
@@ -843,9 +843,9 @@ const initialProducts = [
       const orderPoints = current.map((item, index) => ({ x: toX(index), y: toOrderY(item.orders) }));
       if (activeChartIndex !== null && current[activeChartIndex]) {
         const activeX = toX(activeChartIndex);
-        ctx.fillStyle = "rgba(91, 140, 255, 0.08)";
+        ctx.fillStyle = "rgba(107, 142, 175, 0.08)";
         ctx.fillRect(activeX - Math.max(10, xStep / 2), chartY, Math.max(20, xStep), chartH);
-        ctx.strokeStyle = "rgba(255, 200, 87, 0.55)";
+        ctx.strokeStyle = "rgba(196, 163, 90, 0.5)";
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 6]);
         ctx.beginPath();
@@ -854,7 +854,7 @@ const initialProducts = [
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      drawSmoothLine(ctx, comparePoints, "rgba(155, 138, 255, 0.55)", 2, { dots: false, dashed: true });
+      drawSmoothLine(ctx, comparePoints, "rgba(123, 160, 135, 0.55)", 2, { dots: false, dashed: true });
 
       const barStep = chartW / Math.max(current.length, 1);
       const barW = Math.min(34, Math.max(8, barStep * .46));
@@ -864,11 +864,11 @@ const initialProducts = [
         const h = chartY + chartH - y;
         const grad = ctx.createLinearGradient(0, y, 0, chartY + chartH);
         if (index === activeChartIndex) {
-          grad.addColorStop(0, "#9b8aff");
-          grad.addColorStop(1, "#5b8cff");
+          grad.addColorStop(0, "#7ba087");
+          grad.addColorStop(1, "#6b8eaf");
         } else {
-          grad.addColorStop(0, "rgba(122, 125, 255, 0.95)");
-          grad.addColorStop(1, "rgba(91, 140, 255, 0.78)");
+          grad.addColorStop(0, "rgba(107, 142, 175, 0.85)");
+          grad.addColorStop(1, "rgba(123, 160, 135, 0.78)");
         }
         ctx.fillStyle = grad;
         ctx.beginPath();
@@ -884,7 +884,7 @@ const initialProducts = [
         // 柱顶微光
         if (h > 10) {
           const topGrad = ctx.createLinearGradient(0, y, 0, y + Math.min(h, 18));
-          topGrad.addColorStop(0, "rgba(255, 255, 255, 0.18)");
+          topGrad.addColorStop(0, "rgba(255, 255, 255, 0.35)");
           topGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
           ctx.fillStyle = topGrad;
           ctx.beginPath();
@@ -896,11 +896,11 @@ const initialProducts = [
           ctx.fill();
         }
       });
-      drawSmoothLine(ctx, orderPoints, "#ffc857", 2.5, { dots: false });
+      drawSmoothLine(ctx, orderPoints, "#c4a35a", 2.5, { dots: false });
       if (activeChartIndex !== null && orderPoints[activeChartIndex]) {
         const point = orderPoints[activeChartIndex];
-        ctx.fillStyle = "#0a0e1a";
-        ctx.strokeStyle = "#ffc857";
+        ctx.fillStyle = "#fdfbf6";
+        ctx.strokeStyle = "#c4a35a";
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
@@ -908,7 +908,7 @@ const initialProducts = [
         ctx.stroke();
       }
 
-      ctx.fillStyle = "#7480a0";
+      ctx.fillStyle = "#948e84";
       ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       current.forEach((item, index) => {
         const interval = period <= 7 ? 1 : period <= 14 ? 2 : 4;
@@ -916,9 +916,9 @@ const initialProducts = [
         ctx.textAlign = "center";
         ctx.fillText(item.date.slice(8), toX(index), height - 34);
         if (period >= 14 && (index === 2 || index === 16)) {
-          ctx.fillStyle = "#4a5578";
+          ctx.fillStyle = "#b8b1a5";
           ctx.fillText(index < 10 ? "Sa" : "Su", toX(index), height - 18);
-          ctx.fillStyle = "#7480a0";
+          ctx.fillStyle = "#948e84";
         }
       });
 
@@ -998,7 +998,7 @@ const initialProducts = [
       if (options.dots === false) return;
       points.forEach((point, index) => {
         if (points.length > 14 && index % 2 !== 0 && index !== points.length - 1) return;
-        ctx.fillStyle = "#0a0e1a";
+        ctx.fillStyle = "#fdfbf6";
         ctx.beginPath();
         ctx.arc(point.x, point.y, 5.5, 0, Math.PI * 2);
         ctx.fill();
@@ -1460,19 +1460,19 @@ const initialProducts = [
       const toX = (index) => chartX + index * step;
       ctx.clearRect(0, 0, width, height);
       const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-      bgGrad.addColorStop(0, "#141a2e");
-      bgGrad.addColorStop(1, "#0a0e1a");
+      bgGrad.addColorStop(0, "#fdfbf6");
+      bgGrad.addColorStop(1, "#faf8f3");
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
       // 柔和发光
       const glow = ctx.createRadialGradient(Math.min(width * 0.3, 240), 40, 20, Math.min(width * 0.3, 240), 40, Math.min(width * 0.6, 480));
-      glow.addColorStop(0, "rgba(91, 140, 255, 0.12)");
-      glow.addColorStop(1, "rgba(91, 140, 255, 0)");
+      glow.addColorStop(0, "rgba(107, 142, 175, 0.07)");
+      glow.addColorStop(1, "rgba(107, 142, 175, 0)");
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
-      ctx.strokeStyle = "rgba(120, 140, 200, 0.10)";
-      ctx.fillStyle = "#7480a0";
+      ctx.strokeStyle = "rgba(120, 110, 90, 0.10)";
+      ctx.fillStyle = "#948e84";
       ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
@@ -1482,22 +1482,22 @@ const initialProducts = [
       }
       const previousPoints = previous.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
       const points = current.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
-      // 上期线（紫色虚线）
-      if (previousPoints.length) drawSmoothLine(ctx, previousPoints, "rgba(155, 138, 255, 0.55)", 3, { dashed: true, dots: false });
-      // 本期线（蓝→紫渐变填充 + 主色描边）
-      if (points.length) drawAreaLine(ctx, points, chartY + chartH, "rgba(91, 140, 255, 0.35)");
-      drawSmoothLine(ctx, points, "#5b8cff", 3.5);
+      // 上期线（鼠尾草绿虚线）
+      if (previousPoints.length) drawSmoothLine(ctx, previousPoints, "rgba(123, 160, 135, 0.6)", 3, { dashed: true, dots: false });
+      // 本期线（雾蓝渐变填充 + 主色描边）
+      if (points.length) drawAreaLine(ctx, points, chartY + chartH, "rgba(107, 142, 175, 0.25)");
+      drawSmoothLine(ctx, points, "#6b8eaf", 3.5);
       if (activeAdChartIndex !== null && current[activeAdChartIndex]) {
         const x = toX(activeAdChartIndex);
-        ctx.strokeStyle = "rgba(255, 200, 87, 0.45)";
+        ctx.strokeStyle = "rgba(196, 163, 90, 0.45)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, chartY);
         ctx.lineTo(x, chartY + chartH);
         ctx.stroke();
         [points[activeAdChartIndex], previousPoints[activeAdChartIndex]].filter(Boolean).forEach((point, index) => {
-          ctx.fillStyle = "#0a0e1a";
-          ctx.strokeStyle = index ? "rgba(155, 138, 255, 0.9)" : "#9b8aff";
+          ctx.fillStyle = "#fdfbf6";
+          ctx.strokeStyle = index ? "rgba(123, 160, 135, 0.85)" : "#7ba087";
           ctx.lineWidth = 4;
           ctx.beginPath();
           ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
@@ -1505,13 +1505,13 @@ const initialProducts = [
           ctx.stroke();
         });
       }
-      ctx.fillStyle = "#7480a0"; ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
+      ctx.fillStyle = "#948e84"; ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       const interval = current.length <= 7 ? 1 : current.length <= 14 ? 2 : 4;
       current.forEach((item, index) => { if (index % interval !== 0 && index !== current.length - 1) return; ctx.textAlign = "center"; ctx.fillText(item.date.slice(5), toX(index), height - 26); });
-      ctx.strokeStyle = "#5b8cff"; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 150, height - 18); ctx.lineTo(chartX + chartW - 122, height - 18); ctx.stroke();
-      ctx.fillStyle = "#aab3cf"; ctx.textAlign = "left"; ctx.fillText("本期", chartX + chartW - 114, height - 14);
+      ctx.strokeStyle = "#6b8eaf"; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 150, height - 18); ctx.lineTo(chartX + chartW - 122, height - 18); ctx.stroke();
+      ctx.fillStyle = "#6b665e"; ctx.textAlign = "left"; ctx.fillText("本期", chartX + chartW - 114, height - 14);
       if (previousPoints.length) {
-        ctx.strokeStyle = "rgba(155, 138, 255, 0.65)"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 68, height - 18); ctx.lineTo(chartX + chartW - 40, height - 18); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(123, 160, 135, 0.65)"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 68, height - 18); ctx.lineTo(chartX + chartW - 40, height - 18); ctx.stroke(); ctx.setLineDash([]);
         ctx.fillText("上期", chartX + chartW - 32, height - 14);
       }
       adChartHitboxes = current.map((item, index) => ({
