@@ -544,6 +544,11 @@ async function probeAnalyticsMetrics(env, from, to) {
     "united_conv_tocart", "united_conv_tocart_pdp", "united_conv_tocart_search", "united_conv_tocart_catalog",
     // position 系列(对应「搜索和目录中的位置」)
     "position_category", "position_cart",
+    // 新版数据分析指标(用户确认的新版后台)
+    // 「搜索结果和目录中的展示次数」「商品卡片访问」等
+    "united_hits_view_search_new", "united_items_in_cart",
+    "united_items_in_cart_pdp", "united_items_in_cart_search", "united_items_in_cart_catalog",
+    "united_session_pdp", "united_session_search", "united_session_catalog",
     // 其他可能
     "price", "discount_percent",
   ];
