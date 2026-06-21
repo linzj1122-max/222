@@ -2243,6 +2243,48 @@ label.inline-select > select {
   .listing-cascade-col:last-child { border-bottom: none; }
 }
 
+/* 类目搜索框 + 下拉结果 */
+.listing-cat-search { position: relative; margin-bottom: 4px; }
+.listing-cat-search .search { width: 100%; }
+.listing-cat-search-result {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+}
+.listing-search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-2);
+  transition: background 0.12s ease;
+}
+.listing-search-item:hover { background: var(--bg-3); color: var(--ink-1); }
+.listing-search-item .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.listing-search-item mark { background: var(--accent-gold); color: #fff; padding: 0 3px; border-radius: 3px; }
+.listing-search-item .leaf-tag,
+.listing-search-item .level-tag {
+  font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; flex-shrink: 0;
+}
+.listing-search-item .leaf-tag { background: var(--accent-sage-soft); color: var(--accent-sage); }
+.listing-search-item .level-tag { background: var(--bg-4); color: var(--ink-3); }
+.listing-search-empty {
+  padding: 16px; text-align: center; color: var(--ink-3); font-size: 12.5px;
+}
+
 /* =========================================================
    货盘管理（Sourcing Tray）— 表单与清单排版优化
    ========================================================= */

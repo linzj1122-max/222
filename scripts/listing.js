@@ -155,24 +155,21 @@
       <section class="dashboard-brief">
         <div>
           <h2>商品上架</h2>
-          <p>Ozon / WB 四步上架:① 选平台抓类目 → ② 录产品信息 → ③ GPT-Image 生图+生文案 → ④ 调店铺 API 发布。</p>
+          <p>Ozon / WB 三步上架:① 选平台与类目 → ② 录产品信息 + 上传图片 + 填文案 → ③ 调店铺 API 发布。</p>
         </div>
-        <span class="live-chip"><span></span>AI 上架流水线</span>
+        <span class="live-chip"><span></span>上架流水线</span>
       </section>
 
       <section class="panel">
         <div class="listing-steps">
           <div class="listing-step active" data-listing-step="1">
-            <span class="num">1</span><span class="label">平台 & 类目<small>抓取并翻译</small></span>
+            <span class="num">1</span><span class="label">平台 & 类目<small>选择并搜索</small></span>
           </div>
           <div class="listing-step" data-listing-step="2">
-            <span class="num">2</span><span class="label">产品信息<small>货盘 / 单个</small></span>
+            <span class="num">2</span><span class="label">产品信息 & 图文<small>图片 / 标题 / 描述</small></span>
           </div>
           <div class="listing-step" data-listing-step="3">
-            <span class="num">3</span><span class="label">AI 图文<small>GPT-Image + 文案</small></span>
-          </div>
-          <div class="listing-step" data-listing-step="4">
-            <span class="num">4</span><span class="label">发布上架<small>店铺 API</small></span>
+            <span class="num">3</span><span class="label">发布上架<small>店铺 API</small></span>
           </div>
         </div>
       </section>
@@ -194,6 +191,10 @@
           </label>
         </div>
         <div id="lst_catStatus" class="table-status">选择平台与店铺后会自动抓取类目(已缓存,类目一般不变,无需重复抓取)。</div>
+        <div class="listing-cat-search">
+          <input id="lst_catSearch" class="search" placeholder="搜索类目,如:运动 / U型枕头 / 空气清新剂" />
+          <div id="lst_catSearchResult" class="listing-cat-search-result" hidden></div>
+        </div>
         <div class="listing-cat-list" id="lst_catList"></div>
         <div class="actions">
           <button class="primary" type="button" id="lst_toStep2">下一步:产品信息 →</button>
@@ -202,7 +203,7 @@
 
       <section class="panel listing-step-pane" data-listing-pane="2">
         <div class="toolbar">
-          <h3>第二步 · 录入产品信息</h3>
+          <h3>第二步 · 产品信息、图片与文案</h3>
           <div class="segmented small" id="lst_sourceToggle">
             <button class="active" type="button" data-source="single">单个添加</button>
             <button type="button" data-source="tray">从货盘选</button>
@@ -210,9 +211,6 @@
         </div>
 
         <div data-source-pane="single">
-          <label>产品参考图(至少 1 张,将作为 AI 生图与首图参考)<input id="lst_images" type="file" accept="image/*" multiple /></label>
-          <div class="listing-thumb-row" id="lst_thumbRow"></div>
-
           <div class="cols-3">
             <label>货号<input id="lst_code" type="text" placeholder="例如 HS" /></label>
             <label>品牌<input id="lst_brand" type="text" placeholder="例如 Baseus" /></label>
@@ -228,8 +226,6 @@
             <label>宽 mm<input id="lst_width" type="number" step="0.1" min="0" placeholder="68.5" /></label>
             <label>高 mm<input id="lst_height" type="number" step="0.1" min="0" placeholder="144" /></label>
           </div>
-          <label>产品参数(供 AI 与上架使用)<textarea id="lst_params" rows="3" placeholder="例如:电池容量 20000mAh / 输入 5V / 输出 10W / 聚合物锂离子电芯…"></textarea></label>
-          <label>核心卖点(用顿号或换行分隔)<textarea id="lst_sellingPoints" rows="3" placeholder="例如:小巧便携 · 自带三线 · 多设备同充 · LED 数显 · 民航可携"></textarea></label>
         </div>
 
         <div data-source-pane="tray" hidden>
@@ -242,37 +238,34 @@
           </div>
         </div>
 
+        <hr class="listing-divider" />
+
+        <label>商品图片(至少 1 张,建议 3:4 竖图,最多 15 张,第一张为首图)<input id="lst_images" type="file" accept="image/*" multiple /></label>
+        <div class="listing-thumb-row" id="lst_thumbRow"></div>
+
+        <div class="listing-copy-helper">
+          <div class="listing-copy-helper-title">💡 去 ChatGPT 生成文案?点这里复制提示词</div>
+          <textarea id="lst_copyPrompt" rows="3" readonly placeholder="点下方按钮生成提示词…"></textarea>
+          <div class="actions">
+            <button class="secondary" type="button" id="lst_genPrompt">生成提示词</button>
+            <button class="secondary" type="button" id="lst_copyPromptBtn">复制提示词</button>
+          </div>
+        </div>
+
+        <label>产品标题(俄文)<textarea id="lst_title" rows="2" placeholder="Ozon 标题,建议 60~110 字符"></textarea></label>
+        <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
+        <label>搜索标签(<strong>每行一个</strong>,每个标签 ≤ 30 字符,最多 20 个)<textarea id="lst_tags" rows="4" placeholder="每行输入一个标签,例如:&#10;массажер&#10;для шеи"></textarea></label>
+        <div id="lst_tagHint" class="table-status">提示:Ozon 要求每个标签单独一行,单个标签不超过 30 个字符(含 #)。</div>
+
         <div class="actions">
           <button class="secondary" type="button" id="lst_backTo1">← 上一步</button>
-          <button class="primary" type="button" id="lst_toStep3">下一步:AI 图文 →</button>
+          <button class="primary" type="button" id="lst_toStep3">下一步:发布上架 →</button>
         </div>
       </section>
 
       <section class="panel listing-step-pane" data-listing-pane="3">
         <div class="toolbar">
-          <h3>第三步 · AI 生图与文案</h3>
-          <span class="status">GPT-Image 生成 9~10 张 3:4 电商图,并生成俄文标题/描述/标签。</span>
-        </div>
-        <div class="actions">
-          <button class="primary" type="button" id="lst_runImage">生成电商图(9~10 张)</button>
-          <button class="secondary" type="button" id="lst_runCopy">生成俄文文案</button>
-          <span id="lst_genStatus" class="status"></span>
-        </div>
-        <div class="listing-gen-grid" id="lst_genGrid"></div>
-
-        <label>产品标题(俄文,可编辑)<textarea id="lst_title" rows="2"></textarea></label>
-        <label>产品描述(俄文,可编辑)<textarea id="lst_description" rows="6"></textarea></label>
-        <label>搜索标签(逗号分隔)<textarea id="lst_tags" rows="2"></textarea></label>
-
-        <div class="actions">
-          <button class="secondary" type="button" id="lst_backTo2">← 上一步</button>
-          <button class="primary" type="button" id="lst_toStep4">下一步:发布上架 →</button>
-        </div>
-      </section>
-
-      <section class="panel listing-step-pane" data-listing-pane="4">
-        <div class="toolbar">
-          <h3>第四步 · 调店铺 API 发布</h3>
+          <h3>第三步 · 调店铺 API 发布</h3>
         </div>
         <div class="notice">将调用店铺 API(Ozon /v3/product/import 或 WB /content/v2/cards/upload)上传商品。请确认标题、描述、图片、价格无误后再发布。</div>
         <div class="cols-3">
@@ -313,9 +306,9 @@
     refreshStores();
   }
 
-  // ---- 步骤切换 ----
+  // ---- 步骤切换(三步流程) ----
   function goToStep(step) {
-    draft.step = Math.min(Math.max(step, 1), 4);
+    draft.step = Math.min(Math.max(step, 1), 3);
     document.querySelectorAll("[data-listing-step]").forEach((el) => {
       const n = Number(el.dataset.listingStep);
       el.classList.toggle("active", n === draft.step);
@@ -325,8 +318,7 @@
       el.classList.toggle("active", Number(el.dataset.listingPane) === draft.step);
     });
     if (draft.step === 2) renderTrayRows();
-    if (draft.step === 3) renderGenGrid();
-    if (draft.step === 4) {
+    if (draft.step === 3) {
       $("lst_pubStore") && ($("lst_pubStore").value = String(draft.storeIndex));
       $("lst_pubOfferId") && ($("lst_pubOfferId").value = draft.code || draft.offerId || "");
     }
@@ -438,15 +430,18 @@
     const cache = loadCatCacheAll();
     const storeKey = currentStoreKey();
     const cached = cache[platform];
-    // 命中缓存(版本一致 + 同一店铺 + 缓存存在)直接用,不再请求。
-    // 只缓存扁平数据(flat),命中时用最新 buildTree 重建树,确保逻辑始终最新。
-    if (cached && cached.flat && cached.storeKey === storeKey && cached.v === CAT_CACHE_VERSION) {
+    // 命中缓存优先同步渲染(版本一致即可,storeKey 不一致也先用着,避免首次进页面白屏)
+    if (cached && cached.flat && cached.v === CAT_CACHE_VERSION) {
       categoryCache = cached.flat;
       categoryTree = buildTree(categoryCache);
       cascadeState = { l1: "", l2: "", l3: "", l4: "" };
       renderCascade();
       const status = $("lst_catStatus");
       if (status) status.textContent = `已加载缓存的 ${platform} 类目(共 ${cached.flat.length} 项,来自「${cached.storeName || "本地缓存"}」)。`;
+      // 若店铺不一致,后台静默刷新(不阻塞界面)
+      if (cached.storeKey !== storeKey) {
+        fetchCategories(true);
+      }
       return;
     }
     await fetchCategories();
@@ -597,7 +592,107 @@
     renderCascade();
   }
 
-  // ---- 渲染:参考图缩略 ----
+  // ---- 类目搜索 ----
+  // 收集树的所有节点(带路径),用于搜索
+  function flattenTreeForSearch(nodes, parentPath = []) {
+    const out = [];
+    nodes.forEach((n) => {
+      const path = [...parentPath, n.name];
+      out.push({ node: n, path, pathStr: path.join(" / "), level: n.level });
+      if (n.children && n.children.length) {
+        out.push(...flattenTreeForSearch(n.children, path));
+      }
+    });
+    return out;
+  }
+
+  function runCatSearch(kw) {
+    const box = $("lst_catSearchResult");
+    if (!box) return;
+    const keyword = String(kw || "").trim().toLowerCase();
+    if (!keyword) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    if (!categoryTree.length) {
+      box.hidden = false;
+      box.innerHTML = `<div class="listing-search-empty">类目尚未加载,请先选择平台与店铺。</div>`;
+      return;
+    }
+    const all = flattenTreeForSearch(categoryTree);
+    // 匹配:节点名或完整路径包含关键词
+    const matched = all.filter((x) =>
+      x.node.name.toLowerCase().includes(keyword) || x.pathStr.toLowerCase().includes(keyword)
+    ).slice(0, 60);
+
+    if (!matched.length) {
+      box.hidden = false;
+      box.innerHTML = `<div class="listing-search-empty">未找到包含「${escapeHtml(kw)}」的类目。</div>`;
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = matched.map((x) => {
+      const isLeaf = !(x.node.children && x.node.children.length);
+      const tag = isLeaf ? `<span class="leaf-tag">可上架</span>` : `<span class="level-tag">${x.level}级</span>`;
+      // 高亮匹配段
+      const pathHtml = escapeHtml(x.pathStr).replace(new RegExp(`(${escapeHtml(kw)})`, "gi"), '<mark>$1</mark>');
+      return `<div class="listing-search-item" data-search-id="${escapeAttr(x.node.id)}" data-search-level="${x.level}">
+        <span class="path">${pathHtml}</span>
+        ${tag}
+      </div>`;
+    }).join("");
+  }
+
+  // 点击搜索结果:若是末级 → 直接确认上架;若是中间级 → 跳转级联到该节点
+  function onSearchResultClick(id) {
+    const findIn = (nodes, fid) => {
+      for (const n of nodes) { if (n.id === fid) return n; if (n.children) { const f = findIn(n.children, fid); if (f) return f; } }
+      return null;
+    };
+    const node = findIn(categoryTree, id);
+    if (!node) return;
+    const isLeaf = !(node.children && node.children.length);
+    if (isLeaf) {
+      // 末级:直接确认上架
+      const leaf = node.leaf || {};
+      draft.categoryId = leaf.origId || node.id;
+      draft.categoryName = node.name;
+      draft.categoryNameZh = node.name;
+      draft.categoryFullPath = leaf.fullPath || node.name;
+      draft.typeId = leaf.typeId || 0;
+      draft.descriptionCategoryId = leaf.categoryId || 0;
+      persistDraft();
+    }
+    // 跳转级联(末级也跳转,让用户看到选中状态)
+    jumpCascadeTo(node);
+    // 清空搜索
+    const searchInput = $("lst_catSearch");
+    if (searchInput) searchInput.value = "";
+    const box = $("lst_catSearchResult");
+    if (box) { box.hidden = true; box.innerHTML = ""; }
+  }
+
+  // 把级联状态跳转到指定节点(展开其父级链)
+  function jumpCascadeTo(node) {
+    // 找到从根到 node 的完整路径
+    const findPath = (nodes, fid, trail) => {
+      for (const n of nodes) {
+        const newTrail = [...trail, n];
+        if (n.id === fid) return newTrail;
+        if (n.children) { const f = findPath(n.children, fid, newTrail); if (f) return f; }
+      }
+      return null;
+    };
+    const path = findPath(categoryTree, node.id, []);
+    if (!path) return;
+    cascadeState.l1 = path[0]?.id || "";
+    cascadeState.l2 = path[1]?.id || "";
+    cascadeState.l3 = path[2]?.id || "";
+    cascadeState.l4 = path[3]?.id || "";
+    renderCascade();
+  }
+
   function renderThumbs() {
     const row = $("lst_thumbRow");
     if (!row) return;
@@ -628,44 +723,30 @@
       </tr>`).join("");
   }
 
-  // ---- 渲染:生成图网格 ----
-  function renderGenGrid() {
-    const grid = $("lst_genGrid");
-    if (!grid) return;
-    const list = draft.generatedImages;
-    const labels = ["封面主图", "展示图", "展示图", "卖点图", "卖点图", "卖点图", "细节图", "使用说明图", "产品详情图", "补充图"];
-    if (!list.length) {
-      grid.innerHTML = `<div class="muted-cell">尚未生成,点击上方「生成电商图」。</div>`;
-      return;
-    }
-    grid.innerHTML = list.map((item, i) => {
-      if (item.pending) {
-        return `<div class="listing-gen-cell pending"><span>生成中…</span></div>`;
-      }
-      if (!item.ok) {
-        return `<div class="listing-gen-cell pending" title="${escapeAttr(item.error || "")}"><span>失败</span></div>`;
-      }
-      return `<div class="listing-gen-cell">
-        <span class="tag">${escapeHtml(labels[i] || ("图 " + (i + 1)))}</span>
-        <img src="${escapeAttr(item.url)}" alt="生成图 ${i + 1}" />
-      </div>`;
-    }).join("");
-  }
-
-  // ---- 收集第二步表单数据 ----
+  // ---- 收集第二步表单(产品信息 + 图片 + 文案) ----
   function readStep2Form() {
-    const fields = ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
+    const fields = ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height"];
     fields.forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) draft[k] = el.value;
     });
+    // 文案字段(标题/描述/标签现在也在第二步)
+    const titleEl = $("lst_title");
+    const descEl = $("lst_description");
+    const tagsEl = $("lst_tags");
+    if (titleEl) draft.title = titleEl.value;
+    if (descEl) draft.description = descEl.value;
+    if (tagsEl) draft.tags = tagsEl.value;
   }
 
   function fillStep2Form() {
-    ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
+    ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height"].forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) el.value = draft[k] ?? "";
     });
+    $("lst_title") && ($("lst_title").value = draft.title || "");
+    $("lst_description") && ($("lst_description").value = draft.description || "");
+    $("lst_tags") && ($("lst_tags").value = draft.tags || "");
     const platformSel = $("lst_platform");
     if (platformSel) platformSel.value = draft.platform;
     const storeSel = $("lst_storeIndex");
@@ -673,119 +754,52 @@
     renderThumbs();
   }
 
-  function fillStep3Form() {
-    $("lst_title").value = draft.title || "";
-    $("lst_description").value = draft.description || "";
-    $("lst_tags").value = draft.tags || "";
-    renderGenGrid();
+  // ---- ChatGPT 提示词生成(辅助用户去 ChatGPT 手动生成文案) ----
+  function genCopyPrompt() {
+    const ta = $("lst_copyPrompt");
+    if (!ta) return;
+    const prompt = [
+      "你是 Ozon 资深俄文电商文案,请根据以下产品信息生成上架所需的俄文内容。",
+      "要求:",
+      "- 标题:60~110 字符,包含品牌/型号/核心卖点/适用场景",
+      "- 描述:300~600 字符,卖点分点列出,自然融入关键词,地道俄文",
+      "- 标签:10~15 个,每个不超过 30 字符",
+      "",
+      "产品信息:",
+      `品牌:${draft.brand || "-"}`,
+      `型号:${draft.model || "-"}`,
+      `货号:${draft.code || "-"}`,
+      `类目:${draft.categoryFullPath || draft.categoryNameZh || "-"}`,
+      `售价:${draft.price || "-"} RUB`,
+      `尺寸:${[draft.length, draft.width, draft.height].filter(Boolean).join("×") || "-"} mm`,
+      `重量:${draft.weight || "-"} g`,
+      "",
+      '请用 JSON 输出:{"title":"","description":"","tags":""}',
+    ].join("\n");
+    ta.value = prompt;
   }
 
-  // ---- 第三步:生成图 ----
-  async function runGenerateImages() {
-    readStep2Form();
-    if (draft.source === "single" && !draft.images.length) {
-      alert("请先上传至少 1 张参考图。");
-      return;
-    }
-    if (!draft.params && !draft.sellingPoints && !draft.model) {
-      if (!confirm("产品参数/卖点/型号均为空,AI 可能生图不准,是否继续?")) return;
-    }
-    const btn = $("lst_runImage");
-    const status = $("lst_genStatus");
-    btn.disabled = true;
-    status.textContent = "正在调用 GPT-Image,每张约 10~30 秒,请耐心等待…";
-    const count = 9;
-    draft.generatedImages = Array.from({ length: count }, () => ({ pending: true }));
-    renderGenGrid();
+  async function copyPromptToClipboard() {
+    const ta = $("lst_copyPrompt");
+    if (!ta || !ta.value) { alert("请先点「生成提示词」"); return; }
     try {
-      const res = await fetch(API("generate-images"), {
-        method: "POST",
-        headers: storeHeaders(),
-        body: JSON.stringify({
-          count,
-          referenceImages: draft.images,
-          product: {
-            title: draft.model || draft.code,
-            brand: draft.brand,
-            model: draft.model,
-            category: draft.categoryName,
-            categoryZh: draft.categoryNameZh,
-            size: [draft.length, draft.width, draft.height].filter(Boolean).join("×") + (draft.length ? "mm" : ""),
-            weight: draft.weight ? `${draft.weight}g` : "",
-            params: draft.params,
-            sellingPoints: draft.sellingPoints,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "生图失败");
-      draft.generatedImages = (data.results || []).map((r) => r);
-      renderGenGrid();
-      status.textContent = `生成完成:成功 ${draft.generatedImages.filter((x) => x.ok).length}/${count} 张。`;
-      log(`AI 生图完成,成功 ${draft.generatedImages.filter((x) => x.ok).length}/${count} 张。`);
-      persistDraft();
-    } catch (e) {
-      draft.generatedImages = [];
-      renderGenGrid();
-      status.textContent = "生成失败:" + (e.message || e);
-      log("生图失败:" + (e.message || e));
-    } finally {
-      btn.disabled = false;
+      await navigator.clipboard.writeText(ta.value);
+      alert("提示词已复制!粘贴到 ChatGPT 生成文案后,把结果填回下方标题/描述/标签。");
+    } catch {
+      ta.select();
+      document.execCommand("copy");
+      alert("提示词已复制!");
     }
   }
 
-  // ---- 第三步:生成文案 ----
-  async function runGenerateCopy() {
-    readStep2Form();
-    const btn = $("lst_runCopy");
-    const status = $("lst_genStatus");
-    btn.disabled = true;
-    status.textContent = "正在生成俄文文案…";
-    try {
-      const res = await fetch(API("generate-copy"), {
-        method: "POST",
-        headers: storeHeaders(),
-        body: JSON.stringify({
-          product: {
-            title: draft.model || draft.code,
-            brand: draft.brand,
-            model: draft.model,
-            category: draft.categoryName,
-            categoryZh: draft.categoryNameZh,
-            params: draft.params,
-            sellingPoints: draft.sellingPoints,
-            price: draft.price,
-            oldPrice: draft.oldPrice,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "文案生成失败");
-      draft.title = data.title || "";
-      draft.description = data.description || "";
-      draft.tags = data.tags || "";
-      fillStep3Form();
-      status.textContent = "文案已生成,可在下方编辑。";
-      log("AI 文案已生成。");
-      persistDraft();
-    } catch (e) {
-      status.textContent = "文案生成失败:" + (e.message || e);
-      log("文案失败:" + (e.message || e));
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  // ---- 第四步:发布 ----
+  // ---- 第三步:发布 ----
   async function runPublish() {
     readStep2Form();
-    draft.title = $("lst_title")?.value || draft.title;
-    draft.description = $("lst_description")?.value || draft.description;
     const offerId = $("lst_pubOfferId")?.value || draft.code;
     const storeIndex = Number($("lst_pubStore")?.value || 0);
-    const images = draft.generatedImages.filter((x) => x.ok).map((x) => x.url);
+    const images = (draft.images || []).filter(Boolean);
     if (!draft.title) { alert("缺少标题"); return; }
-    if (!images.length) { if (!confirm("尚未生成/无可发布图片,仍要提交?")) return; }
+    if (!images.length) { alert("请至少上传 1 张商品图片"); return; }
     const btn = $("lst_publish");
     btn.disabled = true;
     log(`开始发布到 ${draft.platform}…`);
@@ -866,7 +880,6 @@
 
   function renderAll() {
     fillStep2Form();
-    fillStep3Form();
     renderCascade();
     renderDraftList();
     goToStep(draft.step || 1);
@@ -876,6 +889,21 @@
   function bindEvents() {
     $("lst_platform")?.addEventListener("change", (e) => { draft.platform = e.target.value; draft.storeIndex = 0; refreshStores(); });
     $("lst_storeIndex")?.addEventListener("change", (e) => { draft.storeIndex = Number(e.target.value); autoLoadCategories(); });
+    // 类目搜索
+    $("lst_catSearch")?.addEventListener("input", (e) => runCatSearch(e.target.value));
+    $("lst_catSearchResult")?.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-search-id]");
+      if (!item) return;
+      onSearchResultClick(item.getAttribute("data-search-id"));
+    });
+    // 点击搜索框外部时收起搜索结果
+    document.addEventListener("click", (e) => {
+      const wrap = e.target.closest(".listing-cat-search");
+      if (!wrap) {
+        const box = $("lst_catSearchResult");
+        if (box) box.hidden = true;
+      }
+    });
     $("lst_refreshCat")?.addEventListener("click", async () => {
       // 1. 清本地缓存 2. 清云端 KV 缓存 3. 强制重新抓取
       const cache = loadCatCacheAll();
@@ -962,37 +990,25 @@
     });
 
     $("lst_backTo1")?.addEventListener("click", () => { readStep2Form(); goToStep(1); });
-    $("lst_backTo2")?.addEventListener("click", () => { goToStep(2); });
-    $("lst_backTo3")?.addEventListener("click", () => {
-      draft.title = $("lst_title")?.value || draft.title;
-      draft.description = $("lst_description")?.value || draft.description;
-      draft.tags = $("lst_tags")?.value || draft.tags;
-      goToStep(3);
-    });
+    $("lst_backTo3")?.addEventListener("click", () => { readStep2Form(); goToStep(2); });
 
+    // 第二步 → 第三步(发布):校验必填项
     $("lst_toStep3")?.addEventListener("click", () => {
       readStep2Form();
       if (draft.source === "single") {
-        if (!draft.images.length) { alert("单个上架需至少 1 张图片。"); return; }
+        if (!draft.images.length) { alert("请至少上传 1 张商品图片。"); return; }
         if (!draft.code) { alert("请填写货号。"); return; }
         if (!draft.price) { alert("请填写售价。"); return; }
+        if (!draft.title) { alert("请填写产品标题。"); return; }
       }
       persistDraft();
       goToStep(3);
-    });
-
-    $("lst_runImage")?.addEventListener("click", runGenerateImages);
-    $("lst_runCopy")?.addEventListener("click", runGenerateCopy);
-
-    $("lst_toStep4")?.addEventListener("click", () => {
-      draft.title = $("lst_title")?.value || draft.title;
-      draft.description = $("lst_description")?.value || draft.description;
-      draft.tags = $("lst_tags")?.value || draft.tags;
-      if (!draft.title) { alert("请先生成或填写标题。"); return; }
-      persistDraft();
-      goToStep(4);
       log("进入发布步骤,请核对店铺与货号。");
     });
+
+    // ChatGPT 提示词辅助
+    $("lst_genPrompt")?.addEventListener("click", genCopyPrompt);
+    $("lst_copyPromptBtn")?.addEventListener("click", copyPromptToClipboard);
 
     $("lst_publish")?.addEventListener("click", runPublish);
     $("lst_newDraft")?.addEventListener("click", () => {

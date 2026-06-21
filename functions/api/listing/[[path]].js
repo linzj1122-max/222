@@ -393,12 +393,14 @@ function buildImagePrompt(product) {
 
 async function generateImages(env, body) {
   if (!env.OPENAI_API_KEY) {
-    return json({ ok: false, error: "未配置 OPENAI_API_KEY,无法调用 GPT-Image" }, 400);
+    return { ok: false, error: "未配置 OPENAI_API_KEY,无法调用 GPT-Image。请在 Cloudflare 环境变量配置 OPENAI_API_KEY。" };
   }
   const product = body?.product || {};
   const referenceImages = Array.isArray(body?.referenceImages) ? body.referenceImages : [];
   const count = Math.min(Math.max(Number(body?.count) || 9, 1), 10);
   const prompt = buildImagePrompt(product);
+  const imageModel = env.OPENAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL;
+  const baseUrl = openaiBaseUrl(env);
 
   const content = [{ type: "text", text: prompt }];
   referenceImages.slice(0, 4).forEach((dataUrl) => {
@@ -408,13 +410,14 @@ async function generateImages(env, body) {
   });
 
   const results = [];
+  let lastError = "";
   for (let i = 0; i < count; i += 1) {
     try {
-      const response = await fetch(`${openaiBaseUrl(env)}/images/generations`, {
+      const response = await fetch(`${baseUrl}/images/generations`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${env.OPENAI_API_KEY}` },
         body: JSON.stringify({
-          model: env.OPENAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
+          model: imageModel,
           prompt: content[0].text + (i > 0 ? `\n(第 ${i + 1} 张,角色:${["封面主图", "展示图", "展示图", "卖点图", "卖点图", "卖点图", "细节图", "使用说明图", "产品详情图", "补充图"][i] || "补充图"})` : ""),
           n: 1,
           size: "1024x1536",
@@ -425,15 +428,23 @@ async function generateImages(env, body) {
       let payload = null;
       try { payload = JSON.parse(text); } catch { payload = null; }
       if (!response.ok) {
-        results.push({ index: i + 1, ok: false, error: payload?.error?.message || text.slice(0, 200) });
+        const errMsg = payload?.error?.message || text.slice(0, 200);
+        lastError = errMsg;
+        results.push({ index: i + 1, ok: false, error: errMsg });
         continue;
       }
       const item = payload?.data?.[0] || {};
-      const url = item.url || item.b64_json ? (item.url || `data:image/png;base64,${item.b64_json}`) : "";
-      results.push({ index: i + 1, ok: true, url, revised_prompt: item.revised_prompt || "" });
+      const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : "");
+      results.push({ index: i + 1, ok: Boolean(url), url, revised_prompt: item.revised_prompt || "" });
     } catch (error) {
-      results.push({ index: i + 1, ok: false, error: error.message || String(error) });
+      lastError = error.message || String(error);
+      results.push({ index: i + 1, ok: false, error: lastError });
     }
+  }
+  const successCount = results.filter((r) => r.ok).length;
+  // 全部失败时返回 ok:false,让前端能看到真实错误
+  if (successCount === 0) {
+    return { ok: false, error: `生图失败(0/${count}):${lastError || "OpenAI 未返回图片,请检查 API Key、模型名(${imageModel})、额度"}`, prompt, results };
   }
   return { ok: true, prompt, count, results };
 }
@@ -465,34 +476,42 @@ function buildCopyPrompt(product) {
 
 async function generateCopy(env, body) {
   if (!env.OPENAI_API_KEY) {
-    return json({ ok: false, error: "未配置 OPENAI_API_KEY,无法生成文案" }, 400);
+    return { ok: false, error: "未配置 OPENAI_API_KEY,无法生成文案。请在 Cloudflare 环境变量配置。" };
   }
   const product = body?.product || {};
-  const response = await fetch(`${openaiBaseUrl(env)}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${env.OPENAI_API_KEY}` },
-    body: JSON.stringify({
-      model: env.OPENAI_TEXT_MODEL || DEFAULT_TEXT_MODEL,
-      messages: [
-        { role: "system", content: "你是 Ozon/WB 资深俄文电商文案。" },
-        { role: "user", content: buildCopyPrompt(product) },
-      ],
-      temperature: 0.7,
-      response_format: { type: "json_object" },
-    }),
-  });
-  const text = await response.text();
-  let payload = null;
-  try { payload = JSON.parse(text); } catch { payload = null; }
-  if (!response.ok) return { ok: false, error: payload?.error?.message || text.slice(0, 240) };
-  let copy = {};
-  try { copy = JSON.parse(payload?.choices?.[0]?.message?.content || "{}"); } catch { copy = {}; }
-  return {
-    ok: true,
-    title: copy.title || "",
-    description: copy.description || "",
-    tags: copy.tags || "",
-  };
+  const textModel = env.OPENAI_TEXT_MODEL || DEFAULT_TEXT_MODEL;
+  try {
+    const response = await fetch(`${openaiBaseUrl(env)}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: textModel,
+        messages: [
+          { role: "system", content: "你是 Ozon/WB 资深俄文电商文案。" },
+          { role: "user", content: buildCopyPrompt(product) },
+        ],
+        temperature: 0.7,
+        response_format: { type: "json_object" },
+      }),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (!response.ok) {
+      const errMsg = payload?.error?.message || text.slice(0, 240);
+      return { ok: false, error: `文案生成失败(${textModel}):${errMsg}` };
+    }
+    let copy = {};
+    try { copy = JSON.parse(payload?.choices?.[0]?.message?.content || "{}"); } catch { copy = {}; }
+    return {
+      ok: true,
+      title: copy.title || "",
+      description: copy.description || "",
+      tags: copy.tags || "",
+    };
+  } catch (error) {
+    return { ok: false, error: "文案生成失败:" + (error.message || String(error)) };
+  }
 }
 
 // ---------- 发布 ----------
