@@ -418,7 +418,9 @@ async function generateCopy(env, body) {
 // ---------- 发布 ----------
 
 async function publishOzonProduct(env, store, draft) {
-  const descriptionCategoryId = Number(draft.categoryId) || Number(draft.descriptionCategoryId) || 0;
+  // 前端选类目后,descriptionCategoryId / typeId 已经是干净的数字,
+  // 直接用它们;categoryId 可能是 "type-xxx"/"L1|日化" 等展示用字符串,不可 Number。
+  const descriptionCategoryId = Number(draft.descriptionCategoryId) || 0;
   const typeId = Number(draft.typeId) || 0;
   const images = (draft.images || []).filter(Boolean);
 
@@ -527,16 +529,15 @@ async function publish(env, body, headers = {}) {
     return await publishWBProduct(env, store, draft);
   }
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
-  // 前端存的 categoryId 可能是 "cat-123" / "type-456" / 纯数字。
-  // 新版 Ozon 发布需要 description_category_id + type_id,这里做兼容解析。
+  // 兼容历史/多种 categoryId 写法。新版前端已直接发送 descriptionCategoryId + typeId(数字),
+  // 这里仅在前端没发数字 id 时,从 categoryId 字符串尽力回填。
   const rawCat = String(draft.categoryId || "");
-  if (rawCat.startsWith("type-")) {
-    draft.typeId = Number(rawCat.slice(5)) || draft.typeId || 0;
-    // type 节点本身没有 category,保留外部传入的 descriptionCategoryId
-  } else if (rawCat.startsWith("cat-")) {
-    draft.descriptionCategoryId = Number(rawCat.slice(4)) || draft.descriptionCategoryId || 0;
-  } else if (/^\d+$/.test(rawCat)) {
-    draft.descriptionCategoryId = Number(rawCat);
+  if (!draft.descriptionCategoryId) {
+    if (rawCat.startsWith("cat-")) draft.descriptionCategoryId = Number(rawCat.slice(4)) || 0;
+    else if (/^\d+$/.test(rawCat)) draft.descriptionCategoryId = Number(rawCat);
+  }
+  if (!draft.typeId && rawCat.startsWith("type-")) {
+    draft.typeId = Number(rawCat.slice(5)) || 0;
   }
   return await publishOzonProduct(env, store, draft);
 }

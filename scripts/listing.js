@@ -85,6 +85,7 @@
     categoryId: "",
     categoryName: "",
     categoryNameZh: "",
+    categoryFullPath: "",   // Ozon 可接受的完整类目名,如 日化/空气清新剂/空气清新剂
     typeId: 0,
     descriptionCategoryId: 0,
     source: "single", // single | tray
@@ -381,25 +382,61 @@
     return c ? `${c.platform}|${c.clientId}` : draft.platform;
   }
 
-  // 把后端返回的扁平类目(含 fullName/parentId/depth/isLeaf)组装成多级树
+  // 把后端返回的扁平类目,按 fullName 的 "/" 分列,组装成最多三级树。
+  // 例:fullName="日化/空气清新剂/空气清新剂" →
+  //   root{日化} → child{空气清新剂} → leaf{空气清新剂(带 categoryId/typeId)}
+  // 这样一级/二级/三级严格对应 Ozon 可接受的完整类目路径。
   function buildTree(flat) {
-    const map = new Map();
-    const roots = [];
+    const rootMap = new Map();   // 一级: name -> node
     flat.forEach((item) => {
-      const node = { ...item, children: [] };
-      map.set(item.id, node);
+      const rawPath = String(item.fullName || item.nameZh || item.name || "").trim();
+      if (!rawPath) return;
+      const segs = rawPath.split("/").map((s) => s.trim()).filter(Boolean);
+      if (!segs.length) return;
+      const [s1, s2, s3] = segs;
+
+      // 一级节点(去重)
+      if (!rootMap.has(s1)) rootMap.set(s1, { id: `L1|${s1}`, name: s1, level: 1, children: new Map(), leaf: null });
+
+      if (!s2) {
+        // 只有一级,本身就是叶子
+        rootMap.get(s1).leaf = collectLeaf(item, [s1]);
+        return;
+      }
+      const l1 = rootMap.get(s1);
+      if (!l1.children.has(s2)) l1.children.set(s2, { id: `L2|${s1}|${s2}`, name: s2, level: 2, children: new Map(), leaf: null });
+
+      if (!s3) {
+        l1.children.get(s2).leaf = collectLeaf(item, [s1, s2]);
+        return;
+      }
+      const l2 = l1.children.get(s2);
+      // 三级(或更多段都收拢成末级),同名三级保留首个带凭证的
+      if (!l2.children.has(s3)) {
+        l2.children.set(s3, { id: `L3|${s1}|${s2}|${s3}`, name: s3, level: 3, children: new Map(), leaf: collectLeaf(item, [s1, s2, s3]) });
+      }
     });
-    flat.forEach((item) => {
-      const node = map.get(item.id);
-      const parent = map.get(item.parentId);
-      if (parent) parent.children.push(node);
-      else roots.push(node);
+
+    // Map -> 数组(便于渲染)
+    const toArr = (map) => [...map.values()].map((n) => {
+      const out = { id: n.id, name: n.name, level: n.level, leaf: n.leaf, children: toArr(n.children) };
+      return out;
     });
-    return roots;
+    return toArr(rootMap);
+  }
+
+  // 收集叶子信息:保留发布所需的 categoryId/typeId,以及完整路径
+  function collectLeaf(item, pathSegs) {
+    return {
+      categoryId: Number(item.categoryId || 0),
+      typeId: Number(item.typeId || 0),
+      fullPath: pathSegs.join("/"),   // Ozon 可接受的完整类目名,如 日化/空气清新剂/空气清新剂
+      origId: item.id,
+    };
   }
 
   // 类目缓存版本:数据结构变更后递增,旧缓存自动失效重抓
-  const CAT_CACHE_VERSION = 2;
+  const CAT_CACHE_VERSION = 3;
 
   // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
   async function autoLoadCategories() {
@@ -474,12 +511,12 @@
 
     const renderItem = (n, level, selectedId) => {
       const isSel = n.id === selectedId;
-      const hasChild = (n.children && n.children.length) || n.childrenCount;
-      const leaf = n.isLeaf ? `<span class="leaf-tag">可上架</span>` : "";
+      const hasChild = n.children && n.children.length;
+      const isTerminal = !hasChild;   // 无子节点 = 末级(可选定上架)
+      const leaf = isTerminal ? `<span class="leaf-tag">可上架</span>` : "";
       const arrow = hasChild ? `<span class="arrow">▸</span>` : "";
-      const dispName = n.nameZh || n.name;
       return `<div class="listing-cascade-item ${isSel ? "selected" : ""} ${hasChild ? "has-child" : ""}" data-cascade-level="${level}" data-cascade-id="${escapeAttr(n.id)}">
-        <span class="name">${escapeHtml(dispName)}</span>
+        <span class="name">${escapeHtml(n.name)}</span>
         ${leaf}${arrow}
       </div>`;
     };
@@ -509,20 +546,20 @@
   function renderBreadcrumb() {
     const path = [];
     const l1 = categoryTree.find((n) => n.id === cascadeState.l1);
-    if (l1) path.push(l1.nameZh || l1.name);
+    if (l1) path.push(l1.name);
     if (l1) {
       const l2 = (l1.children || []).find((n) => n.id === cascadeState.l2);
-      if (l2) path.push(l2.nameZh || l2.name);
+      if (l2) path.push(l2.name);
       if (l2) {
         const l3 = (l2.children || []).find((n) => n.id === cascadeState.l3);
-        if (l3) path.push(l3.nameZh || l3.name);
+        if (l3) path.push(l3.name);
       }
     }
-    if (!path.length) return `<span class="muted-cell">尚未选择类目(选到最末级即可上架)</span>`;
+    if (!path.length) return `<span class="muted-cell">尚未选择类目(逐级选择到末级即可上架)</span>`;
     return `已选类目:<strong>${path.map(escapeHtml).join(" / ")}</strong>`;
   }
 
-  // 处理级联点击:有子类目则下钻,叶子则确认为最终类目
+  // 处理级联点击:有子类目则下钻;无子类目(末级)→ 确认为最终上架类目
   function onCascadeClick(level, id) {
     const findIn = (nodes, fid) => {
       for (const n of nodes) { if (n.id === fid) return n; if (n.children) { const f = findIn(n.children, fid); if (f) return f; } }
@@ -530,19 +567,23 @@
     };
     const node = findIn(categoryTree, id);
     if (!node) return;
-    const hasChild = (node.children && node.children.length) || node.childrenCount;
+    const hasChild = node.children && node.children.length;
     if (level === 1) { cascadeState.l1 = id; cascadeState.l2 = ""; cascadeState.l3 = ""; }
     else if (level === 2) { cascadeState.l2 = id; cascadeState.l3 = ""; }
     else { cascadeState.l3 = id; }
-    // 叶子节点(isLeaf)或无子节点 → 确认为最终上架类目
-    if (node.isLeaf || !hasChild) {
-      draft.categoryId = node.id;
+
+    if (!hasChild) {
+      // 末级 → 确认为最终上架类目,保留 Ozon 发布所需的完整路径与 id
+      const leaf = node.leaf || {};
+      draft.categoryId = leaf.origId || node.id;
       draft.categoryName = node.name;
-      draft.categoryNameZh = node.nameZh || node.name;
-      draft.typeId = node.typeId || 0;
-      draft.descriptionCategoryId = node.categoryId || 0;
+      draft.categoryNameZh = node.name;
+      draft.categoryFullPath = leaf.fullPath || node.name;   // Ozon 可接受的完整类目名,如 日化/空气清新剂/空气清新剂
+      draft.typeId = leaf.typeId || 0;
+      draft.descriptionCategoryId = leaf.categoryId || 0;
     } else {
-      draft.categoryId = "";  // 中间节点不能上架,清空
+      draft.categoryId = "";   // 中间节点不能上架,清空
+      draft.categoryFullPath = "";
     }
     persistDraft();
     renderCascade();
@@ -754,6 +795,7 @@
             code: draft.code,
             brand: draft.brand,
             categoryId: draft.categoryId,
+            categoryFullPath: draft.categoryFullPath,
             typeId: draft.typeId || 0,
             descriptionCategoryId: draft.descriptionCategoryId || 0,
             price: draft.price,
