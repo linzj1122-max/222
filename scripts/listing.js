@@ -367,7 +367,7 @@
   // tree 是带 children 的多级树(用于级联展示)
   let categoryCache = [];
   let categoryTree = [];          // 当前平台的多级树
-  let cascadeState = { l1: "", l2: "", l3: "" }; // 级联选中状态
+  let cascadeState = { l1: "", l2: "", l3: "", l4: "" }; // 级联选中状态
   let catLoading = false;
 
   function loadCatCacheAll() {
@@ -382,67 +382,53 @@
     return c ? `${c.platform}|${c.clientId}` : draft.platform;
   }
 
-  // 把后端返回的扁平类目,按 fullName 的 "/" 分列,组装成最多三级树。
-  // 例:fullName="日化/空气清新剂/空气清新剂" →
-  //   root{日化} → child{空气清新剂} → leaf{空气清新剂(带 categoryId/typeId)}
-  // 这样一级/二级/三级严格对应 Ozon 可接受的完整类目路径。
-  // 支持任意深度(有的类目只有1级,有的2级,有的3级+)。
+  // 用后端返回的 parentId(真实 ID)重建层级树。
+  // 不用 fullName 的 "/" 分列——因为类目名本身可能含 "/"(如"健身器材/训练器"
+  // 是一个二级类目),分列会把它错误拆成两级,丢失真正的下游类目。
+  // fullName 仅用于显示和 Ozon 发布时的完整路径。
   function buildTree(flat) {
-    const rootMap = new Map();   // 一级: name -> node
+    const map = new Map();
+    const roots = [];
+    // 第一遍:建节点索引
     flat.forEach((item) => {
-      const rawPath = String(item.fullName || item.nameZh || item.name || "").trim();
-      if (!rawPath) return;
-      const segs = rawPath.split("/").map((s) => s.trim()).filter(Boolean);
-      if (!segs.length) return;
-
-      // 沿路径逐级创建/查找节点,末级挂 leaf
-      let levelMap = rootMap;
-      let parentPath = [];
-      for (let i = 0; i < segs.length; i += 1) {
-        const seg = segs[i];
-        const pathSoFar = [...parentPath, seg];
-        if (!levelMap.has(seg)) {
-          levelMap.set(seg, {
-            id: `L${i + 1}|${pathSoFar.join("|")}`,
-            name: seg,
-            level: i + 1,
-            children: new Map(),
-            leaf: null,
-          });
-        }
-        const node = levelMap.get(seg);
-        // 最后一段 → 挂叶子(保留原始完整路径,供 Ozon 发布)
-        if (i === segs.length - 1) {
-          if (!node.leaf) node.leaf = collectLeaf(item, segs);
-        }
-        parentPath = pathSoFar;
-        levelMap = node.children;
-      }
+      if (!item.id) return;
+      map.set(item.id, {
+        id: item.id,
+        name: item.nameZh || item.name,
+        level: 0,
+        leaf: makeLeaf(item),
+        children: [],
+        _raw: item,
+      });
     });
-
-    // Map -> 数组(便于渲染),层级信息保留
-    const toArr = (map, level) => [...map.values()].map((n) => ({
-      id: n.id,
-      name: n.name,
-      level,
-      leaf: n.leaf,
-      children: toArr(n.children, level + 1),
-    }));
-    return toArr(rootMap, 1);
+    // 第二遍:按 parentId 串层级
+    flat.forEach((item) => {
+      if (!item.id) return;
+      const node = map.get(item.id);
+      const parent = map.get(item.parentId);
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    });
+    // 标注层级深度(根=1)
+    const markLevel = (nodes, depth) => {
+      nodes.forEach((n) => { n.level = depth; markLevel(n.children, depth + 1); });
+    };
+    markLevel(roots, 1);
+    return roots;
   }
 
   // 收集叶子信息:保留发布所需的 categoryId/typeId,以及完整路径
-  function collectLeaf(item, pathSegs) {
+  function makeLeaf(item) {
     return {
       categoryId: Number(item.categoryId || 0),
       typeId: Number(item.typeId || 0),
-      fullPath: pathSegs.join("/"),   // Ozon 可接受的完整类目名,如 日化/空气清新剂/空气清新剂
+      fullPath: String(item.fullName || item.nameZh || item.name || ""),
       origId: item.id,
     };
   }
 
   // 类目缓存版本:数据结构变更后递增,旧缓存自动失效重抓
-  const CAT_CACHE_VERSION = 4;
+  const CAT_CACHE_VERSION = 5;
 
   // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
   async function autoLoadCategories() {
@@ -457,7 +443,7 @@
     if (cached && cached.flat && cached.storeKey === storeKey && cached.v === CAT_CACHE_VERSION) {
       categoryCache = cached.flat;
       categoryTree = buildTree(categoryCache);
-      cascadeState = { l1: "", l2: "", l3: "" };
+      cascadeState = { l1: "", l2: "", l3: "", l4: "" };
       renderCascade();
       const status = $("lst_catStatus");
       if (status) status.textContent = `已加载缓存的 ${platform} 类目(共 ${cached.flat.length} 项,来自「${cached.storeName || "本地缓存"}」)。`;
@@ -481,7 +467,7 @@
       if (!data.ok) throw new Error(data.error || "抓取失败");
       categoryCache = data.categories || [];
       categoryTree = buildTree(categoryCache);
-      cascadeState = { l1: "", l2: "", l3: "" };
+      cascadeState = { l1: "", l2: "", l3: "", l4: "" };
       // 写入缓存(只存扁平数据,节省 localStorage 空间)
       const cache = loadCatCacheAll();
       cache[platform] = { v: CAT_CACHE_VERSION, ts: Date.now(), storeKey: currentStoreKey(), storeName: data.storeName || "", flat: categoryCache };
@@ -517,6 +503,8 @@
     const l2Nodes = (l1Sel && l1Sel.children) || [];
     const l2Sel = l2Nodes.find((n) => n.id === cascadeState.l2);
     const l3Nodes = (l2Sel && l2Sel.children) || [];
+    const l3Sel = l3Nodes.find((n) => n.id === cascadeState.l3);
+    const l4Nodes = (l3Sel && l3Sel.children) || [];
 
     const renderItem = (n, level, selectedId) => {
       const isSel = n.id === selectedId;
@@ -537,14 +525,19 @@
       </div>`;
     };
 
-    // 按需拼接列:一级始终显示;选了一级且有子 → 显示二级;选了二级且有子 → 显示三级
-    const cols = [colHtml(l1Nodes, 1, cascadeState.l1, "一级类目")];
-    if (l1Sel && l2Nodes.length) {
-      cols.push(colHtml(l2Nodes, 2, cascadeState.l2, "二级类目"));
-    }
-    if (l2Sel && l3Nodes.length) {
-      cols.push(colHtml(l3Nodes, 3, cascadeState.l3, "三级类目"));
-    }
+    // 按需拼接列:逐级展开,有子节点且已选 → 出现下一级列(支持任意深度)
+    const levelNames = ["一级类目", "二级类目", "三级类目", "四级类目", "五级类目"];
+    const cols = [colHtml(l1Nodes, 1, cascadeState.l1, levelNames[0])];
+    const layers = [
+      [l1Sel, l2Nodes, 2, cascadeState.l2],
+      [l2Sel, l3Nodes, 3, cascadeState.l3],
+      [l3Sel, l4Nodes, 4, cascadeState.l4],
+    ];
+    layers.forEach(([sel, nodes, level, selectedId]) => {
+      if (sel && nodes && nodes.length) {
+        cols.push(colHtml(nodes, level, selectedId, levelNames[level - 1] || `${level}级类目`));
+      }
+    });
 
     box.innerHTML = `
       <div class="listing-cascade">${cols.join("")}</div>
@@ -562,6 +555,10 @@
       if (l2) {
         const l3 = (l2.children || []).find((n) => n.id === cascadeState.l3);
         if (l3) path.push(l3.name);
+        if (l3) {
+          const l4 = (l3.children || []).find((n) => n.id === cascadeState.l4);
+          if (l4) path.push(l4.name);
+        }
       }
     }
     if (!path.length) return `<span class="muted-cell">尚未选择类目(逐级选择到末级即可上架)</span>`;
@@ -577,9 +574,11 @@
     const node = findIn(categoryTree, id);
     if (!node) return;
     const hasChild = node.children && node.children.length;
-    if (level === 1) { cascadeState.l1 = id; cascadeState.l2 = ""; cascadeState.l3 = ""; }
-    else if (level === 2) { cascadeState.l2 = id; cascadeState.l3 = ""; }
-    else { cascadeState.l3 = id; }
+    // 逐级设置选中,并清空更深层级
+    if (level === 1) { cascadeState.l1 = id; cascadeState.l2 = ""; cascadeState.l3 = ""; cascadeState.l4 = ""; }
+    else if (level === 2) { cascadeState.l2 = id; cascadeState.l3 = ""; cascadeState.l4 = ""; }
+    else if (level === 3) { cascadeState.l3 = id; cascadeState.l4 = ""; }
+    else { cascadeState.l4 = id; }
 
     if (!hasChild) {
       // 末级 → 确认为最终上架类目,保留 Ozon 发布所需的完整路径与 id
