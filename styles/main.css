@@ -1907,3 +1907,321 @@ label.inline-select > select {
 .api-notice {
   margin-top: 16px;
 }
+
+/* =========================================================
+   商品上架（Listing Wizard）— 覆盖 listing.js 内联深色样式
+   使用更高优先级选择器，确保浅色主题统一
+   ========================================================= */
+.listing-wizard { display: flex; flex-direction: column; gap: 20px; }
+
+/* 步骤导航条 */
+.listing-steps {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  background:
+    radial-gradient(500px 200px at 0% 0%, rgba(107, 142, 175, 0.06), transparent 60%),
+    var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.listing-step {
+  flex: 1;
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-3);
+  transition: all 0.2s ease;
+}
+.listing-step .num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  background: var(--bg-4);
+  color: var(--ink-2);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.listing-step.active {
+  color: var(--ink-1);
+  border-color: rgba(107, 142, 175, 0.35);
+  background: linear-gradient(135deg, rgba(107, 142, 175, 0.14), rgba(123, 160, 135, 0.06));
+  box-shadow: 0 2px 10px rgba(107, 142, 175, 0.12);
+}
+.listing-step.active .num {
+  background: linear-gradient(135deg, var(--brand), var(--accent-sage));
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(107, 142, 175, 0.35);
+}
+.listing-step.done {
+  color: var(--green);
+  border-color: rgba(111, 158, 126, 0.35);
+  background: var(--green-soft);
+}
+.listing-step.done .num {
+  background: var(--green);
+  color: #fff;
+}
+.listing-step .label { line-height: 1.35; font-weight: 600; }
+.listing-step .label small {
+  display: block;
+  opacity: 0.75;
+  font-size: 11px;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* 步骤面板 */
+.listing-step-pane { display: none; }
+.listing-step-pane.active {
+  display: grid;
+  gap: 16px;
+}
+.listing-step-pane .cols-3 {
+  align-items: end;
+}
+.listing-step-pane .cols-3 > label[style*="display:flex"] {
+  min-height: 42px;
+}
+.listing-step-pane .cols-3 > label[style*="display:flex"] button {
+  width: 100%;
+  height: 42px;
+}
+.listing-step-pane .actions {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* 参考图缩略 */
+.listing-thumb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.listing-thumb {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-3);
+  box-shadow: var(--shadow-sm);
+}
+.listing-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.listing-thumb .rm {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(60, 55, 45, 0.7);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s ease;
+}
+.listing-thumb .rm:hover { background: var(--red); }
+
+/* 生成图网格 */
+.listing-gen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+}
+.listing-gen-cell {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-3);
+  box-shadow: var(--shadow-sm);
+}
+.listing-gen-cell img { width: 100%; height: 100%; object-fit: cover; }
+.listing-gen-cell .tag {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(60, 55, 45, 0.75);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.listing-gen-cell.pending {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 12px;
+  background: var(--bg-3);
+}
+.listing-gen-cell.pending::after {
+  content: '';
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--brand-ring);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: listing-spin 0.8s linear infinite;
+  margin-bottom: 8px;
+}
+@keyframes listing-spin { to { transform: rotate(360deg); } }
+
+/* 类目列表 */
+.listing-cat-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+.listing-cat-list .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-1);
+  transition: background 0.12s ease;
+}
+.listing-cat-list .row:last-child { border-bottom: none; }
+.listing-cat-list .row:hover {
+  background: var(--brand-soft);
+}
+.listing-cat-list .row.selected {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-weight: 600;
+  border-left: 3px solid var(--brand);
+  padding-left: 13px;
+}
+.listing-cat-list .row .zh { font-weight: 600; color: var(--ink-1); }
+.listing-cat-list .row.selected .zh { color: var(--brand-dark); }
+.listing-cat-list .row .orig {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* 发布日志框 */
+.listing-log {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  background: var(--bg-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--ink-2);
+}
+
+/* 草稿行 */
+.listing-draft-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.listing-draft-row:last-child { border-bottom: none; }
+
+/* 商品上架中的 search 与 table-status 间距 */
+.listing-step-pane .search { margin-top: 4px; }
+.listing-step-pane .table-status { margin: 0; }
+
+/* =========================================================
+   货盘管理（Sourcing Tray）— 表单与清单排版优化
+   ========================================================= */
+#sourcing .dashboard-brief { margin-bottom: 4px; }
+
+#sourcingForm {
+  gap: 14px;
+}
+#sourcingForm .cols-2,
+#sourcingForm .cols-3 {
+  gap: 12px;
+  align-items: end;
+}
+/* 必填星标 */
+#sourcingForm label small { color: var(--red); font-weight: 700; }
+
+/* 货盘清单上方操作栏：与成本清单统一节奏 */
+#sourcing .panel .toolbar + .actions {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+#sourcing .panel .toolbar + .actions button {
+  height: 38px;
+  padding: 0 16px;
+}
+
+/* 货盘清单表格：操作列紧凑、文字列对齐 */
+#sourcingRows td { vertical-align: middle; }
+#sourcingRows td.actions,
+#sourcingRows td .actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+#sourcingRows td.actions button,
+#sourcingRows .actions button {
+  padding: 6px 10px;
+  font-size: 12px;
+  height: auto;
+  min-height: 30px;
+}
+#sourcingRows td a {
+  color: var(--brand-dark);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+#sourcingRows td a:hover { text-decoration: underline; }
+
+/* 货盘提示文字（导入说明）更柔和 */
+#sourcingImportStatus {
+  padding: 10px 12px;
+  background: var(--bg-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--brand);
+}
+
+/* 响应式：货盘与上架在窄屏时表单堆叠 */
+@media (max-width: 900px) {
+  .listing-step {
+    min-width: 100%;
+  }
+  .listing-steps {
+    flex-direction: column;
+  }
+  #sourcingForm .cols-3 {
+    grid-template-columns: 1fr;
+  }
+}

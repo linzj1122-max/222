@@ -82,60 +82,9 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(drafts)); } catch (e) { console.warn("[listing] 保存失败", e); }
   };
 
-  // ---- 样式注入（一次性） ----
+  // ---- 样式注入（已迁移至 styles/main.css，此处保留空函数避免报错） ----
   function injectStyles() {
-    if (document.getElementById("listing-inline-styles")) return;
-    const style = document.createElement("style");
-    style.id = "listing-inline-styles";
-    style.textContent = `
-      .listing-wizard { display:flex; flex-direction:column; gap:20px; }
-      .listing-steps { display:flex; gap:8px; flex-wrap:wrap; padding:14px 16px; }
-      .listing-step { flex:1; min-width:140px; display:flex; align-items:center; gap:10px;
-        padding:10px 12px; border-radius:10px; background:rgba(255,255,255,.04);
-        border:1px solid rgba(255,255,255,.08); font-size:13px; color:var(--muted,#94a3b8); }
-      .listing-step .num { width:24px; height:24px; border-radius:50%; display:grid; place-items:center;
-        font-weight:700; background:rgba(255,255,255,.08); color:#fff; font-size:12px; }
-      .listing-step.active { color:#fff; border-color:rgba(120,200,255,.5);
-        background:linear-gradient(135deg, rgba(80,150,255,.22), rgba(80,150,255,.06)); }
-      .listing-step.active .num { background:linear-gradient(135deg,#5aa6ff,#3b82f6); }
-      .listing-step.done { color:var(--green,#6f9e7e); border-color:rgba(111,158,126,.4); }
-      .listing-step.done .num { background:var(--green,#6f9e7e); color:#06120c; }
-      .listing-step .label { line-height:1.3; }
-      .listing-step .label small { display:block; opacity:.7; font-size:11px; }
-      .listing-step-pane { display:none; }
-      .listing-step-pane.active { display:grid; gap:16px; }
-      .listing-thumb-row { display:flex; flex-wrap:wrap; gap:10px; }
-      .listing-thumb { position:relative; width:96px; height:96px; border-radius:10px; overflow:hidden;
-        border:1px solid rgba(255,255,255,.12); background:#0d1726; }
-      .listing-thumb img { width:100%; height:100%; object-fit:cover; }
-      .listing-thumb .rm { position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
-        background:rgba(0,0,0,.6); color:#fff; border:none; cursor:pointer; font-size:14px; line-height:1; }
-      .listing-gen-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
-      .listing-gen-cell { position:relative; aspect-ratio:3/4; border-radius:10px; overflow:hidden;
-        border:1px solid rgba(255,255,255,.12); background:#0d1726; }
-      .listing-gen-cell img { width:100%; height:100%; object-fit:cover; }
-      .listing-gen-cell .tag { position:absolute; left:6px; top:6px; padding:2px 8px; border-radius:6px;
-        background:rgba(0,0,0,.6); color:#fff; font-size:11px; }
-      .listing-gen-cell .pick { position:absolute; right:6px; bottom:6px; }
-      .listing-gen-cell.pending { display:grid; place-items:center; color:var(--muted,#94a3b8); font-size:12px; }
-      .listing-gen-cell.pending::after { content:''; width:22px; height:22px; border:2px solid rgba(255,255,255,.2);
-        border-top-color:#5aa6ff; border-radius:50%; animation:listing-spin .8s linear infinite; }
-      @keyframes listing-spin { to { transform:rotate(360deg); } }
-      .listing-cat-list { max-height:340px; overflow:auto; border:1px solid rgba(255,255,255,.1);
-        border-radius:10px; }
-      .listing-cat-list .row { display:flex; justify-content:space-between; align-items:center; gap:10px;
-        padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.06); cursor:pointer; font-size:13px; }
-      .listing-cat-list .row:hover { background:rgba(120,200,255,.08); }
-      .listing-cat-list .row.selected { background:rgba(120,200,255,.16); color:#fff; }
-      .listing-cat-list .row .zh { font-weight:600; }
-      .listing-cat-list .row .orig { color:var(--muted,#94a3b8); font-size:12px; }
-      .listing-log { font-family:ui-monospace,Menlo,monospace; font-size:12px; line-height:1.6;
-        background:rgba(0,0,0,.3); border:1px solid rgba(255,255,255,.08); border-radius:8px;
-        padding:10px 12px; max-height:220px; overflow:auto; white-space:pre-wrap; }
-      .listing-draft-row { display:flex; justify-content:space-between; align-items:center; gap:10px;
-        padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.06); font-size:13px; }
-    `;
-    document.head.appendChild(style);
+    // 样式由 main.css 统一管理（护眼浅色主题），此处不再内联注入深色样式
   }
 
   // ---- 导航 + 页面壳 ----
