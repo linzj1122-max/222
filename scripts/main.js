@@ -45,7 +45,9 @@ const initialProducts = [
     };
     const feeScopeKey = (platform, mode, fulfillment) => `${platform}|${mode}|${fulfillment}`;
     const FULFILLMENT_OPTIONS = (platform, mode) => {
-      if (platform === "Ozon" && mode === "cross") return ["FBO"];
+      if (mode === "cross") {
+        return platform === "Ozon" ? ["FBP"] : ["FBS"];
+      }
       return ["FBO", "FBS"];
     };
     const MODE_LABELS = { local: "本土", cross: "跨境" };
