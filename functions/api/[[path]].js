@@ -522,6 +522,52 @@ async function fetchProductAnalytics(env, from, to) {
   return rows;
 }
 
+// 诊断:测试所有可能的曝光/点击指标,找出哪些返回非0值
+// 分别测试 [sku] 维度和 [day] 维度,以及无维度(店铺总览)
+async function probeAnalyticsMetrics(env, from, to) {
+  const store = ozonStores(env)[0];
+  if (!store) return { error: "未配置店铺" };
+  // 候选指标:Ozon /v1/analytics/data 支持的所有流量相关指标
+  const candidates = [
+    "revenue", "ordered_units",
+    "session_view", "session_position_category", "session_position_cart",
+    "hits_view", "hits_view_search", "hits_view_pdp", "hits_view_catalog",
+    "hits_tocart", "hits_tocart_search", "hits_tocart_pdp", "hits_tocart_catalog",
+    "conv_tocart", "conv_tocart_search", "conv_tocart_pdp", "conv_tocart_catalog",
+    "returns", "cancellations",
+    "united_impressions", "united_clicks",
+  ];
+  const dimensions = [["sku"], ["day"], []];   // 测试三种维度
+  const result = { store: store.name, from, to, dimensions: {} };
+  for (const dim of dimensions) {
+    const dimKey = dim.length ? dim.join("+") : "none(店铺总览)";
+    try {
+      const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+        body: JSON.stringify({ date_from: from, date_to: to, metrics: candidates, dimension: dim, filters: [], limit: 5, offset: 0 }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        result.dimensions[dimKey] = { error: `${response.status}`, detail: String(payload.message || payload.error || "").slice(0, 200) };
+        continue;
+      }
+      const data = payload.result?.data || [];
+      // 汇总每个指标的总和,找出非0的
+      const totals = {};
+      for (const m of candidates) totals[m] = 0;
+      for (const row of data) {
+        (row.metrics || []).forEach((val, i) => { totals[candidates[i]] += amount(val); });
+      }
+      const nonzero = Object.entries(totals).filter(([_, v]) => v > 0).map(([k, v]) => ({ metric: k, value: v }));
+      result.dimensions[dimKey] = { rowCount: data.length, nonzero, allTotals: totals };
+    } catch (e) {
+      result.dimensions[dimKey] = { error: e.message || String(e) };
+    }
+  }
+  return result;
+}
+
 // 按天+店铺维度抓取分析数据(曝光/点击/转化/销售额/件数)
 // 用于:店铺经营概览随时间区间显示,以及数据分析按天展示
 // dimension 用 ["day"] 让 Ozon 每天返回一行,前端可本地 filter 任意子范围
@@ -1535,6 +1581,12 @@ export async function onRequest(context) {
     if (path === "probe/ozon-ads") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeOzonAds(env, from, to, url.searchParams.get("uuid") || "", url.searchParams.get("create") === "1"));
+    }
+    // 诊断:测试所有可能的曝光/点击指标,找出哪些返回非0值
+    // 用于解决"曝光/点击都是0"的问题
+    if (path === "probe/analytics-metrics") {
+      const { from, to } = dateRange(url.searchParams);
+      return json(await probeAnalyticsMetrics(env, from, to));
     }
     // 定时预热缓存:抓取常见范围(今天/7天/28天/本月/上月)的订单+分析,写入 KV。
     // 前端打开页面时后台静默调用一次;也可配外部 cron 定时调用。
