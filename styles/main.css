@@ -2203,7 +2203,17 @@ label.inline-select > select {
 .global-loader-text { color: var(--ink-2); font-size: 14px; }
 @keyframes globalSpin { to { transform: rotate(360deg); } }
 
-/* 商品上架中的 search 与 table-status 间距 */
+/* 数据分析 tab */
+.analytics-filter-bar { flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.analytics-filter-bar label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.analytics-filter-bar select, .analytics-filter-bar input { min-width: 180px; }
+.analytics-table { width: 100%; border-collapse: collapse; }
+.analytics-table th, .analytics-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; }
+.analytics-table th { background: rgba(120, 110, 90, 0.06); color: var(--ink-2); font-weight: 600; }
+.analytics-table td.money { font-variant-numeric: tabular-nums; }
+.analytics-table .sku { font-size: 12px; color: var(--ink-3); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#analyticsSummary .metric { min-width: 0; }
+#analyticsSummary .metric strong { font-size: 20px; }
 .listing-step-pane .search { margin-top: 4px; }
 .listing-step-pane .table-status { margin: 0; }
 

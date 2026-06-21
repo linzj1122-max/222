@@ -794,8 +794,29 @@ const initialProducts = [
         $("pageTitle").textContent = btn.textContent;
         if (btn.dataset.tab === "dashboard") drawRevenueChart();
         if (btn.dataset.tab === "ads") drawAdChart();
+        // 切到数据分析 tab 时,如果还没加载过,自动加载
+        if (btn.dataset.tab === "analytics" && !analyticsProductRows.length) refreshAnalytics();
       });
     });
+
+    // 数据分析 tab 的事件绑定
+    document.querySelectorAll("[data-analytics-range]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-analytics-range]").forEach((b) => b.classList.remove("active"));
+        button.classList.add("active");
+        analyticsRangeValue = button.dataset.analyticsRange;
+        refreshAnalytics();
+      });
+    });
+    $("analyticsStoreFilter")?.addEventListener("change", (e) => {
+      analyticsStoreValue = e.target.value;
+      renderAnalytics();
+    });
+    $("analyticsSkuFilter")?.addEventListener("input", (e) => {
+      analyticsSkuValue = e.target.value;
+      renderAnalytics();
+    });
+    $("analyticsRefresh")?.addEventListener("click", () => refreshAnalytics(true));
 
     function calcOrder(order) {
       if (isBrushOrder(order.sku)) {
@@ -1125,6 +1146,99 @@ const initialProducts = [
           '<td>' + refundRate.toFixed(2) + '%</td>' +
         '</tr>';
       }).join("") : '<tr><td colspan="9" class="muted-cell">当前时间范围暂无店铺数据</td></tr>';
+    }
+
+    // ============ 数据分析 tab ============
+    // 状态:分析数据的范围、店铺、SKU 筛选,以及已加载的按SKU分析数据
+    let analyticsRangeValue = "28";
+    let analyticsStoreValue = "all";
+    let analyticsSkuValue = "";
+    let analyticsProductRows = [];   // 从 /api/analytics/products 加载的按SKU数据
+    function analyticsRangeDates(value) {
+      const today = todayIso();
+      const yesterday = addDays(today, -1);
+      if (value === "7") return { from: addDays(today, -7), to: yesterday };
+      if (value === "quarter") {
+        const d = new Date(`${today}T00:00:00`);
+        const qm = Math.floor(d.getMonth() / 3) * 3;
+        return { from: localIso(new Date(d.getFullYear(), qm, 1)), to: yesterday };
+      }
+      if (value === "year") return { from: `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`, to: yesterday };
+      return { from: addDays(today, -28), to: yesterday };
+    }
+    async function loadAnalyticsProducts(force = false) {
+      const { from, to } = analyticsRangeDates(analyticsRangeValue);
+      if ($("analyticsStatus")) $("analyticsStatus").textContent = `正在加载 ${from} 至 ${to} 的按SKU数据…`;
+      showGlobalLoader(`正在加载分析数据…`);
+      try {
+        const params = new URLSearchParams();
+        params.set("dateFrom", from);
+        params.set("dateTo", to);
+        if (force) params.set("force", "1");
+        const resp = await apiRequest(`/api/analytics/products?${params.toString()}`);
+        analyticsProductRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);
+        if ($("analyticsStatus")) $("analyticsStatus").textContent = `已加载 ${analyticsProductRows.length} 个SKU(${from} 至 ${to})`;
+      } catch (e) {
+        analyticsProductRows = [];
+        if ($("analyticsStatus")) $("analyticsStatus").textContent = `加载失败:${e.message}`;
+      } finally {
+        hideGlobalLoader();
+      }
+    }
+    function renderAnalyticsStoreFilter() {
+      const select = $("analyticsStoreFilter");
+      if (!select) return;
+      const stores = [...new Set(analyticsProductRows.map((r) => r.store).filter(Boolean))].sort();
+      const current = analyticsStoreValue;
+      select.innerHTML = `<option value="all">全部店铺</option>` + stores.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+      if (stores.includes(current) || current === "all") select.value = current;
+      else { analyticsStoreValue = "all"; select.value = "all"; }
+    }
+    function renderAnalytics() {
+      renderAnalyticsStoreFilter();
+      const body = $("analyticsRows");
+      const summary = $("analyticsSummary");
+      if (!body) return;
+      const kw = analyticsSkuValue.trim().toLowerCase();
+      let rows = analyticsProductRows.slice();
+      if (analyticsStoreValue !== "all") rows = rows.filter((r) => r.store === analyticsStoreValue);
+      if (kw) rows = rows.filter((r) => String(r.sku || "").toLowerCase().includes(kw) || String(r.name || "").toLowerCase().includes(kw));
+      // 汇总卡片
+      const totalRevenue = rows.reduce((s, r) => s + Number(r.revenue || 0), 0);
+      const totalUnits = rows.reduce((s, r) => s + Number(r.orderedUnits || 0), 0);
+      const totalImpressions = rows.reduce((s, r) => s + Number(r.naturalImpressions || 0), 0);
+      const totalClicks = rows.reduce((s, r) => s + Number(r.totalClicks || 0), 0);
+      const ctr = totalImpressions ? (totalClicks / totalImpressions * 100) : 0;
+      if (summary) {
+        summary.innerHTML = `
+          <div class="panel metric"><span>总销售额</span><strong>${rub(totalRevenue)}</strong></div>
+          <div class="panel metric"><span>总销售件数</span><strong>${Math.round(totalUnits)} 件</strong></div>
+          <div class="panel metric"><span>总曝光</span><strong>${Math.round(totalImpressions).toLocaleString()}</strong></div>
+          <div class="panel metric"><span>总点击</span><strong>${Math.round(totalClicks).toLocaleString()}</strong></div>
+          <div class="panel metric"><span>点击率</span><strong>${ctr.toFixed(2)}%</strong></div>`;
+      }
+      // 明细表(按销售额降序)
+      rows.sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0));
+      body.innerHTML = rows.length ? rows.map((r) => {
+        const impressions = Number(r.naturalImpressions || 0);
+        const clicks = Number(r.totalClicks || 0);
+        const ctr2 = impressions ? (clicks / impressions * 100) : 0;
+        const conv = Number(r.naturalCartRate || 0);
+        return '<tr>' +
+          '<td><strong>' + escapeHtml(r.sku || "—") + '</strong><div class="sku">' + escapeHtml(r.name || "未命名商品") + '</div></td>' +
+          '<td>' + escapeHtml(r.store || "—") + '</td>' +
+          '<td class="money">' + rub(Number(r.revenue || 0)) + '</td>' +
+          '<td>' + Math.round(Number(r.orderedUnits || 0)) + '</td>' +
+          '<td>' + impressions.toLocaleString() + '</td>' +
+          '<td>' + clicks.toLocaleString() + '</td>' +
+          '<td>' + ctr2.toFixed(2) + '%</td>' +
+          '<td>' + conv.toFixed(2) + '%</td>' +
+        '</tr>';
+      }).join("") : '<tr><td colspan="8" class="muted-cell">暂无数据,请刷新或调整筛选条件</td></tr>';
+    }
+    async function refreshAnalytics(force = false) {
+      await loadAnalyticsProducts(force);
+      renderAnalytics();
     }
 
     function renderStoreOverviewControls() {
