@@ -2159,33 +2159,38 @@ label.inline-select > select {
 /* ========== 商品上架:三级级联类目选择器 ========== */
 .listing-cascade {
   display: flex;
-  gap: 12px;
+  gap: 0;
   align-items: stretch;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--bg-2);
   overflow: hidden;
-  min-height: 320px;
 }
 .listing-cascade-col {
   flex: 1 1 0;
   min-width: 0;
   border-right: 1px solid var(--line);
-  overflow-y: auto;
-  padding: 6px;
   background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
 }
 .listing-cascade-col:last-child { border-right: none; }
-.listing-cascade-col.empty {
-  display: grid;
-  place-items: center;
-  background: var(--bg-1);
+.listing-cascade-col-title {
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--line);
+  text-transform: uppercase;
 }
-.listing-cascade-hint {
-  color: var(--ink-4);
-  font-size: 12.5px;
-  text-align: center;
-  padding: 20px 12px;
+.listing-cascade-col-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  /* 关键:列表在列内滚动,不让整个页面变长 */
+  max-height: 360px;
 }
 .listing-cascade-item {
   display: flex;

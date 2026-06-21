@@ -308,6 +308,8 @@
     const title = $("pageTitle");
     if (title && btn) title.textContent = btn.textContent.trim();
     renderAll();
+    // 每次进入上架页都刷新店铺下拉,确保「店铺设置」新增的店铺立即可见
+    refreshStores();
   }
 
   // ---- 步骤切换 ----
@@ -396,6 +398,9 @@
     return roots;
   }
 
+  // 类目缓存版本:数据结构变更后递增,旧缓存自动失效重抓
+  const CAT_CACHE_VERSION = 2;
+
   // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
   async function autoLoadCategories() {
     const platform = draft.platform;
@@ -404,8 +409,8 @@
     const cache = loadCatCacheAll();
     const storeKey = currentStoreKey();
     const cached = cache[platform];
-    // 命中缓存(同一店铺,且缓存存在)直接用,不再请求
-    if (cached && cached.tree && cached.storeKey === storeKey) {
+    // 命中缓存(版本一致 + 同一店铺 + 缓存存在)直接用,不再请求
+    if (cached && cached.tree && cached.storeKey === storeKey && cached.v === CAT_CACHE_VERSION) {
       categoryTree = cached.tree;
       categoryCache = cached.flat || [];
       cascadeState = { l1: "", l2: "", l3: "" };
@@ -435,7 +440,7 @@
       cascadeState = { l1: "", l2: "", l3: "" };
       // 写入缓存
       const cache = loadCatCacheAll();
-      cache[platform] = { ts: Date.now(), storeKey: currentStoreKey(), storeName: data.storeName || "", flat: categoryCache, tree: categoryTree };
+      cache[platform] = { v: CAT_CACHE_VERSION, ts: Date.now(), storeKey: currentStoreKey(), storeName: data.storeName || "", flat: categoryCache, tree: categoryTree };
       saveCatCacheAll(cache);
       renderCascade();
       if (status) status.textContent = `已抓取 ${categoryCache.length} 个 ${platform} 类目(来源:${data.storeName || "-"}),已翻译为中文并缓存。`;
@@ -462,33 +467,41 @@
       return;
     }
     const l1Nodes = categoryTree;
-    const l2Nodes = (l1Nodes.find((n) => n.id === cascadeState.l1) || {}).children || [];
-    const l3Nodes = (l2Nodes.find((n) => n.id === cascadeState.l2) || {}).children || [];
+    const l1Sel = l1Nodes.find((n) => n.id === cascadeState.l1);
+    const l2Nodes = (l1Sel && l1Sel.children) || [];
+    const l2Sel = l2Nodes.find((n) => n.id === cascadeState.l2);
+    const l3Nodes = (l2Sel && l2Sel.children) || [];
 
-    const col = (nodes, level, selectedId) => {
-      if (!nodes.length && level > 1) {
-        return `<div class="listing-cascade-col empty"><div class="listing-cascade-hint">从左侧选择上级类目</div></div>`;
-      }
-      const items = nodes.map((n) => {
-        const isSel = n.id === selectedId;
-        const hasChild = (n.children && n.children.length) || n.childrenCount;
-        const leaf = n.isLeaf ? `<span class="leaf-tag">可上架</span>` : "";
-        const arrow = hasChild ? `<span class="arrow">▸</span>` : "";
-        const dispName = n.fullName && !n.isLeaf ? n.fullName.split(" / ").pop() : (n.nameZh || n.name);
-        return `<div class="listing-cascade-item ${isSel ? "selected" : ""} ${hasChild ? "has-child" : ""}" data-cascade-level="${level}" data-cascade-id="${escapeAttr(n.id)}">
-          <span class="name">${escapeHtml(dispName)}</span>
-          ${leaf}${arrow}
-        </div>`;
-      }).join("");
-      return `<div class="listing-cascade-col">${items}</div>`;
+    const renderItem = (n, level, selectedId) => {
+      const isSel = n.id === selectedId;
+      const hasChild = (n.children && n.children.length) || n.childrenCount;
+      const leaf = n.isLeaf ? `<span class="leaf-tag">可上架</span>` : "";
+      const arrow = hasChild ? `<span class="arrow">▸</span>` : "";
+      const dispName = n.nameZh || n.name;
+      return `<div class="listing-cascade-item ${isSel ? "selected" : ""} ${hasChild ? "has-child" : ""}" data-cascade-level="${level}" data-cascade-id="${escapeAttr(n.id)}">
+        <span class="name">${escapeHtml(dispName)}</span>
+        ${leaf}${arrow}
+      </div>`;
+    };
+    const colHtml = (nodes, level, selectedId, title) => {
+      const items = nodes.map((n) => renderItem(n, level, selectedId)).join("");
+      return `<div class="listing-cascade-col">
+        <div class="listing-cascade-col-title">${title}</div>
+        <div class="listing-cascade-col-body">${items}</div>
+      </div>`;
     };
 
+    // 按需拼接列:一级始终显示;选了一级且有子 → 显示二级;选了二级且有子 → 显示三级
+    const cols = [colHtml(l1Nodes, 1, cascadeState.l1, "一级类目")];
+    if (l1Sel && l2Nodes.length) {
+      cols.push(colHtml(l2Nodes, 2, cascadeState.l2, "二级类目"));
+    }
+    if (l2Sel && l3Nodes.length) {
+      cols.push(colHtml(l3Nodes, 3, cascadeState.l3, "三级类目"));
+    }
+
     box.innerHTML = `
-      <div class="listing-cascade">
-        ${col(l1Nodes, 1, cascadeState.l1)}
-        ${col(l2Nodes, 2, cascadeState.l2)}
-        ${col(l3Nodes, 3, cascadeState.l3)}
-      </div>
+      <div class="listing-cascade">${cols.join("")}</div>
       <div class="listing-cascade-breadcrumb">${renderBreadcrumb()}</div>
     `;
   }
@@ -968,6 +981,10 @@
     bindEvents();
     renderAll();
     refreshStores();
+    // 跨页签实时同步:其他标签页(如「店铺设置」)改动店铺后,本页下拉立即更新
+    window.addEventListener("storage", (e) => {
+      if (e.key === STORE_KEY) refreshStores();
+    });
   }
 
   if (document.readyState === "loading") {

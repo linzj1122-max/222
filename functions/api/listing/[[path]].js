@@ -131,41 +131,45 @@ async function fetchOzonCategoryTree(store, language = "ZH_HANS") {
   try { payload = JSON.parse(text); } catch { payload = {}; }
   const roots = Array.isArray(payload?.result) ? payload.result : [];
   const flat = [];
-  const walk = (node, path, depth) => {
+  // parentKey: 当前层级的父节点 id(用于正确串层级),namePath: 类目名路径(用于 fullName)
+  const walk = (node, parentKey, namePath, depth) => {
     if (!node || typeof node !== "object") return;
     const catId = node.description_category_id;
     const catName = node.category_name;
     const children = Array.isArray(node.children) ? node.children : [];
+    let myKey = parentKey;
     if (catId !== undefined && catName) {
+      myKey = `cat-${catId}`;
       flat.push({
-        id: `cat-${catId}`,
+        id: myKey,
         categoryId: Number(catId),
         typeId: 0,
         name: String(catName),
-        fullName: [...path, catName].join(" / "),
-        parentId: path.length ? `cat-${path[path.length - 1]}` : "0",
+        fullName: [...namePath, catName].join(" / "),
+        parentId: parentKey,
         childrenCount: children.length,
         isLeaf: false,
         depth,
       });
     }
     if (node.type_id !== undefined && node.type_name) {
+      const typeKey = `type-${node.type_id}`;
       flat.push({
-        id: `type-${node.type_id}`,
+        id: typeKey,
         categoryId: Number(catId || 0),
         typeId: Number(node.type_id),
         name: String(node.type_name),
-        fullName: [...path, String(node.type_name)].join(" / "),
-        parentId: catId !== undefined ? `cat-${catId}` : "0",
+        fullName: [...namePath, String(node.type_name)].join(" / "),
+        parentId: myKey,
         childrenCount: 0,
         isLeaf: true,
         disabled: Boolean(node.disabled),
         depth,
       });
     }
-    children.forEach((child) => walk(child, catName ? [...path, catName] : path, depth + 1));
+    children.forEach((child) => walk(child, myKey, catName ? [...namePath, catName] : namePath, depth + 1));
   };
-  roots.forEach((root) => walk(root, [], 0));
+  roots.forEach((root) => walk(root, "0", [], 0));
   return flat;
 }
 
