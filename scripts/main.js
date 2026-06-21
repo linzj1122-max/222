@@ -23,7 +23,7 @@ const initialProducts = [
     const importedAdsKey = "ozon_wb_imported_ads_v1";
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
     const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
-    const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v1";
+    const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v2";
     const orderRangeCacheKey = "ozon_wb_order_range_cache_v1";
     const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v1";
     const skuFeeModels = {
@@ -92,8 +92,8 @@ const initialProducts = [
     let activeAdChartIndex = null;
     let adPollTimer = null;
     let adPollAttempts = 0;
-    let adDateFrom = addDays(adsTodayIso(), -28);
-    let adDateTo = addDays(adsTodayIso(), -1);
+    let adDateFrom = addDays(adsTodayIso(), -27);
+    let adDateTo = adsTodayIso();
     let adCalendarCursor = new Date(`${adDateFrom}T00:00:00`);
     let pendingAdDateAnchor = null;
     let adCompareEnabled = true;
@@ -1172,13 +1172,16 @@ const initialProducts = [
             adDateFrom = yesterday;
             adDateTo = yesterday;
           } else {
-            adDateTo = yesterday;
+            adDateTo = today;
             adDateFrom = addDays(adDateTo, -(Number(value || 28) - 1));
           }
           const key = `${adDateFrom}|${adDateTo}`;
           if (adsRowsCache[key]) {
             backendAds = adsRowsCache[key].rows || [];
             adsStatusRows = adsRowsCache[key].status || [];
+          } else {
+            backendAds = [];
+            adsStatusRows = [];
           }
           $("adDateRangePanel")?.classList.remove("open");
           updateAdDateInputs();
@@ -1204,6 +1207,9 @@ const initialProducts = [
       if (adsRowsCache[key]) {
         backendAds = adsRowsCache[key].rows || [];
         adsStatusRows = adsRowsCache[key].status || [];
+      } else {
+        backendAds = [];
+        adsStatusRows = [];
       }
       updateAdDateInputs();
       renderAds();
@@ -1925,12 +1931,15 @@ const initialProducts = [
     document.querySelectorAll("[data-ad-range]").forEach((button) => {
       button.addEventListener("click", async () => {
         const days = Number(button.dataset.adRange || 28);
-        adDateTo = addDays(adsTodayIso(), -1);
+        adDateTo = adsTodayIso();
         adDateFrom = addDays(adDateTo, -(days - 1));
         const key = `${adDateFrom}|${adDateTo}`;
         if (adsRowsCache[key]) {
           backendAds = adsRowsCache[key].rows || [];
           adsStatusRows = adsRowsCache[key].status || [];
+        } else {
+          backendAds = [];
+          adsStatusRows = [];
         }
         updateAdDateInputs();
         renderAds();
