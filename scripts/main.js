@@ -143,6 +143,9 @@ const initialProducts = [
     let storeAnalyticsCache = JSON.parse(localStorage.getItem(storeAnalyticsCacheKey) || "{}");
     let summarySnapshot = JSON.parse(localStorage.getItem(summarySnapshotKey) || "{}");
     let storeAnalyticsRows = [];
+    // 累积全部按天分析数据(曝光/点击/转化),用于本地筛选任意子范围秒出
+    const trendDailyAnalyticsKey = "ozon_wb_trend_daily_analytics_v1";
+    let trendDailyAnalytics = JSON.parse(localStorage.getItem(trendDailyAnalyticsKey) || "[]");
     // 清理旧版本缓存（v1 已废弃，数据结构不兼容）
     ["ozon_wb_order_range_cache_v1", "ozon_wb_store_analytics_cache_v1"].forEach((staleKey) => {
       if (localStorage.getItem(staleKey) !== null) localStorage.removeItem(staleKey);
@@ -333,6 +336,7 @@ const initialProducts = [
       localStorage.setItem(adImageCacheKey, JSON.stringify(adImageCache));
       localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
       localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
+      try { localStorage.setItem(trendDailyAnalyticsKey, JSON.stringify(trendDailyAnalytics)); } catch {}
       try { localStorage.setItem(summarySnapshotKey, JSON.stringify(summarySnapshot)); } catch {}
       try { localStorage.setItem(platformFeesKey, JSON.stringify(platformFees)); } catch {}
       // 店铺同步到云端 KV(去敏感字段:secret 完整保留,发布时需要)
@@ -629,27 +633,103 @@ const initialProducts = [
       return false;   // 走了 API
     }
 
+    // 合并按天分析数据到累积存储(去重:date|store 唯一)
+    const mergeIntoTrendDailyAnalytics = (newRows) => {
+      if (!Array.isArray(newRows) || !newRows.length) return;
+      const seen = new Set(trendDailyAnalytics.map((r) => `${r.date}|${r.store}`));
+      let appended = false;
+      for (const r of newRows) {
+        const id = `${r.date}|${r.store}`;
+        if (!seen.has(id)) {
+          trendDailyAnalytics.push(r);
+          seen.add(id);
+          appended = true;
+        }
+      }
+      if (appended) {
+        trendDailyAnalytics.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        try { localStorage.setItem(trendDailyAnalyticsKey, JSON.stringify(trendDailyAnalytics)); } catch {}
+      }
+    };
+    // 从累积的按天分析数据筛选指定范围,并聚合为按店铺的汇总行
+    // 这样选任意子范围都能本地秒出(不调 API),返回结构与 fetchStoreAnalytics 一致
+    const aggregateDailyAnalytics = (from, to) => {
+      const inRange = trendDailyAnalytics.filter((r) => {
+        const d = String(r.date || "");
+        return d >= from && d <= to;
+      });
+      const map = new Map();
+      for (const r of inRange) {
+        const store = r.store || "未命名店铺";
+        const acc = map.get(store) || { store, revenue: 0, orderedUnits: 0, totalClicks: 0, naturalImpressions: 0, naturalCartAdds: 0 };
+        acc.revenue += Number(r.revenue || 0);
+        acc.orderedUnits += Number(r.orderedUnits || 0);
+        acc.totalClicks += Number(r.totalClicks || 0);
+        acc.naturalImpressions += Number(r.naturalImpressions || 0);
+        acc.naturalCartAdds += Number(r.naturalCartAdds || 0);
+        map.set(store, acc);
+      }
+      return [...map.values()].map((t) => {
+        t.totalImpressions = t.naturalImpressions;
+        t.totalCtr = t.totalImpressions ? (t.totalClicks / t.totalImpressions * 100) : 0;
+        t.naturalCartRate = t.naturalImpressions ? (t.naturalCartAdds / t.naturalImpressions * 100) : 0;
+        return t;
+      });
+    };
+    // 判断累积的按天分析数据是否覆盖目标范围
+    const dailyAnalyticsCoversRange = (from, to) => {
+      if (!Array.isArray(trendDailyAnalytics) || !trendDailyAnalytics.length) return false;
+      if (!from || !to) return false;
+      if (to >= todayIso()) return false;
+      let minDate = "9999", maxDate = "0000";
+      for (const r of trendDailyAnalytics) {
+        const d = String(r.date || "");
+        if (!d) continue;
+        if (d < minDate) minDate = d;
+        if (d > maxDate) maxDate = d;
+      }
+      return minDate <= from && maxDate >= to;
+    };
+
     async function loadStoreAnalytics(options = {}) {
       storeAnalyticsRows = [];
-      if (!backendEnabled) return;
+      if (!backendEnabled) return false;
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
+      // 1) 精确缓存命中
       const cached = storeAnalyticsCache[key];
-      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && Array.isArray(cached?.rows)) {
+      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && Array.isArray(cached?.rows) && cached.rows.length) {
         storeAnalyticsRows = cached.rows;
-        return;
+        return true;
       }
+      // 2) 本地累积覆盖 → 直接聚合秒出
+      if (!options.force && dailyAnalyticsCoversRange(orderDateFrom, orderDateTo)) {
+        storeAnalyticsRows = aggregateDailyAnalytics(orderDateFrom, orderDateTo);
+        storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
+        return true;
+      }
+      // 3) 调 API:抓一个更大的范围(本月),累积到 trendDailyAnalytics,以后子范围都能本地秒出
       try {
-        const params = new URLSearchParams();
-        if (orderDateFrom) params.set("dateFrom", orderDateFrom);
-        if (orderDateTo) params.set("dateTo", orderDateTo);
-        if (options.force) params.set("force", "1");   // 强制跳过云端 KV 缓存
-        const resp = await apiRequest(`/api/analytics/store?${params.toString()}`);
-        // 防御:确保是数组(API 可能返回 {result:[]} 或错误对象)
-        storeAnalyticsRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);
+        const today = todayIso();
+        const yesterday = addDays(today, -1);
+        const fetchFrom = `${orderDateFrom.slice(0, 8)}01`;   // 从月初抓(扩大范围)
+        const fetchTo = orderDateTo >= today ? yesterday : orderDateTo;
+        if (fetchFrom <= fetchTo) {
+          const params = new URLSearchParams();
+          params.set("dateFrom", fetchFrom);
+          params.set("dateTo", fetchTo);
+          if (options.force) params.set("force", "1");
+          const resp = await apiRequest(`/api/analytics/daily?${params.toString()}`);
+          const dailyRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);
+          mergeIntoTrendDailyAnalytics(dailyRows);
+        }
+        // 从累积数据聚合出当前范围
+        storeAnalyticsRows = aggregateDailyAnalytics(orderDateFrom, orderDateTo);
         storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
         save();
+        return false;
       } catch {
         storeAnalyticsRows = [];
+        return false;
       }
     }
 
@@ -1959,13 +2039,10 @@ const initialProducts = [
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在加载 ${from} 至 ${to} 的数据,请稍候…`;
       try {
         // 先拉数据,再统一渲染,避免「旧数据先闪现一次再变正确」的观感问题
-        const localHit = await loadBackendOrders();
-        // 订单数据本地命中(缓存/历史覆盖)时,跳过店铺分析 API 调用,
-        // 因为范围总营业额/纯利/订单数都从 orders 本地算,不需要分析接口。
-        // 分析接口(点击/曝光)只有命中精确缓存时才用,否则留空,不阻塞。
-        if (!localHit) {
-          await loadStoreAnalytics();
-        }
+        await loadBackendOrders();
+        // loadStoreAnalytics 内部会优先本地命中(缓存/按天累积覆盖),秒出;
+        // 没命中才抓"本月"按天数据并累积。这样曝光/点击/转化率也跟随时间区间。
+        await loadStoreAnalytics();
         updateOrderDateButton();
         renderCalendar();
         renderAll();

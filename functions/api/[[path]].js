@@ -521,6 +521,51 @@ async function fetchProductAnalytics(env, from, to) {
   return rows;
 }
 
+// 按天+店铺维度抓取分析数据(曝光/点击/转化/销售额/件数)
+// 用于:店铺经营概览随时间区间显示,以及数据分析按天展示
+// dimension 用 ["day"] 让 Ozon 每天返回一行,前端可本地 filter 任意子范围
+async function fetchDailyStoreAnalytics(env, from, to) {
+  const rows = [];
+  for (const store of ozonStores(env)) {
+    let offset = 0;
+    while (true) {
+      const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "client-id": store.clientId,
+          "api-key": store.apiKey,
+        },
+        body: JSON.stringify({
+          date_from: from,
+          date_to: to,
+          metrics: ANALYTICS_METRICS,
+          dimension: ["day"],
+          filters: [],
+          sort: [{ key: "revenue", order: "DESC" }],
+          limit: 1000,
+          offset,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Ozon daily analytics ${response.status}: ${text.slice(0, 200)}`);
+      }
+      const payload = await response.json();
+      const data = payload.result?.data || [];
+      for (const row of data) {
+        const day = String((row.dimensions || [])[0]?.id || "");
+        if (!day) continue;
+        const item = analyticsRowBase(row, store.name);
+        rows.push({ ...item, date: day });
+      }
+      if (data.length < 1000) break;   // 分页取完
+      offset += 1000;
+    }
+  }
+  return rows;
+}
+
 function ozonAdAccounts(env) {
   const sellerStores = ozonStores(env);
   const accounts = [];
@@ -1416,6 +1461,14 @@ export async function onRequest(context) {
       const cacheable = isHistoricalRange(to);
       const key = dataCacheKey("products", null, from, to);
       return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => fetchProductAnalytics(env, from, to)));
+    }
+    // 按天+店铺的分析数据(曝光/点击/转化),前端累积后可本地筛选任意子范围
+    if (path === "analytics/daily") {
+      const { from, to } = dateRange(url.searchParams);
+      const force = url.searchParams.get("force") === "1";
+      const cacheable = isHistoricalRange(to);
+      const key = dataCacheKey("daily", null, from, to);
+      return json(await withCache(env, key, 7 * 24 * 3600, cacheable, force, () => fetchDailyStoreAnalytics(env, from, to)));
     }
     if (path === "orders") {
       const { from, to } = dateRange(url.searchParams);
