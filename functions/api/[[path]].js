@@ -68,7 +68,7 @@ function ozonStores(env) {
     const clientId = env[`OZON_STORE_${index}_CLIENT_ID`];
     const apiKey = env[`OZON_STORE_${index}_API_KEY`];
     if (clientId && apiKey) {
-      stores.push({ name: name || `Ozon 搴楅摵 ${index}`, clientId, apiKey });
+      stores.push({ name: name || `Ozon 店铺 ${index}`, clientId, apiKey });
     }
   }
   if (env.OZON_STORES) {
@@ -76,7 +76,7 @@ function ozonStores(env) {
       const parsed = JSON.parse(env.OZON_STORES);
       if (Array.isArray(parsed)) {
         parsed.forEach((item, index) => {
-          if (item.clientId && item.apiKey) stores.push({ name: item.name || `Ozon 搴楅摵 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
+          if (item.clientId && item.apiKey) stores.push({ name: item.name || `Ozon 店铺 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
         });
       }
     } catch {
@@ -84,7 +84,7 @@ function ozonStores(env) {
     }
   }
   if (env.OZON_CLIENT_ID && env.OZON_API_KEY) {
-    stores.push({ name: env.OZON_STORE_NAME || "Ozon 搴楅摵", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
+    stores.push({ name: env.OZON_STORE_NAME || "Ozon 店铺", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
   }
   return stores;
 }
@@ -172,8 +172,8 @@ function splitDateRange(from, to, maxDays) {
 
 function financeBucketForService(serviceName) {
   const name = String(serviceName || "").toLowerCase();
-  if (/acquir|褝泻胁邪泄褉|芯锌谢邪褌/.test(name)) return "acquiringFee";
-  if (/logistic|delivery|deliver|return|drop.?off|写芯褋褌邪胁|谢芯谐懈褋褌|胁芯蟹胁褉邪褌/.test(name)) return "logisticsFee";
+  if (/acquir|эквайр|оплат/.test(name)) return "acquiringFee";
+  if (/logistic|delivery|deliver|return|drop.?off|достав|логист|возврат/.test(name)) return "logisticsFee";
   return "otherFixedFee";
 }
 
@@ -200,7 +200,7 @@ function financeIndex(transactions) {
       current[financeBucketForService(service.name)] += Math.abs(value);
     }
     const opText = `${operation.operation_type || ""} ${operation.operation_type_name || ""}`.toLowerCase();
-    if (/return|refund|胁芯蟹胁褉邪褌/.test(opText)) current.refundFee += Math.abs(amount(operation.amount));
+    if (/return|refund|возврат/.test(opText)) current.refundFee += Math.abs(amount(operation.amount));
     current.financeReady = true;
     map.set(postingNo, current);
   }
@@ -261,7 +261,30 @@ function filterRows(rows, params) {
 }
 
 function integrations(env) {
-  return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 鐜鍙橀噺" }));
+  return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 环境变量" }));
+}
+
+async function verifyOzonCredentials(clientId, apiKey) {
+  if (!clientId || !apiKey) return { ok: false, status: 0, error: "缺少 Client ID 或 API 密钥" };
+  try {
+    const response = await fetch("https://api-seller.ozon.ru/v1/supplier", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": clientId, "api-key": apiKey },
+      body: JSON.stringify({}),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (response.ok) {
+      const name = payload?.result?.name || payload?.name || "";
+      return { ok: true, status: response.status, storeName: name, message: name ? `验证成功：${name}` : "验证成功，凭证有效" };
+    }
+    const code = payload?.code || payload?.error?.code || "";
+    const message = payload?.message || payload?.error?.message || text.slice(0, 200) || `HTTP ${response.status}`;
+    return { ok: false, status: response.status, error: message, code };
+  } catch (error) {
+    return { ok: false, status: 0, error: error.message || String(error) };
+  }
 }
 
 const ANALYTICS_METRICS = ["revenue", "ordered_units", "session_view", "hits_view_search", "hits_tocart_search", "conv_tocart"];
@@ -1246,7 +1269,23 @@ export async function onRequest(context) {
       }));
     }
     if (path === "competitors") return json([]);
-    if (path === "integrations") return json(integrations(env));
+    if (path === "integrations") {
+      if (request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        return json({ id: crypto.randomUUID(), name: body.name || "未命名店铺", platform: body.platform || "Ozon", createdAt: new Date().toISOString() });
+      }
+      return json(integrations(env));
+    }
+    if (path === "integrations/verify") {
+      const body = await request.json().catch(() => ({}));
+      const clientId = String(body.clientId || "").trim();
+      const apiKey = String(body.secret || body.apiKey || "").trim();
+      return json(await verifyOzonCredentials(clientId, apiKey));
+    }
+    if (path.startsWith("integrations/")) {
+      if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });
+      return json({ ok: false, error: "Method not allowed" }, 405);
+    }
     if (path === "probe/ozon-analytics") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeOzonAnalytics(env, from, to));

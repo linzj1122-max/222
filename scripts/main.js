@@ -20,13 +20,16 @@ const initialProducts = [
     const orderKey = "ozon_wb_orders_v1";
     const competitorKey = "ozon_wb_competitors_v2";
     const apiConfigKey = "ozon_wb_api_configs_v1";
+    const storeGroupKey = "ozon_wb_store_groups_v1";
     const importedAdsKey = "ozon_wb_imported_ads_v1";
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
     const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
     const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v2";
-    const orderRangeCacheKey = "ozon_wb_order_range_cache_v1";
-    const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v1";
-    const skuFeeModels = {
+    const orderRangeCacheKey = "ozon_wb_order_range_cache_v2";
+    const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v2";
+    const summarySnapshotKey = "ozon_wb_summary_snapshot_v1";
+    const platformFeesKey = "ozon_wb_platform_fees_v1";
+    const builtInOzonLocalFees = {
       "3555785455": { defaultPrice: 2812.68, commissionRate: 0.47, logisticsFee: 146.9176, handlingFee: 25.9, acquiringFee: 11.1049, otherFixedFee: 10.8444 },
       "3592078186": { defaultPrice: 3050.0357, commissionRate: 0.47, logisticsFee: 249.9216, handlingFee: 24.5982, acquiringFee: 15.6189, otherFixedFee: 13.4782 },
       "3903949202": { defaultPrice: 2584, commissionRate: 0.41, logisticsFee: 119, handlingFee: 0, acquiringFee: 29.3, otherFixedFee: 12.74 },
@@ -40,6 +43,48 @@ const initialProducts = [
       "3489562559": { defaultPrice: 4658.3636, commissionRate: 0.44, logisticsFee: 235.9927, handlingFee: 25.4545, acquiringFee: 39.1891, otherFixedFee: 20.2982 },
       "3259565474": { defaultPrice: 11108.1333, commissionRate: 0.44, logisticsFee: 311.3637, handlingFee: 35, acquiringFee: 98.4683, otherFixedFee: 12.3947 }
     };
+    const feeScopeKey = (platform, mode, fulfillment) => `${platform}|${mode}|${fulfillment}`;
+    const FULFILLMENT_OPTIONS = (platform, mode) => {
+      if (platform === "Ozon" && mode === "cross") return ["FBO"];
+      return ["FBO", "FBS"];
+    };
+    const MODE_LABELS = { local: "本土", cross: "跨境" };
+    const PLATFORM_LABELS = { Ozon: "OZON", WB: "WB" };
+    const normalizePlatform = (value) => (String(value || "").toLowerCase() === "wb" ? "WB" : "Ozon");
+    const normalizeMode = (value) => (String(value || "") === "cross" ? "cross" : "local");
+    const normalizeFulfillment = (value, platform, mode) => {
+      const allowed = FULFILLMENT_OPTIONS(platform, mode);
+      return allowed.includes(value) ? value : allowed[0];
+    };
+    const ensureProductScope = (p) => {
+      const platform = normalizePlatform(p.platform);
+      const mode = normalizeMode(p.mode);
+      const fulfillment = normalizeFulfillment(p.fulfillment, platform, mode);
+      return { ...p, platform, mode, fulfillment };
+    };
+    let platformFees = JSON.parse(localStorage.getItem(platformFeesKey) || "[]");
+    const findFeeBundle = (platform, mode, fulfillment) => {
+      const key = feeScopeKey(normalizePlatform(platform), normalizeMode(mode), normalizeFulfillment(fulfillment, platform, mode));
+      return platformFees.find((bundle) => feeScopeKey(bundle.platform, bundle.mode, bundle.fulfillment) === key) || null;
+    };
+    const feeModelForProduct = (product) => {
+      if (!product) return {};
+      const bundle = findFeeBundle(product.platform, product.mode, product.fulfillment);
+      if (bundle?.models?.[String(product.sku)]) return bundle.models[String(product.sku)];
+      if (bundle?.models?.[String(product.code)]) return bundle.models[String(product.code)];
+      return bundle?.defaultModel || {};
+    };
+    const skuFeeModels = new Proxy({}, {
+      get: (_, sku) => {
+        for (const product of products) {
+          if (String(product.sku) === String(sku) || String(product.code) === String(sku)) {
+            const model = feeModelForProduct(product);
+            if (Object.keys(model).length) return model;
+          }
+        }
+        return builtInOzonLocalFees[String(sku)] || {};
+      }
+    });
     const $ = (id) => document.getElementById(id);
     const rmb = (v) => `¥${Number(v || 0).toFixed(2)}`;
     const rub = (v) => `₽${Number(v || 0).toFixed(2)}`;
@@ -59,6 +104,13 @@ const initialProducts = [
     };
     const todayIso = () => mskTodayIso();
     const adsTodayIso = () => mskTodayIso();
+    const mskFetchBoundaryDate = () => {
+      const now = new Date();
+      const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+      const mskDate = new Date(utcMs + 3 * 3600000);
+      const mskHour = mskDate.getHours();
+      return mskHour >= 4 ? localIso(mskDate) : localIso(addDays(localIso(mskDate), -1));
+    };
     const mskNowString = () => {
       const now = new Date();
       const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
@@ -73,10 +125,12 @@ const initialProducts = [
     let products = JSON.parse(localStorage.getItem(productKey) || "null") || initialProducts;
     const codeRenames = { "4675959653": "HQB60" };
     products.forEach((p) => { if (codeRenames[String(p.sku)]) p.code = codeRenames[String(p.sku)]; });
+    products = products.map((p) => ensureProductScope(p));
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
     let trendOrders = JSON.parse(localStorage.getItem("ozon_wb_trend_orders_v1") || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
+    let storeGroups = JSON.parse(localStorage.getItem(storeGroupKey) || "[]");
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
@@ -85,7 +139,12 @@ const initialProducts = [
     let adImageCache = JSON.parse(localStorage.getItem(adImageCacheKey) || "{}");
     let orderRangeCache = JSON.parse(localStorage.getItem(orderRangeCacheKey) || "{}");
     let storeAnalyticsCache = JSON.parse(localStorage.getItem(storeAnalyticsCacheKey) || "{}");
+    let summarySnapshot = JSON.parse(localStorage.getItem(summarySnapshotKey) || "{}");
     let storeAnalyticsRows = [];
+    // 清理旧版本缓存（v1 已废弃，数据结构不兼容）
+    ["ozon_wb_order_range_cache_v1", "ozon_wb_store_analytics_cache_v1"].forEach((staleKey) => {
+      if (localStorage.getItem(staleKey) !== null) localStorage.removeItem(staleKey);
+    });
     let revenueChartHitboxes = [];
     let activeChartIndex = null;
     let adChartHitboxes = [];
@@ -97,8 +156,18 @@ const initialProducts = [
     let adCalendarCursor = new Date(`${adDateFrom}T00:00:00`);
     let pendingAdDateAnchor = null;
     let adCompareEnabled = true;
-    let chartConfig = { compare: "previous", unit: "rub", period: 28, periodLabel: "28天" };
+    let chartConfig = { unit: "rub" };
+    let chartStore = "all";
+    // 趋势图拥有独立的时间段状态，便于与经营汇总范围解耦联动
+    let chartDateFrom = orderDateFrom;
+    let chartDateTo = orderDateTo;
+    let chartCalendarCursor = new Date(`${chartDateFrom}T00:00:00`);
+    let pendingChartDateAnchor = null;
+    // 记录最近一次时间选择的来源："summary" 或 "chart"，用于联动时另一边变暗
+    let lastRangeSource = "summary";
     let selectedStore = "all";
+    let storeOverviewView = "store";
+    let storeOverviewGroup = "all";
     let orderDateFrom = addDays(todayIso(), -28);
     let orderDateTo = addDays(todayIso(), -1);
     let calendarCursor = new Date(`${orderDateFrom}T00:00:00`);
@@ -237,12 +306,15 @@ const initialProducts = [
       localStorage.setItem(trendOrdersKey, JSON.stringify(trendOrders));
       localStorage.setItem(competitorKey, JSON.stringify(competitors));
       localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
+      localStorage.setItem(storeGroupKey, JSON.stringify(storeGroups));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
       localStorage.setItem(adsTaskCacheKey, JSON.stringify(adsTaskCache));
       try { localStorage.setItem(adsRowsCacheKey, JSON.stringify(adsRowsCache)); } catch {}
       localStorage.setItem(adImageCacheKey, JSON.stringify(adImageCache));
       localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
       localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
+      try { localStorage.setItem(summarySnapshotKey, JSON.stringify(summarySnapshot)); } catch {}
+      try { localStorage.setItem(platformFeesKey, JSON.stringify(platformFees)); } catch {}
     };
 
     async function apiRequest(path, options = {}) {
@@ -257,10 +329,12 @@ const initialProducts = [
     const cacheDayKey = () => todayIso();
     const rangeCacheKey = (from, to) => `orders-v2|${from}|${to}`;
     const isFutureRange = (from) => from > todayIso();
-    const shouldRefreshRange = (from, to, force = false) => {
+    const rangeNeedsRefresh = (entry, from, to, force) => {
       if (force) return true;
-      if (isFutureRange(from)) return false;
-      return to >= todayIso();
+      if (!entry) return true;
+      if (to >= todayIso()) return true;
+      const entryFetchDate = entry.fetchDate || "";
+      return entryFetchDate !== mskFetchBoundaryDate();
     };
     const adRowsArray = () => Array.isArray(backendAds) ? backendAds : (Array.isArray(backendAds?.rows) ? backendAds.rows : []);
     const adRowHasMetrics = (row) => Number(row.adCost || 0) || Number(row.adRevenue || row.revenue || 0) || Number(row.adOrders || 0) || Number(row.impressions || 0) || Number(row.clicks || 0);
@@ -423,40 +497,16 @@ const initialProducts = [
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
       if (isFutureRange(orderDateFrom)) {
         orders = [];
-        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `当前订单范围：${orderDateFrom} 至 ${orderDateTo}，日期尚未到来，暂无订单。`;
-        return;
-      }
-      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
-        orders = orderRangeCache[key];
-        loadBackendAds();
-        if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
-        return;
-      }
-      if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单...`;
-      const params = new URLSearchParams();
-      if (orderDateFrom) params.set("dateFrom", orderDateFrom);
-      if (orderDateTo) params.set("dateTo", orderDateTo);
-      orders = await apiRequest(`/api/orders?${params.toString()}`);
-      mergeIntoTrendOrders(orders);
-      loadBackendAds({ cacheOnly: true });
-      if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
-      orderRangeCache[key] = orders;
-      save();
-    }
-
-    async function loadBackendOrdersCached(options = {}) {
-      if (!backendEnabled) return;
-      const key = rangeCacheKey(orderDateFrom, orderDateTo);
-      if (isFutureRange(orderDateFrom)) {
-        orders = [];
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，日期还没到，暂无订单。`;
         return;
       }
-      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && orderRangeCache[key]) {
-        orders = orderRangeCache[key];
+      const cached = orderRangeCache[key];
+      const includeToday = orderDateTo >= todayIso();
+      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && cached?.orders) {
+        orders = cached.orders;
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
-        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单。`;
+        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单（${cached.fetchDate} 抓取）。`;
         return;
       }
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单，请稍等...`;
@@ -467,18 +517,18 @@ const initialProducts = [
       mergeIntoTrendOrders(orders);
       loadBackendAds({ cacheOnly: true });
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
-      orderRangeCache[key] = orders;
+      orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday, updatedAt: new Date().toISOString() };
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已抓取并缓存 ${orders.length} 条订单。`;
       save();
     }
-    loadBackendOrders = loadBackendOrdersCached;
 
     async function loadStoreAnalytics(options = {}) {
       storeAnalyticsRows = [];
       if (!backendEnabled) return;
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
-      if (!shouldRefreshRange(orderDateFrom, orderDateTo, options.force) && storeAnalyticsCache[key]) {
-        storeAnalyticsRows = storeAnalyticsCache[key];
+      const cached = storeAnalyticsCache[key];
+      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && Array.isArray(cached?.rows)) {
+        storeAnalyticsRows = cached.rows;
         return;
       }
       try {
@@ -486,7 +536,7 @@ const initialProducts = [
         if (orderDateFrom) params.set("dateFrom", orderDateFrom);
         if (orderDateTo) params.set("dateTo", orderDateTo);
         storeAnalyticsRows = await apiRequest(`/api/analytics/store?${params.toString()}`);
-        storeAnalyticsCache[key] = storeAnalyticsRows;
+        storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
         save();
       } catch {
         storeAnalyticsRows = [];
@@ -616,6 +666,70 @@ const initialProducts = [
       return { profit, rate: sale ? profit / sale * 100 : 0, commission, commissionRate, platformFee, serviceFee, cost };
     }
 
+    function allStoreNames() {
+      const names = new Set();
+      apiConfigs.forEach((item) => item.name && names.add(item.name));
+      orders.forEach((order) => order.store && names.add(order.store));
+      importedAds.forEach((row) => row.store && names.add(row.store));
+      adRowsArray().forEach((row) => row.store && names.add(row.store));
+      storeAnalyticsRows.forEach((row) => row.store && names.add(row.store));
+      return [...names].sort();
+    }
+
+    function storesInGroup(groupId) {
+      const group = storeGroups.find((item) => item.id === groupId);
+      return group?.stores || [];
+    }
+
+    function isStoreInSelection(storeName) {
+      if (selectedStore === "all") return true;
+      if (String(selectedStore).startsWith("group:")) {
+        const groupId = selectedStore.slice("group:".length);
+        return storesInGroup(groupId).includes(storeName);
+      }
+      return storeName === selectedStore;
+    }
+
+    function formatCreatedAt(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date.toLocaleString("zh-CN", { hour12: false });
+      return String(value);
+    }
+
+    function purgeStoreData(storeName) {
+      orders = orders.filter((order) => order.store !== storeName);
+      trendOrders = trendOrders.filter((order) => order.store !== storeName);
+      importedAds = importedAds.filter((row) => row.store !== storeName);
+      storeAnalyticsRows = storeAnalyticsRows.filter((row) => row.store !== storeName);
+      Object.keys(orderRangeCache).forEach((key) => {
+        const entry = orderRangeCache[key];
+        if (entry?.orders) {
+          entry.orders = entry.orders.filter((order) => order.store !== storeName);
+          if (!entry.orders.length) delete orderRangeCache[key];
+        }
+      });
+      Object.keys(storeAnalyticsCache).forEach((key) => {
+        const entry = storeAnalyticsCache[key];
+        if (Array.isArray(entry?.rows)) {
+          entry.rows = entry.rows.filter((row) => row.store !== storeName);
+          if (!entry.rows.length) delete storeAnalyticsCache[key];
+        }
+      });
+      Object.keys(adsRowsCache).forEach((key) => {
+        const entry = adsRowsCache[key];
+        if (Array.isArray(entry?.rows)) {
+          entry.rows = entry.rows.filter((row) => row.store !== storeName);
+          if (Array.isArray(entry?.status)) entry.status = entry.status.filter((row) => row.store !== storeName);
+          if (!entry.rows.length && (!entry.status || !entry.status.length)) delete adsRowsCache[key];
+        }
+      });
+      Object.keys(adsTaskCache).forEach((key) => { delete adsTaskCache[key]; });
+      storeGroups.forEach((group) => {
+        if (Array.isArray(group.stores)) group.stores = group.stores.filter((name) => name !== storeName);
+      });
+    }
+
     function renderAll() {
       normalizeCompetitorRecords();
       renderProductSelects();
@@ -623,10 +737,12 @@ const initialProducts = [
       renderCosts();
       renderDashboard();
       renderStoreOverview();
+      renderStoreOverviewControls();
       renderAds();
       renderCompetitors();
       renderCompetitorProfit();
       renderApiConfigs();
+      renderStoreGroups();
       save();
     }
 
@@ -691,14 +807,11 @@ const initialProducts = [
       return number > 0 ? number.toFixed(2) + "%" : fallback;
     }
 
-    function renderStoreOverview() {
-      const body = $("storeOverviewRows");
-      if (!body) return;
-      const scoped = filteredOrders().filter((o) => (!orderDateFrom || o.date >= orderDateFrom) && (!orderDateTo || o.date <= orderDateTo));
+    function buildStoreMetricMap(scoped) {
       const map = new Map();
       scoped.forEach((order) => {
         const c = calcOrder(order);
-        const store = order.store || "\u672A\u547D\u540D\u5E97\u94FA";
+        const store = order.store || "未命名店铺";
         const row = map.get(store) || { store, revenue: 0, profit: 0, orders: 0, refunds: 0 };
         row.revenue += c.sale;
         row.profit += c.preliminaryProfit;
@@ -707,10 +820,70 @@ const initialProducts = [
         map.set(store, row);
       });
       storeAnalyticsRows.forEach((analytics) => {
-        const store = analytics.store || "\u672A\u547D\u540D\u5E97\u94FA";
+        const store = analytics.store || "未命名店铺";
         if (!map.has(store)) map.set(store, { store, revenue: 0, profit: 0, orders: 0, refunds: 0 });
       });
-      const rows = [...map.values()].sort((a, b) => b.revenue - a.revenue);
+      return map;
+    }
+
+    function aggregateStoreMetrics(storeMap, storeNames) {
+      const aggregate = { store: "", revenue: 0, profit: 0, orders: 0, refunds: 0, exposure: 0, clicks: 0, cartAdds: 0 };
+      storeNames.forEach((storeName) => {
+        const row = storeMap.get(storeName);
+        if (!row) return;
+        aggregate.revenue += row.revenue;
+        aggregate.profit += row.profit;
+        aggregate.orders += row.orders;
+        aggregate.refunds += row.refunds;
+        const analytics = analyticsForStore(storeName) || {};
+        aggregate.exposure += Number(analytics.totalImpressions || analytics.naturalImpressions || analytics.impressions || 0);
+        aggregate.clicks += Number(analytics.totalClicks || analytics.clicks || 0);
+        aggregate.cartAdds += Number(analytics.naturalCartAdds || 0);
+      });
+      return aggregate;
+    }
+
+    function renderStoreOverview() {
+      const body = $("storeOverviewRows");
+      if (!body) return;
+      const scoped = filteredOrders().filter((o) => (!orderDateFrom || o.date >= orderDateFrom) && (!orderDateTo || o.date <= orderDateTo));
+      const storeMap = buildStoreMetricMap(scoped);
+
+      if (storeOverviewView === "group") {
+        const groups = storeOverviewGroup === "all" ? storeGroups : storeGroups.filter((group) => group.id === storeOverviewGroup);
+        const rows = groups.map((group) => {
+          const agg = aggregateStoreMetrics(storeMap, group.stores || []);
+          return { group, ...agg };
+        });
+        if (storeOverviewGroup === "all" && !groups.length) {
+          body.innerHTML = '<tr><td colspan="9" class="muted-cell">还没有创建店铺分组，请到「店铺设置」中新增分组。</td></tr>';
+          return;
+        }
+        if (storeOverviewGroup !== "all" && !groups.length) {
+          body.innerHTML = '<tr><td colspan="9" class="muted-cell">该分组暂无数据。</td></tr>';
+          return;
+        }
+        body.innerHTML = rows.map((row) => {
+          const conversion = row.exposure ? row.cartAdds / row.exposure * 100 : 0;
+          const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
+          const profitClass = row.profit >= 0 ? "positive" : "negative";
+          const memberLabel = (row.group.stores || []).length ? (row.group.stores.length + " 家店铺") : "未分配店铺";
+          return '<tr>' +
+            '<td><strong>' + escapeHtml(row.group.name) + '</strong><div class="sku">负责人：' + escapeHtml(row.group.owner || "—") + ' · ' + escapeHtml(memberLabel) + '</div></td>' +
+            '<td class="money">' + rub(row.revenue) + '</td>' +
+            '<td class="money ' + profitClass + '"><strong>' + rub(row.profit) + '</strong></td>' +
+            '<td>' + row.orders + '</td>' +
+            '<td>' + metricText(row.exposure) + '</td>' +
+            '<td>' + metricText(row.clicks) + '</td>' +
+            '<td>' + percentText(conversion) + '</td>' +
+            '<td>' + row.refunds + '</td>' +
+            '<td>' + refundRate.toFixed(2) + '%</td>' +
+          '</tr>';
+        }).join("");
+        return;
+      }
+
+      const rows = [...storeMap.values()].sort((a, b) => b.revenue - a.revenue);
       body.innerHTML = rows.length ? rows.map((row) => {
         const analytics = analyticsForStore(row.store) || {};
         const exposure = Number(analytics.totalImpressions || analytics.naturalImpressions || analytics.impressions || 0);
@@ -729,62 +902,90 @@ const initialProducts = [
           '<td>' + row.refunds + '</td>' +
           '<td>' + refundRate.toFixed(2) + '%</td>' +
         '</tr>';
-      }).join("") : '<tr><td colspan="9" class="muted-cell">\u5F53\u524D\u65F6\u95F4\u8303\u56F4\u6682\u65E0\u5E97\u94FA\u6570\u636E</td></tr>';
+      }).join("") : '<tr><td colspan="9" class="muted-cell">当前时间范围暂无店铺数据</td></tr>';
+    }
+
+    function renderStoreOverviewControls() {
+      const viewSelect = $("storeOverviewView");
+      const groupWrap = $("storeOverviewGroupWrap");
+      const groupSelect = $("storeOverviewGroup");
+      if (!viewSelect) return;
+      if (viewSelect.value !== storeOverviewView) viewSelect.value = storeOverviewView;
+      if (groupWrap) groupWrap.hidden = storeOverviewView !== "group";
+      if (groupSelect) {
+        const options = '<option value="all">全部分组</option>' + storeGroups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join("");
+        if (groupSelect.innerHTML !== options) groupSelect.innerHTML = options;
+        groupSelect.value = storeGroups.some((group) => group.id === storeOverviewGroup) ? storeOverviewGroup : "all";
+        storeOverviewGroup = groupSelect.value;
+      }
     }
     function filteredOrders() {
-      return selectedStore === "all" ? orders : orders.filter((order) => order.store === selectedStore);
+      if (selectedStore === "all") return orders;
+      if (String(selectedStore).startsWith("group:")) {
+        const groupStores = storesInGroup(selectedStore.slice("group:".length));
+        return orders.filter((order) => groupStores.includes(order.store));
+      }
+      return orders.filter((order) => order.store === selectedStore);
     }
 
     function renderStoreFilter() {
       const select = $("storeFilter");
       if (!select) return;
-      const stores = [...new Set(orders.map((order) => order.store).filter(Boolean))].sort();
-      if (selectedStore !== "all" && !stores.includes(selectedStore)) selectedStore = "all";
-      const nextHtml = [
-        `<option value="all">全部店铺</option>`,
-        ...stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`)
-      ].join("");
+      const stores = allStoreNames();
+      const validValues = new Set(["all", ...stores, ...storeGroups.map((group) => `group:${group.id}`)]);
+      if (!validValues.has(selectedStore)) selectedStore = "all";
+      const groupOptions = storeGroups.length
+        ? `<optgroup label="店铺分组">${storeGroups.map((group) => `<option value="group:${escapeHtml(group.id)}">${escapeHtml(group.name)}${group.owner ? `（${escapeHtml(group.owner)}）` : ""}</option>`).join("")}</optgroup>`
+        : "";
+      const storeOptions = stores.length
+        ? `<optgroup label="单店">${stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`).join("")}</optgroup>`
+        : "";
+      const nextHtml = `<option value="all">全部店铺</option>${groupOptions}${storeOptions}`;
       if (select.innerHTML !== nextHtml) select.innerHTML = nextHtml;
       select.value = selectedStore;
     }
 
-    function trendOrdersScoped() {
-      return selectedStore === "all" ? trendOrders : trendOrders.filter((order) => order.store === selectedStore);
+    function chartScopedOrders() {
+      const base = trendOrders.length ? trendOrders : orders;
+      if (chartStore === "all") return base;
+      return base.filter((order) => order.store === chartStore);
     }
 
-    function dailyTotals(daysNeeded = chartConfig.period * 2) {
+    function dailyTotalsForRange(from, to) {
       const map = new Map();
-      const source = trendOrdersScoped();
-      if (source.length) {
-        source.forEach((order) => {
-          const current = map.get(order.date) || { revenue: 0, orders: 0 };
-          current.revenue += calcOrder(order).sale;
-          current.orders += 1;
-          map.set(order.date, current);
-        });
-      } else {
-        filteredOrders().forEach((order) => {
-          const current = map.get(order.date) || { revenue: 0, orders: 0 };
-          current.revenue += calcOrder(order).sale;
-          current.orders += 1;
-          map.set(order.date, current);
-        });
-      }
-      const end = new Date(todayIso());
+      const source = chartScopedOrders();
+      source.forEach((order) => {
+        if (!order.date || order.date < from || order.date > to) return;
+        const c = calcOrder(order);
+        const current = map.get(order.date) || { revenue: 0, orders: 0, count: 0 };
+        current.revenue += c.sale;
+        current.count += c.ignored ? 0 : 1;
+        current.orders += 1;
+        map.set(order.date, current);
+      });
       const days = [];
-      for (let i = daysNeeded - 1; i >= 0; i--) days.push(addDays(end, -i));
-      return days.map((date) => ({ date, revenue: map.get(date)?.revenue || 0, orders: map.get(date)?.orders || 0 }));
+      let cursor = new Date(`${from}T00:00:00`);
+      const end = new Date(`${to}T00:00:00`);
+      while (cursor <= end) {
+        const iso = localIso(cursor);
+        days.push({ date: iso, revenue: map.get(iso)?.revenue || 0, orders: map.get(iso)?.orders || 0, count: map.get(iso)?.count || 0 });
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return days;
     }
 
     function drawRevenueChart() {
       const canvas = $("revenueChart");
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
-      const period = Number(chartConfig.period || 28);
-      const data = dailyTotals(period * 2);
-      const previousPeriod = data.slice(0, period);
-      const current = data.slice(period, period * 2);
-      const comparison = previousPeriod;
+      const useCount = chartConfig.unit === "count";
+      const from = chartDateFrom;
+      const to = chartDateTo;
+      const period = daysInclusive(from, to);
+      const current = dailyTotalsForRange(from, to);
+      const previousFrom = addDays(from, -period);
+      const previousTo = addDays(from, -1);
+      const comparison = period > 1 ? dailyTotalsForRange(previousFrom, previousTo) : [];
       const width = canvas.width;
       const height = canvas.height;
       const padLeft = 54;
@@ -795,7 +996,7 @@ const initialProducts = [
       const chartY = padTop;
       const chartW = width - padLeft - padRight;
       const chartH = height - padTop - padBottom;
-      const formatSales = (value) => rub(value);
+      const formatSales = (value) => useCount ? `${Math.round(value)} 件` : rub(value);
       const formatOrders = (value) => `${Math.round(value)} 单`;
 
       ctx.clearRect(0, 0, width, height);
@@ -812,9 +1013,10 @@ const initialProducts = [
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
-      const maxValue = Math.max(...comparison.map((item) => item.revenue), ...current.map((item) => item.revenue), 1);
+      const primaryValue = (item) => useCount ? (item.count || 0) : (item.revenue || 0);
+      const maxValue = Math.max(...comparison.map(primaryValue), ...current.map(primaryValue), 1);
       const maxOrders = Math.max(...current.map((item) => item.orders), 1);
-      const axisMax = Math.ceil(maxValue / 1000) * 1000 || 1000;
+      const axisMax = useCount ? (Math.ceil(maxValue / 10) * 10 || 10) : (Math.ceil(maxValue / 1000) * 1000 || 1000);
       const orderAxisMax = Math.ceil(maxOrders / 10) * 10 || 10;
       const xStep = chartW / Math.max(current.length - 1, 1);
       const toY = (value) => chartY + chartH - (Number(value || 0) / axisMax) * chartH;
@@ -834,12 +1036,13 @@ const initialProducts = [
         ctx.lineTo(chartX + chartW, y);
         ctx.stroke();
         ctx.textAlign = "right";
-        ctx.fillText(`${(value / 1000).toFixed(value >= 1000 ? 1 : 0)}k`, chartX - 12, y + 4);
+        const leftLabel = useCount ? Math.round(value) : `${(value / 1000).toFixed(value >= 1000 ? 1 : 0)}k`;
+        ctx.fillText(leftLabel, chartX - 12, y + 4);
         ctx.textAlign = "left";
         ctx.fillText(Math.round(orderAxisMax / 4 * i), chartX + chartW + 14, y + 4);
       }
 
-      const comparePoints = comparison.map((item, index) => ({ x: toX(index), y: toY(item.revenue) }));
+      const comparePoints = comparison.map((item, index) => ({ x: toX(index), y: toY(primaryValue(item)) }));
       const orderPoints = current.map((item, index) => ({ x: toX(index), y: toOrderY(item.orders) }));
       if (activeChartIndex !== null && current[activeChartIndex]) {
         const activeX = toX(activeChartIndex);
@@ -860,7 +1063,7 @@ const initialProducts = [
       const barW = Math.min(34, Math.max(8, barStep * .46));
       current.forEach((item, index) => {
         const x = toX(index) - barW / 2;
-        const y = toY(item.revenue);
+        const y = toY(primaryValue(item));
         const h = chartY + chartH - y;
         const grad = ctx.createLinearGradient(0, y, 0, chartY + chartH);
         if (index === activeChartIndex) {
@@ -923,11 +1126,13 @@ const initialProducts = [
       });
 
       revenueChartHitboxes = current.map((item, index) => {
-        const compare = comparison[index] || { revenue: 0 };
-        const change = compare.revenue ? (item.revenue - compare.revenue) / compare.revenue * 100 : null;
-        const changeLabel = compare.revenue
+        const compare = comparison[index] || { revenue: 0, count: 0 };
+        const curVal = primaryValue(item);
+        const prevVal = primaryValue(compare);
+        const change = prevVal ? (curVal - prevVal) / prevVal * 100 : null;
+        const changeLabel = prevVal
           ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`
-          : item.revenue > 0
+          : curVal > 0
           ? "新增"
           : "无变化";
         return {
@@ -938,7 +1143,9 @@ const initialProducts = [
           index,
           date: item.date,
           revenue: item.revenue,
-          previous: compare.revenue,
+          count: item.count,
+          primary: curVal,
+          previous: prevVal,
           orders: item.orders,
           change,
           changeLabel,
@@ -1070,19 +1277,27 @@ const initialProducts = [
       return Math.max(1, Number.isFinite(diff) ? diff : 1);
     }
 
-    function baseAdRows() {
+    function adStoreMatchesSelected(storeName) {
       const selected = $("adStoreSelect")?.value || "all";
+      if (selected === "all") return true;
+      if (String(selected).startsWith("group:")) {
+        return storesInGroup(selected.slice("group:".length)).includes(storeName);
+      }
+      return storeName === selected;
+    }
+
+    function baseAdRows() {
       const apiRows = adRowsArray().filter((row) => {
-        if (selected !== "all" && row.store !== selected) return false;
+        if (!adStoreMatchesSelected(row.store)) return false;
         if (!adRowVisible(row)) return false;
         if (row.source === "api" && row.hasValidSku === false) return false;
         return true;
       });
       if (apiRows.length) return apiRows.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "api" }));
-      const uploaded = importedAds.filter((row) => selected === "all" || row.store === selected);
+      const uploaded = importedAds.filter((row) => adStoreMatchesSelected(row.store));
       if (uploaded.length) return uploaded.map((row) => ({ ...row, revenue: Number(row.revenue ?? row.adRevenue ?? 0), adRevenue: Number(row.adRevenue ?? row.revenue ?? 0), source: row.source || "xlsx" }));
       return orders
-        .filter((order) => Number(order.adCost || 0) > 0 && (selected === "all" || order.store === selected))
+        .filter((order) => Number(order.adCost || 0) > 0 && adStoreMatchesSelected(order.store))
         .map((order) => {
           const c = calcOrder(order);
           return { date: order.date, dateFrom: order.date, dateTo: order.date, store: order.store, sku: order.sku, name: c.product?.name || "", revenue: c.sale, adRevenue: c.sale, adCost: c.adCost, adOrders: 1, impressions: 0, clicks: 0, ctr: 0, source: "order" };
@@ -1370,9 +1585,13 @@ const initialProducts = [
       updateAdDateInputs();
       const currentStore = $("adStoreSelect").value || "all";
       const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...adRowsArray().map((row) => row.store)].filter(Boolean))];
-      const storeOptions = '<option value="all">\u5168\u90E8\u5E97\u94FA</option>' + allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("");
+      const validValues = new Set(["all", ...allStores, ...storeGroups.map((group) => `group:${group.id}`)]);
+      const groupOptions = storeGroups.length
+        ? `<optgroup label="店铺分组">${storeGroups.map((group) => `<option value="group:${escapeHtml(group.id)}">${escapeHtml(group.name)}${group.owner ? `（${escapeHtml(group.owner)}）` : ""}</option>`).join("")}</optgroup>`
+        : "";
+      const storeOptions = '<option value="all">全部店铺</option>' + groupOptions + (allStores.length ? `<optgroup label="单店">${allStores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`).join("")}</optgroup>` : "");
       $("adStoreSelect").innerHTML = storeOptions;
-      $("adStoreSelect").value = allStores.includes(currentStore) ? currentStore : "all";
+      $("adStoreSelect").value = validValues.has(currentStore) ? currentStore : "all";
       if ($("adImportStore")) {
         const importCurrent = $("adImportStore").value;
         $("adImportStore").innerHTML = allStores.map((store) => '<option value="' + escapeHtml(store) + '">' + escapeHtml(store) + '</option>').join("") || '<option value="\u672A\u6307\u5B9A\u5E97\u94FA">\u672A\u6307\u5B9A\u5E97\u94FA</option>';
@@ -1589,6 +1808,25 @@ const initialProducts = [
       await loadStoreAnalytics();
       renderAll();
     }
+    function summaryRangeFromDates(from, to) {
+      const today = todayIso();
+      const yesterday = addDays(today, -1);
+      if (from === today && to === today) return "today";
+      if (from === addDays(today, -7) && to === yesterday) return "7";
+      if (from === addDays(today, -28) && to === yesterday) return "28";
+      const d = new Date(`${today}T00:00:00`);
+      const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
+      if (from === localIso(new Date(d.getFullYear(), quarterStartMonth, 1)) && to === yesterday) return "quarter";
+      if (from === `${d.getFullYear()}-01-01` && to === yesterday) return "year";
+      return "";
+    }
+    function syncSummaryRangePills() {
+      const value = summaryRangeFromDates(orderDateFrom, orderDateTo);
+      document.querySelectorAll("[data-summary-range]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.summaryRange === value);
+      });
+    }
+
     async function applySummaryRange(value) {
       const today = todayIso();
       const yesterday = addDays(today, -1);
@@ -1722,12 +1960,18 @@ const initialProducts = [
     function renderCosts() {
       $("sideCount").textContent = products.length;
       const keyword = $("costSearch").value.trim().toLowerCase();
-      const rows = products.filter((p) => [p.code, p.sku, p.name].join(" ").toLowerCase().includes(keyword));
-      $("costRows").innerHTML = rows.map((p) => `
+      const scopePlatform = normalizePlatform($("costScopePlatform")?.value);
+      const scopeMode = normalizeMode($("costScopeMode")?.value);
+      const scopeFulfillment = normalizeFulfillment($("costScopeFulfillment")?.value, scopePlatform, scopeMode);
+      const rows = products
+        .map((p) => ensureProductScope(p))
+        .filter((p) => p.platform === scopePlatform && p.mode === scopeMode && p.fulfillment === scopeFulfillment)
+        .filter((p) => [p.code, p.sku, p.name].join(" ").toLowerCase().includes(keyword));
+      $("costRows").innerHTML = rows.length ? rows.map((p) => `
         <tr>
           <td><strong>${escapeHtml(p.code)}</strong><div>${escapeHtml(p.name)}</div><div class="sku">${escapeHtml(p.sku)}</div></td>
+          <td><span class="scope-chip">${PLATFORM_LABELS[p.platform] || p.platform} · ${MODE_LABELS[p.mode] || p.mode} · ${escapeHtml(p.fulfillment)}</span></td>
           <td class="money">${rmb(p.purchase)}</td>
-          <td class="money">${rmb(p.domestic)}</td>
           <td class="money">${rmb(p.firstFreight)}</td>
           <td class="money">${rmb(p.lastMile)}</td>
           <td>${Number(p.rate).toFixed(2)}</td>
@@ -1735,7 +1979,8 @@ const initialProducts = [
           <td class="money"><strong>${rub(totalRub(p))}</strong></td>
           <td class="actions"><button class="secondary" onclick="editProduct('${p.id}')">编辑</button><button class="danger" onclick="deleteProduct('${p.id}')">删除</button></td>
         </tr>
-      `).join("");
+      `).join("") : `<tr><td colspan="9" class="muted-cell">当前范围暂无产品成本，可在左侧表单添加或导入表格。</td></tr>`;
+      renderFeeRows();
     }
 
     function renderProductSelects() {
@@ -1747,15 +1992,36 @@ const initialProducts = [
         <tr>
           <td><strong>${escapeHtml(item.name)}</strong></td>
           <td>${escapeHtml(item.platform)}</td>
-          <td>${escapeHtml(item.createdAt)}</td>
-          <td><button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button></td>
+          <td>${escapeHtml(item.clientId || "—")}</td>
+          <td>${escapeHtml(formatCreatedAt(item.createdAt))}</td>
+          <td class="actions">
+            <button class="secondary" type="button" onclick="editApiConfig('${item.id}')">编辑</button>
+            <button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>
+          </td>
         </tr>
       `).join("");
-      $("apiRows").innerHTML = rows || `<tr><td colspan="4" class="status">还没有添加接口。</td></tr>`;
+      $("apiRows").innerHTML = rows || `<tr><td colspan="5" class="status">还没有添加店铺，请在左侧新增。</td></tr>`;
     }
 
+    window.editApiConfig = (id) => {
+      const item = apiConfigs.find((entry) => entry.id === id);
+      if (!item) return;
+      $("editApiId").value = item.id;
+      $("apiName").value = item.name || "";
+      $("apiPlatform").value = item.platform || "Ozon";
+      $("apiClientId").value = item.clientId || "";
+      $("apiSecret").value = item.secret || "";
+      $("apiVerifyStatus").hidden = true;
+      $("apiForm").scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+
     window.deleteApiConfig = async (id) => {
-      if (!confirm("确认删除这个接口？")) return;
+      const item = apiConfigs.find((entry) => entry.id === id);
+      const storeName = item?.name || "";
+      const hint = storeName
+        ? `确认删除店铺「${storeName}」？\n\n这会一并清除该店铺的：\n· 订单与趋势数据\n· 广告数据与缓存\n· 店铺分析数据\n· 所属分组的成员引用\n删除后其他功能不会再显示该店铺的残留数据。`
+        : "确认删除这个店铺？这会清除其所有相关数据。";
+      if (!confirm(hint)) return;
       if (backendEnabled) {
         try {
           await apiRequest(`/api/integrations/${id}`, { method: "DELETE" });
@@ -1764,49 +2030,208 @@ const initialProducts = [
           return;
         }
       }
-      apiConfigs = apiConfigs.filter((item) => item.id !== id);
+      if (storeName) purgeStoreData(storeName);
+      apiConfigs = apiConfigs.filter((entry) => entry.id !== id);
+      if (String(selectedStore) === storeName) selectedStore = "all";
       renderAll();
     };
 
-    function readCostForm() {
+    function renderStoreGroups() {
+      const body = $("storeGroupRows");
+      const select = $("groupStores");
+      if (select) {
+        const stores = allStoreNames();
+        const options = stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`).join("");
+        if (select.innerHTML !== options) select.innerHTML = options;
+      }
+      if (!body) return;
+      if (!storeGroups.length) {
+        body.innerHTML = `<tr><td colspan="5" class="status">还没有创建分组，可在上方表单新增。</td></tr>`;
+        return;
+      }
+      body.innerHTML = storeGroups.map((group) => {
+        const members = (group.stores || []).map((store) => escapeHtml(store)).join("、") || "<span class='muted'>未分配</span>";
+        return `<tr>
+          <td><strong>${escapeHtml(group.name)}</strong></td>
+          <td>${escapeHtml(group.owner || "—")}</td>
+          <td>${members}</td>
+          <td>${escapeHtml(group.note || "—")}</td>
+          <td class="actions">
+            <button class="secondary" type="button" onclick="editStoreGroup('${group.id}')">编辑</button>
+            <button class="danger" type="button" onclick="deleteStoreGroup('${group.id}')">删除</button>
+          </td>
+        </tr>`;
+      }).join("");
+    }
+
+    function readGroupForm() {
       return {
+        id: $("editGroupId").value || crypto.randomUUID(),
+        name: $("groupName").value.trim(),
+        owner: $("groupOwner").value.trim(),
+        note: $("groupNote").value.trim(),
+        stores: [...(($("groupStores")?.selectedOptions || []))].map((option) => option.value),
+      };
+    }
+
+    function resetGroupForm() {
+      $("storeGroupForm").reset();
+      $("editGroupId").value = "";
+      $("groupSubmitBtn").textContent = "新增分组";
+    }
+
+    window.editStoreGroup = (id) => {
+      const group = storeGroups.find((entry) => entry.id === id);
+      if (!group) return;
+      $("editGroupId").value = group.id;
+      $("groupName").value = group.name || "";
+      $("groupOwner").value = group.owner || "";
+      $("groupNote").value = group.note || "";
+      const select = $("groupStores");
+      if (select) {
+        const members = new Set(group.stores || []);
+        [...select.options].forEach((option) => { option.selected = members.has(option.value); });
+      }
+      $("groupSubmitBtn").textContent = "保存分组";
+      $("storeGroupForm").scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+
+    window.deleteStoreGroup = (id) => {
+      const group = storeGroups.find((entry) => entry.id === id);
+      if (!group) return;
+      if (!confirm(`确认删除分组「${group.name}」？\n（仅删除分组，店铺本身不受影响；已联动使用该分组的筛选会自动回到「全部店铺」。）`)) return;
+      storeGroups = storeGroups.filter((entry) => entry.id !== id);
+      if (String(selectedStore) === `group:${id}`) selectedStore = "all";
+      if (storeOverviewGroup === id) storeOverviewGroup = "all";
+      renderAll();
+    };
+
+    function dynamicFieldDefs(mode) {
+      if (mode === "cross") {
+        return [
+          { id: "firstFreight", label: "头程运费 RMB", step: "0.001" },
+          { id: "lastMile", label: "国际物流 RMB", step: "0.01" },
+        ];
+      }
+      return [
+        { id: "firstFreight", label: "头程运费 RMB", step: "0.001" },
+        { id: "lastMile", label: "尾程操作费 RMB", step: "0.01" },
+      ];
+    }
+
+    function renderDynamicCostFields(mode, values) {
+      const box = $("costDynamicFields");
+      if (!box) return;
+      box.innerHTML = "";
+      for (const def of dynamicFieldDefs(mode)) {
+        const wrap = document.createElement("label");
+        wrap.textContent = def.label;
+        const input = document.createElement("input");
+        input.type = "number";
+        input.step = def.step;
+        input.min = "0";
+        input.value = values?.[def.id] ?? 0;
+        input.dataset.costField = def.id;
+        wrap.appendChild(input);
+        box.appendChild(wrap);
+      }
+    }
+
+    function refreshFulfillmentOptions(selectEl, platform, mode, currentValue) {
+      if (!selectEl) return;
+      const options = FULFILLMENT_OPTIONS(platform, mode);
+      const allowed = options.includes(currentValue) ? currentValue : options[0];
+      selectEl.innerHTML = options.map((opt) => `<option value="${opt}">${opt}</option>`).join("");
+      selectEl.value = allowed;
+    }
+
+    function readCostForm() {
+      const platform = normalizePlatform($("platform").value);
+      const mode = normalizeMode($("mode").value);
+      const fulfillment = normalizeFulfillment($("fulfillment").value, platform, mode);
+      const picked = {};
+      document.querySelectorAll("[data-cost-field]").forEach((input) => {
+        picked[input.dataset.costField] = Number(input.value || 0);
+      });
+      return ensureProductScope({
         id: $("editId").value || crypto.randomUUID(),
         code: $("code").value.trim(),
         sku: $("sku").value.trim(),
         name: $("name").value.trim(),
         purchase: Number($("purchase").value || 0),
         domestic: Number($("domestic").value || 0),
-        firstFreight: Number($("firstFreight").value || 0),
-        lastMile: Number($("lastMile").value || 0),
+        firstFreight: picked.firstFreight ?? Number($("firstFreight")?.value || 0),
+        lastMile: picked.lastMile ?? Number($("lastMile")?.value || 0),
         rate: Number($("rate").value || 0),
-        platform: $("platform").value
-      };
+        platform,
+        mode,
+        fulfillment,
+      });
     }
 
     function updateCostTotal() {
       const p = readCostForm();
       $("costTotal").textContent = `${rmb(totalRmb(p))} / ${rub(totalRub(p))}`;
+      updateCostFeeHint(p);
+    }
+
+    function updateCostFeeHint(p) {
+      const hint = $("costFeeHint");
+      if (!hint) return;
+      const bundle = findFeeBundle(p.platform, p.mode, p.fulfillment);
+      const hasModel = bundle && (bundle.defaultModel || (bundle.models && Object.keys(bundle.models).length));
+      if (hasModel) {
+        hint.textContent = `费用模型：${PLATFORM_LABELS[bundle.platform]} · ${MODE_LABELS[bundle.mode]} · ${bundle.fulfillment}（${bundle.models ? Object.keys(bundle.models).length : 0} SKU）`;
+        hint.classList.add("configured");
+      } else {
+        hint.textContent = "费用模型：未配置（可在下方导入费用表）";
+        hint.classList.remove("configured");
+      }
     }
 
     window.editProduct = (id) => {
       const p = productById(id);
       if (!p) return;
-      $("editId").value = p.id; $("code").value = p.code; $("sku").value = p.sku; $("name").value = p.name;
-      $("purchase").value = p.purchase; $("domestic").value = p.domestic; $("firstFreight").value = p.firstFreight; $("lastMile").value = p.lastMile;
-      $("rate").value = p.rate; $("platform").value = p.platform || "Ozon"; $("costFormTitle").textContent = "编辑产品成本";
+      const scoped = ensureProductScope(p);
+      $("editId").value = scoped.id;
+      $("code").value = scoped.code || "";
+      $("sku").value = scoped.sku || "";
+      $("name").value = scoped.name || "";
+      $("purchase").value = scoped.purchase ?? 0;
+      $("domestic").value = scoped.domestic ?? 0;
+      $("platform").value = scoped.platform;
+      $("mode").value = scoped.mode;
+      refreshFulfillmentOptions($("fulfillment"), scoped.platform, scoped.mode, scoped.fulfillment);
+      renderDynamicCostFields(scoped.mode, scoped);
+      $("rate").value = scoped.rate ?? 11.5;
+      $("costFormTitle").textContent = "编辑产品成本";
       updateCostTotal();
-      document.querySelector('[data-tab="costs"]').click();
+      const costsTab = document.querySelector('[data-tab="costs"]');
+      if (costsTab) costsTab.click();
+      const formPanel = $("costForm")?.closest(".panel");
+      if (formPanel) formPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      const formTitle = $("costFormTitle");
+      if (formTitle) { formTitle.style.transition = "color .3s ease"; formTitle.style.color = "var(--accent-gold)"; setTimeout(() => { formTitle.style.color = ""; }, 1200); }
     };
 
     window.deleteProduct = (id) => {
-      if (!confirm("确认删除这个产品成本？")) return;
-      products = products.filter((p) => p.id !== id);
+      const p = productById(id);
+      if (!p) return;
+      if (!confirm(`确认删除产品成本？\n${p.code} / ${p.name}`)) return;
+      products = products.filter((item) => item.id !== id);
       renderAll();
     };
 
     function resetCostForm() {
+      const platform = normalizePlatform($("costScopePlatform")?.value || $("platform")?.value || "Ozon");
+      const mode = normalizeMode($("costScopeMode")?.value || $("mode")?.value || "local");
+      const fulfillment = normalizeFulfillment($("costScopeFulfillment")?.value, platform, mode);
       $("costForm").reset();
       $("editId").value = "";
+      $("platform").value = platform;
+      $("mode").value = mode;
+      refreshFulfillmentOptions($("fulfillment"), platform, mode, fulfillment);
+      renderDynamicCostFields(mode, { firstFreight: 0, lastMile: 0 });
       $("rate").value = 11.5;
       $("costFormTitle").textContent = "添加产品成本";
       updateCostTotal();
@@ -1946,9 +2371,26 @@ const initialProducts = [
     }
 
     $("costForm").addEventListener("input", updateCostTotal);
+    $("platform").addEventListener("change", () => {
+      const platform = normalizePlatform($("platform").value);
+      const mode = normalizeMode($("mode").value);
+      refreshFulfillmentOptions($("fulfillment"), platform, mode, $("fulfillment").value);
+      updateCostTotal();
+    });
+    $("mode").addEventListener("change", () => {
+      const platform = normalizePlatform($("platform").value);
+      const mode = normalizeMode($("mode").value);
+      const prevMode = $("mode").dataset.prevMode;
+      refreshFulfillmentOptions($("fulfillment"), platform, mode, $("fulfillment").value);
+      if (prevMode && prevMode !== mode) renderDynamicCostFields(mode, readCostForm());
+      $("mode").dataset.prevMode = mode;
+      updateCostTotal();
+    });
+    $("fulfillment").addEventListener("change", updateCostTotal);
     $("costForm").addEventListener("submit", (event) => {
       event.preventDefault();
       const p = readCostForm();
+      if (!p.code || !p.sku) { alert("请填写货号和 SKU。"); return; }
       const index = products.findIndex((item) => item.id === p.id);
       if (index >= 0) products[index] = p; else products.unshift(p);
       resetCostForm();
@@ -1956,17 +2398,231 @@ const initialProducts = [
     });
     $("resetCostForm").addEventListener("click", resetCostForm);
     $("costSearch").addEventListener("input", renderCosts);
-    $("clearCosts").addEventListener("click", () => {
-      if (!confirm("确认清空本地产品成本？")) return;
-      products = [];
-      renderAll();
+
+    $("costScopePlatform").addEventListener("change", () => {
+      syncScopeFulfillment();
+      syncFormScopeFromGlobal();
+      renderCosts();
     });
+    $("costScopeMode").addEventListener("change", () => {
+      syncScopeFulfillment();
+      syncFormScopeFromGlobal();
+      renderCosts();
+    });
+    $("costScopeFulfillment").addEventListener("change", () => {
+      syncFormScopeFromGlobal();
+      renderCosts();
+    });
+
+    function syncScopeFulfillment() {
+      const platform = normalizePlatform($("costScopePlatform").value);
+      const mode = normalizeMode($("costScopeMode").value);
+      refreshFulfillmentOptions($("costScopeFulfillment"), platform, mode, $("costScopeFulfillment").value);
+    }
+    function syncFormScopeFromGlobal() {
+      if ($("editId").value) return;
+      const platform = normalizePlatform($("costScopePlatform").value);
+      const mode = normalizeMode($("costScopeMode").value);
+      const fulfillment = normalizeFulfillment($("costScopeFulfillment").value, platform, mode);
+      $("platform").value = platform;
+      $("mode").value = mode;
+      $("mode").dataset.prevMode = mode;
+      refreshFulfillmentOptions($("fulfillment"), platform, mode, fulfillment);
+      renderDynamicCostFields(mode, { firstFreight: 0, lastMile: 0 });
+      updateCostTotal();
+    }
+
+    function initCostScope() {
+      if (!$("costScopePlatform")) return;
+      refreshFulfillmentOptions($("costScopeFulfillment"), "Ozon", "local", "FBO");
+      refreshFulfillmentOptions($("fulfillment"), "Ozon", "local", "FBO");
+      $("mode").dataset.prevMode = "local";
+      renderDynamicCostFields("local", { firstFreight: 0, lastMile: 0 });
+    }
+
     $("exportCosts").addEventListener("click", () => {
-      const headers = ["货号","SKU","产品名称","采购成本RMB","国内运费RMB","头程运费RMB","尾程操作费RMB","汇率","成本合计RMB","采购运费成本RUB"];
-      const rows = products.map((p) => [p.code,p.sku,p.name,p.purchase,p.domestic,p.firstFreight,p.lastMile,p.rate,totalRmb(p),totalRub(p)]);
+      const headers = ["平台","模式","履约","货号","SKU","产品名称","采购成本RMB","国内运费RMB","头程运费RMB","尾程操作费RMB","汇率","成本合计RMB","RUB成本"];
+      const rows = products.map((p) => [p.platform,p.mode,p.fulfillment,p.code,p.sku,p.name,p.purchase,p.domestic,p.firstFreight,p.lastMile,p.rate,totalRmb(p),totalRub(p)]);
       const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"','""')}"`).join(",")).join("\n");
       download("ozon-wb-product-costs.csv", "\ufeff" + csv, "text/csv;charset=utf-8");
     });
+
+    $("importCosts").addEventListener("click", () => $("importCostsFile").click());
+    $("importCostsFile").addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const status = $("costImportStatus");
+      try {
+        const imported = await parseProductCostFile(file);
+        if (!imported.length) throw new Error("未能从表格中识别出任何产品行（需要包含 货号/SKU/产品名称 列）。");
+        const byKey = new Map(products.map((p) => [`${p.platform}|${p.mode}|${p.fulfillment}|${p.sku}`, p]));
+        let added = 0, updated = 0;
+        for (const item of imported) {
+          const key = `${item.platform}|${item.mode}|${item.fulfillment}|${item.sku}`;
+          const existing = byKey.get(key);
+          if (existing) { Object.assign(existing, item, { id: existing.id }); updated += 1; }
+          else { const fresh = { ...item, id: crypto.randomUUID() }; products.unshift(fresh); byKey.set(key, fresh); added += 1; }
+        }
+        save();
+        renderAll();
+        if (status) status.textContent = `导入完成：新增 ${added} 条，更新 ${updated} 条（来源：${file.name}）。`;
+      } catch (error) {
+        if (status) status.textContent = "导入失败：" + (error.message || error);
+        alert("导入失败：" + (error.message || error));
+      } finally {
+        event.target.value = "";
+      }
+    });
+
+    async function parseProductCostFile(file) {
+      if (!window.XLSX) throw new Error("Excel 解析组件未加载，请刷新页面后重试。");
+      const workbook = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const headerIndex = rows.findIndex((row) => row.some((cell) => /货号|代码|code/i.test(String(cell))));
+      if (headerIndex < 0) throw new Error("未找到包含「货号」的表头行。");
+      const headerMap = new Map(rows[headerIndex].map((h, i) => [normalizeAdHeader(h), i]));
+      const pick = (row, names) => {
+        for (const n of names) { const idx = headerMap.get(normalizeAdHeader(n)); if (idx !== undefined && row[idx] !== "") return row[idx]; }
+        return "";
+      };
+      const scopePlatform = normalizePlatform($("costScopePlatform").value);
+      const scopeMode = normalizeMode($("costScopeMode").value);
+      const scopeFulfillment = normalizeFulfillment($("costScopeFulfillment").value, scopePlatform, scopeMode);
+      const result = [];
+      rows.slice(headerIndex + 1).forEach((row) => {
+        const code = String(pick(row, ["货号", "代码", "code"])).trim();
+        const sku = String(pick(row, ["SKU", "sku", "平台SKU"])).trim();
+        const name = String(pick(row, ["产品名称", "名称", "商品名称", "name"])).trim();
+        if (!code && !sku) return;
+        result.push(ensureProductScope({
+          code, sku, name: name || code || sku,
+          purchase: adNumber(pick(row, ["采购成本RMB", "采购成本", "采购"])),
+          domestic: adNumber(pick(row, ["国内运费RMB", "国内运费", "国内"])),
+          firstFreight: adNumber(pick(row, ["头程运费RMB", "头程运费", "头程"])),
+          lastMile: adNumber(pick(row, ["尾程操作费RMB", "尾程操作费", "尾程", "国际物流RMB", "国际物流"])),
+          rate: adNumber(pick(row, ["汇率", "rate"])) || 11.5,
+          platform: normalizePlatform(pick(row, ["平台", "platform"]) || scopePlatform),
+          mode: normalizeMode(pick(row, ["模式", "mode"]) || scopeMode),
+          fulfillment: normalizeFulfillment(pick(row, ["履约", "fulfillment"]) || scopeFulfillment, scopePlatform, scopeMode),
+        }));
+      });
+      return result;
+    }
+
+    function refreshFeeImportFulfillment() {
+      const platform = normalizePlatform($("feeImportPlatform").value);
+      const mode = normalizeMode($("feeImportMode").value);
+      refreshFulfillmentOptions($("feeImportFulfillment"), platform, mode, $("feeImportFulfillment").value);
+    }
+    $("feeImportPlatform").addEventListener("change", refreshFeeImportFulfillment);
+    $("feeImportMode").addEventListener("change", refreshFeeImportFulfillment);
+
+    $("importFees").addEventListener("click", async () => {
+      const file = $("feeImportFile")?.files?.[0];
+      const status = $("feeImportStatus");
+      if (!file) { if (status) status.textContent = "请先选择费用表文件。"; return; }
+      try {
+        const platform = normalizePlatform($("feeImportPlatform").value);
+        const mode = normalizeMode($("feeImportMode").value);
+        const fulfillment = normalizeFulfillment($("feeImportFulfillment").value, platform, mode);
+        const parsed = await parseFeeTableFile(file);
+        upsertFeeBundle(platform, mode, fulfillment, parsed);
+        save();
+        renderFeeRows();
+        updateCostTotal();
+        if (status) status.textContent = `已导入 ${PLATFORM_LABELS[platform]} · ${MODE_LABELS[mode]} · ${fulfillment} 费用表：${parsed.modelCount} 条 SKU 费用${parsed.defaultModel ? "，含默认费用" : ""}（来源：${file.name}）。`;
+      } catch (error) {
+        if (status) status.textContent = "费用表导入失败：" + (error.message || error);
+        alert("费用表导入失败：" + (error.message || error));
+      } finally {
+        $("feeImportFile").value = "";
+      }
+    });
+
+    $("clearImportedFees").addEventListener("click", () => {
+      if (!platformFees.length) { if ($("feeImportStatus")) $("feeImportStatus").textContent = "当前没有已导入的费用表。"; return; }
+      if (!confirm("确认清空全部已导入的平台费用表？")) return;
+      platformFees = [];
+      save();
+      renderFeeRows();
+      updateCostTotal();
+      if ($("feeImportStatus")) $("feeImportStatus").textContent = "已清空全部平台费用表。";
+    });
+
+    async function parseFeeTableFile(file) {
+      if (!window.XLSX) throw new Error("Excel 解析组件未加载，请刷新页面后重试。");
+      const workbook = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const headerIndex = rows.findIndex((row) => row.some((cell) => /sku|货号|代码/i.test(String(cell))));
+      if (headerIndex < 0) throw new Error("未找到包含「SKU」或「货号」的表头行。");
+      const headerMap = new Map(rows[headerIndex].map((h, i) => [normalizeAdHeader(h), i]));
+      const pick = (row, names) => {
+        for (const n of names) { const idx = headerMap.get(normalizeAdHeader(n)); if (idx !== undefined && row[idx] !== "") return row[idx]; }
+        return "";
+      };
+      const models = {};
+      let defaultModel = null;
+      rows.slice(headerIndex + 1).forEach((row) => {
+        const key = String(pick(row, ["sku", "货号", "代码"])).trim();
+        const model = {
+          defaultPrice: adNumber(pick(row, ["默认售价", "后台定价", "售价", "defaultprice"])),
+          commissionRate: adNumber(pick(row, ["佣金率", "佣金", "commissionrate"])),
+          logisticsFee: adNumber(pick(row, ["物流费", "logisticsfee"])),
+          handlingFee: adNumber(pick(row, ["揽收处理", "处理费", "handlingfee"])),
+          acquiringFee: adNumber(pick(row, ["收款手续费", "acquiringfee"])),
+          otherFixedFee: adNumber(pick(row, ["其他固定费", "其他费用", "otherfixedfee"])),
+        };
+        if (key) models[key] = model;
+        else if (!defaultModel) defaultModel = model;
+      });
+      if (!Object.keys(models).length && !defaultModel) throw new Error("费用表里没有可识别的费用行。");
+      return { models, defaultModel, modelCount: Object.keys(models).length };
+    }
+
+    function upsertFeeBundle(platform, mode, fulfillment, parsed) {
+      platform = normalizePlatform(platform);
+      mode = normalizeMode(mode);
+      fulfillment = normalizeFulfillment(fulfillment, platform, mode);
+      const key = feeScopeKey(platform, mode, fulfillment);
+      platformFees = platformFees.filter((b) => feeScopeKey(b.platform, b.mode, b.fulfillment) !== key);
+      platformFees.unshift({
+        id: crypto.randomUUID(),
+        platform, mode, fulfillment,
+        models: parsed.models || {},
+        defaultModel: parsed.defaultModel || null,
+        fileName: parsed.fileName || "",
+        importedAt: new Date().toISOString(),
+      });
+    }
+
+    window.deleteFeeBundle = (id) => {
+      if (!confirm("确认删除这组平台费用表？")) return;
+      platformFees = platformFees.filter((b) => b.id !== id);
+      save();
+      renderFeeRows();
+      updateCostTotal();
+    };
+
+    function renderFeeRows() {
+      const body = $("feeRows");
+      if (!body) return;
+      body.innerHTML = platformFees.length ? platformFees.map((b) => {
+        const modelCount = b.models ? Object.keys(b.models).length : 0;
+        const coveredSkus = b.models ? products.filter((p) => b.models[String(p.sku)] || b.models[String(p.code)]).length : 0;
+        const imported = b.importedAt ? b.importedAt.replace("T", " ").slice(0, 16) : "-";
+        return `<tr>
+          <td><strong>${PLATFORM_LABELS[b.platform] || b.platform}</strong></td>
+          <td>${MODE_LABELS[b.mode] || b.mode}</td>
+          <td>${escapeHtml(b.fulfillment)}</td>
+          <td>${modelCount}${b.defaultModel ? " <span class='sku'>+默认</span>" : ""}</td>
+          <td>${coveredSkus} / ${products.length}</td>
+          <td>${escapeHtml(imported)}</td>
+          <td><button class="danger" type="button" onclick="deleteFeeBundle('${b.id}')">删除</button></td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="7" class="muted-cell">尚未导入任何平台费用表。上传后将在这里显示，订单利润与跟价计算会自动使用。</td></tr>`;
+    }
 
     if ($("seedOrders")) $("seedOrders").addEventListener("click", seedDemoOrders);
     if ($("clearOrders")) $("clearOrders").addEventListener("click", () => {
@@ -1980,6 +2636,15 @@ const initialProducts = [
       if (event.target.id === "imageModal") closeImageModal();
     });
     $("adStoreSelect").addEventListener("change", renderAds);
+    $("storeOverviewView")?.addEventListener("change", (event) => {
+      storeOverviewView = event.target.value;
+      renderStoreOverviewControls();
+      renderStoreOverview();
+    });
+    $("storeOverviewGroup")?.addEventListener("change", (event) => {
+      storeOverviewGroup = event.target.value;
+      renderStoreOverview();
+    });
     if ($("refreshAdsApi")) $("refreshAdsApi").addEventListener("click", refreshAdsApi);
     if ($("adCompareToggle")) $("adCompareToggle").addEventListener("change", (event) => {
       adCompareEnabled = event.target.checked;
@@ -2070,38 +2735,122 @@ const initialProducts = [
       renderAll();
     });
 
+    function setApiVerifyStatus(ok, message) {
+      const box = $("apiVerifyStatus");
+      if (!box) return;
+      box.hidden = false;
+      box.className = "api-verify-status " + (ok ? "ok" : "fail");
+      box.textContent = message;
+    }
+
+    async function verifyApiCredentials() {
+      const clientId = $("apiClientId").value.trim();
+      const secret = $("apiSecret").value.trim();
+      if (!clientId || !secret) {
+        setApiVerifyStatus(false, "请先填写 Client ID 和 API 密钥。");
+        return false;
+      }
+      const btn = $("verifyApiBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "验证中..."; }
+      try {
+        if (backendEnabled) {
+          const result = await apiRequest("/api/integrations/verify", {
+            method: "POST",
+            body: JSON.stringify({ clientId, secret })
+          });
+          if (result.ok) {
+            setApiVerifyStatus(true, "✓ " + (result.message || "验证成功，凭证有效"));
+            return true;
+          }
+          setApiVerifyStatus(false, "✗ " + (result.error || "验证失败，请检查 Client ID 与密钥"));
+          return false;
+        }
+        setApiVerifyStatus(true, "✓ 本地演示模式：凭证已记录，保存后即可使用（在线上环境会真实校验）。");
+        return true;
+      } catch (error) {
+        setApiVerifyStatus(false, "✗ 验证请求失败：" + (error.message || error));
+        return false;
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "验证可用性"; }
+      }
+    }
+
+    $("verifyApiBtn").addEventListener("click", verifyApiCredentials);
+
     $("apiForm").addEventListener("submit", async (event) => {
       event.preventDefault();
+      const editId = $("editApiId").value;
       const payload = {
         name: $("apiName").value.trim(),
         platform: $("apiPlatform").value,
+        clientId: $("apiClientId").value.trim(),
         secret: $("apiSecret").value
       };
+      if (!payload.name || !payload.clientId || !payload.secret) {
+        alert("请填写店铺名称、Client ID 和 API 密钥。");
+        return;
+      }
       if (backendEnabled) {
         try {
-          const created = await apiRequest("/api/integrations", {
-            method: "POST",
-            body: JSON.stringify(payload)
-          });
-          apiConfigs.unshift(created);
+          if (editId) {
+            const index = apiConfigs.findIndex((entry) => entry.id === editId);
+            if (index >= 0) {
+              apiConfigs[index] = { ...apiConfigs[index], ...payload };
+            }
+          } else {
+            const created = await apiRequest("/api/integrations", {
+              method: "POST",
+              body: JSON.stringify(payload)
+            });
+            apiConfigs.unshift(created);
+          }
         } catch (error) {
           alert(error.message);
           return;
         }
       } else {
-        apiConfigs.unshift({
-          id: crypto.randomUUID(),
-          ...payload,
-          createdAt: mskNowString()
-        });
+        if (editId) {
+          const index = apiConfigs.findIndex((entry) => entry.id === editId);
+          if (index >= 0) apiConfigs[index] = { ...apiConfigs[index], ...payload };
+        } else {
+          apiConfigs.unshift({
+            id: crypto.randomUUID(),
+            ...payload,
+            createdAt: new Date().toISOString()
+          });
+        }
       }
       $("apiForm").reset();
+      $("editApiId").value = "";
+      $("apiVerifyStatus").hidden = true;
       renderAll();
     });
+
+    $("resetApiForm")?.addEventListener("click", () => {
+      $("apiForm").reset();
+      $("editApiId").value = "";
+      $("apiVerifyStatus").hidden = true;
+    });
+
+    $("storeGroupForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = readGroupForm();
+      if (!data.name) { alert("请填写分组名称。"); return; }
+      const index = storeGroups.findIndex((entry) => entry.id === data.id);
+      if (index >= 0) {
+        storeGroups[index] = data;
+      } else {
+        storeGroups.unshift(data);
+      }
+      resetGroupForm();
+      renderAll();
+    });
+    $("resetGroupForm").addEventListener("click", resetGroupForm);
 
     $("storeFilter").addEventListener("change", (event) => {
       selectedStore = event.target.value;
       renderDashboard();
+      renderStoreOverview();
     });
     $("reloadOrders").addEventListener("click", async () => {
       if (!normalizeOrderRange()) return;
@@ -2187,6 +2936,97 @@ const initialProducts = [
         .catch(() => {});
     }
 
+    // 经营汇总范围预缓存：7天/28天/季度/年（过去数据，每日凌晨4点后抓取一次）
+    function precacheSummarySnapshots() {
+      if (!backendEnabled) return;
+      const today = todayIso();
+      const yesterday = addDays(today, -1);
+      // 先快照用户当前查看范围，用于 prune 时保留，避免异步竞态污染
+      const userFrom = orderDateFrom;
+      const userTo = orderDateTo;
+      const ranges = [
+        { name: "7", from: addDays(today, -7), to: yesterday },
+        { name: "28", from: addDays(today, -28), to: yesterday },
+        { name: "quarter", from: quarterStartIso(today), to: yesterday },
+        { name: "year", from: `${new Date(`${today}T00:00:00`).getFullYear()}-01-01`, to: yesterday },
+      ];
+      const boundary = mskFetchBoundaryDate();
+      for (const range of ranges) {
+        const key = rangeCacheKey(range.from, range.to);
+        const cached = orderRangeCache[key];
+        if (!rangeNeedsRefresh(cached, range.from, range.to, false) && cached?.orders) continue;
+        const snapshot = summarySnapshot[range.name] || {};
+        if (snapshot.fetchDate === boundary) continue;
+        // 使用局部参数抓取，不修改全局 orderDateFrom/orderDateTo，避免竞态
+        (async () => {
+          try {
+            const params = new URLSearchParams();
+            params.set("dateFrom", range.from);
+            params.set("dateTo", range.to);
+            const fetched = await apiRequest(`/api/orders?${params.toString()}`);
+            mergeIntoTrendOrders(fetched);
+            orderRangeCache[key] = { orders: fetched, fetchDate: boundary, includeToday: false, updatedAt: new Date().toISOString() };
+            summarySnapshot[range.name] = { fetchDate: boundary, count: fetched.length, updatedAt: new Date().toISOString() };
+            save();
+          } catch {
+            // 抓取失败则下次进入页面时再试，不阻塞其他范围
+          }
+        })();
+      }
+      // 把用户当前查看范围纳入保留集，防止 prune 误删正在使用的缓存
+      pruneStaleRangeCache([...ranges, { from: userFrom, to: userTo }]);
+    }
+
+    // 清理过期/无用的范围缓存：保留当前经营汇总标准范围 + 当前查看范围，其余删除
+    function pruneStaleRangeCache(keepRanges) {
+      const keepKeys = new Set(keepRanges.map((range) => rangeCacheKey(range.from, range.to)));
+      keepKeys.add(rangeCacheKey(orderDateFrom, orderDateTo));
+      const boundary = mskFetchBoundaryDate();
+      let pruned = false;
+      for (const key of Object.keys(orderRangeCache)) {
+        if (keepKeys.has(key)) continue;
+        const entry = orderRangeCache[key] || {};
+        const entryFetchDate = entry.fetchDate || "";
+        if (entryFetchDate && entryFetchDate !== boundary) {
+          delete orderRangeCache[key];
+          pruned = true;
+        }
+      }
+      for (const key of Object.keys(storeAnalyticsCache)) {
+        if (keepKeys.has(key)) continue;
+        const entry = storeAnalyticsCache[key] || {};
+        const entryFetchDate = entry.fetchDate || "";
+        if (entryFetchDate && entryFetchDate !== boundary) {
+          delete storeAnalyticsCache[key];
+          pruned = true;
+        }
+      }
+      if (pruned) {
+        try { save(); } catch {}
+      }
+    }
+
+    function quarterStartIso(today) {
+      const d = new Date(`${today}T00:00:00`);
+      const quarterStartMonth = Math.floor(d.getMonth() / 3) * 3;
+      return localIso(new Date(d.getFullYear(), quarterStartMonth, 1));
+    }
+
+    // 定时器：每个整点检查是否越过莫斯科凌晨4点边界，越过则静默刷新缓存
+    let summaryRefreshTimer = null;
+    let summaryRefreshBoundary = null;
+    function scheduleSummaryRefresh() {
+      if (summaryRefreshTimer) return;
+      summaryRefreshBoundary = mskFetchBoundaryDate();
+      summaryRefreshTimer = setInterval(() => {
+        const boundary = mskFetchBoundaryDate();
+        if (boundary !== summaryRefreshBoundary) {
+          summaryRefreshBoundary = boundary;
+          precacheSummarySnapshots();
+        }
+      }, 60 * 60 * 1000);
+    }
+
     async function bootstrap() {
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
@@ -2199,7 +3039,7 @@ const initialProducts = [
             apiRequest("/api/competitors"),
             apiRequest("/api/integrations")
           ]);
-          if (backendProducts.length) products = backendProducts;
+          if (backendProducts.length) products = backendProducts.map((p) => ensureProductScope(p));
           await loadBackendOrders();
           await loadStoreAnalytics();
           competitors = backendCompetitors;
@@ -2208,12 +3048,18 @@ const initialProducts = [
           apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
         }
       }
+      initCostScope();
       resetCostForm();
       updateChartMenuText();
+      syncSummaryRangePills();
       renderAll();
       if (backendEnabled) autoRefreshAds();
       // 页面加载后静默预缓存28天广告数据（每日一次）
       if (backendEnabled) precacheAds28Days();
+      // 静默预缓存经营汇总范围数据（7/28/季/年），每天凌晨4点后抓取一次
+      if (backendEnabled) precacheSummarySnapshots();
+      // 启动定时器，在莫斯科凌晨4点边界越过时自动刷新缓存
+      if (backendEnabled) scheduleSummaryRefresh();
     }
 
     bootstrap();

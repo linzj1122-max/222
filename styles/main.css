@@ -831,6 +831,38 @@ select {
 }
 form { display: grid; gap: 14px; }
 .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .cols-3 { grid-template-columns: 1fr; } }
+
+/* ========== 产品成本：总览范围 & 动态字段 ========== */
+.cost-scope-panel .toolbar { flex-wrap: wrap; gap: 16px; }
+.cost-scope-pills { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.cost-scope-pills .inline-select select { width: 150px; }
+.cost-dynamic-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cost-dynamic-fields:empty { display: none; }
+.cost-fee-hint {
+  display: flex; align-items: center;
+  background: var(--bg-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+.cost-fee-hint.configured { color: var(--accent-sage); border-color: var(--accent-sage); }
+.scope-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-sage-soft);
+  color: var(--accent-sage);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.cost-fee-import-box { grid-template-columns: minmax(160px, 200px) minmax(240px, 1fr) auto auto; }
+@media (max-width: 720px) { .cost-fee-import-box { grid-template-columns: 1fr; } }
 
 /* ========== 按钮 ========== */
 button {
@@ -1247,6 +1279,73 @@ button:disabled {
   font-size: 13px;
   line-height: 1.65;
   font-weight: 500;
+}
+
+/* ========== 接口验证状态 ========== */
+.api-verify-status {
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 4px 0 6px;
+}
+.api-verify-status.ok {
+  background: var(--green-soft);
+  border: 1px solid rgba(111, 158, 126, 0.3);
+  color: var(--green);
+}
+.api-verify-status.fail {
+  background: var(--red-soft);
+  border: 1px solid rgba(196, 123, 108, 0.3);
+  color: var(--red);
+}
+
+/* ========== 店铺分组管理 ========== */
+.store-group-panel {
+  margin-top: 16px;
+}
+.store-group-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.store-group-form select[multiple] {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--ink-1);
+  font-size: 13px;
+}
+.store-group-form select[multiple] option {
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.store-group-form select[multiple] option:checked {
+  background: var(--brand-soft) linear-gradient(transparent, transparent);
+  color: var(--brand-dark);
+  font-weight: 600;
+}
+.store-group-form .muted {
+  color: var(--ink-3);
+  font-weight: 500;
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+/* ========== 店铺经营概览控件 ========== */
+.store-overview-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.store-overview-controls .inline-select select {
+  width: 160px;
 }
 
 /* ========== 广告加载提示 ========== */
