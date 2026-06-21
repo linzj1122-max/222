@@ -389,6 +389,29 @@ const initialProducts = [
       const entryFetchDate = entry.fetchDate || "";
       return entryFetchDate !== mskFetchBoundaryDate();
     };
+    // 判断 trendOrders(累积全部历史订单)是否已覆盖目标范围[from,to]
+    // 覆盖 = 已有订单的最早日期 <= from 且已有订单的最晚日期 >= to
+    // 这样选子范围(如6-10~6-15)时,只要抓过更大的范围,就能本地秒出,不用再请求
+    const trendOrdersCoversRange = (from, to) => {
+      if (!Array.isArray(trendOrders) || !trendOrders.length) return false;
+      if (!from || !to) return false;
+      if (to >= todayIso()) return false;   // 包含今天的范围不本地筛(要实时)
+      let minDate = "9999", maxDate = "0000";
+      for (const o of trendOrders) {
+        const d = String(o.date || "");
+        if (!d) continue;
+        if (d < minDate) minDate = d;
+        if (d > maxDate) maxDate = d;
+      }
+      return minDate <= from && maxDate >= to;
+    };
+    // 从 trendOrders 本地筛选指定范围(避免重复请求)
+    const ordersFromTrend = (from, to) => {
+      return trendOrders.filter((o) => {
+        const d = String(o.date || "");
+        return d >= from && d <= to;
+      });
+    };
     const adRowsArray = () => Array.isArray(backendAds) ? backendAds : (Array.isArray(backendAds?.rows) ? backendAds.rows : []);
     const adRowHasMetrics = (row) => Number(row.adCost || 0) || Number(row.adRevenue || row.revenue || 0) || Number(row.adOrders || 0) || Number(row.impressions || 0) || Number(row.clicks || 0);
     const adRowHasRawData = (row) => row && typeof row === "object" && Object.keys(row.raw || {}).length > 0;
@@ -563,6 +586,15 @@ const initialProducts = [
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单（${cached.fetchDate} 抓取）。`;
+        return;
+      }
+      // 智能本地筛选:trendOrders(累积历史)如果已覆盖目标范围,直接本地秒出,不再请求
+      // 这样选子范围(如6-10~6-15)时,只要之前抓过更大的范围(如28天),就秒出
+      if (!options.force && trendOrdersCoversRange(orderDateFrom, orderDateTo)) {
+        orders = ordersFromTrend(orderDateFrom, orderDateTo);
+        if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
+        orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday: false, updatedAt: new Date().toISOString() };
+        if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地历史数据筛选 ${orders.length} 条订单。`;
         return;
       }
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单，请稍等...`;
