@@ -598,7 +598,49 @@
     renderCascade();
   }
 
-  // ---- 类目搜索 ----
+  // 校验类目是否已选到末级(叶子节点)。
+  // 不信任 draft 对象(可能残留旧数据),实时从级联状态 + 类目树验证。
+  function isCategoryFullySelected() {
+    if (!categoryTree || !categoryTree.length) {
+      alert("类目尚未加载完成,请稍候或点击「刷新类目」。");
+      return false;
+    }
+    // 找出用户当前选中的最深节点
+    const findIn = (nodes, fid) => {
+      for (const n of nodes) { if (n.id === fid) return n; if (n.children) { const f = findIn(n.children, fid); if (f) return f; } }
+      return null;
+    };
+    const selId = cascadeState.l4 || cascadeState.l3 || cascadeState.l2 || cascadeState.l1;
+    if (!selId) {
+      alert("请先选择类目:逐级点击到最末级(带「可上架」标签的才是最终类目),再进入下一步。");
+      return false;
+    }
+    const node = findIn(categoryTree, selId);
+    if (!node) {
+      alert("选中的类目无效,请重新选择。");
+      return false;
+    }
+    // 必须是叶子(无子节点)才能上架
+    if (node.children && node.children.length) {
+      alert(`当前选的是「${node.name}」,它还有下级类目。\n请继续点击展开,选到带「可上架」标签的最末级再进下一步。`);
+      return false;
+    }
+    // 叶子必须有完整的发布信息
+    const leaf = node.leaf || {};
+    if (!leaf.fullPath) {
+      alert("该类目缺少完整路径信息,请重新选择。");
+      return false;
+    }
+    // 同步回 draft,确保发布数据准确
+    draft.categoryId = leaf.origId || node.id;
+    draft.categoryName = node.name;
+    draft.categoryNameZh = node.name;
+    draft.categoryFullPath = leaf.fullPath;
+    draft.typeId = leaf.typeId || 0;
+    draft.descriptionCategoryId = leaf.categoryId || 0;
+    return true;
+  }
+
   // 收集树的所有节点(带路径),用于搜索
   function flattenTreeForSearch(nodes, parentPath = []) {
     const out = [];
@@ -1001,14 +1043,9 @@
     });
 
     $("lst_toStep2")?.addEventListener("click", () => {
-      // 必须选到末级类目(有完整路径 + 数字 id),否则上架必失败
-      if (!draft.categoryFullPath) {
-        alert("请先选择类目(逐级选到最末级,带「可上架」标签的才是最终类目)。");
-        return;
-      }
-      if (!draft.descriptionCategoryId) {
-        alert("类目信息不完整,请重新选择末级类目。");
-        return;
+      // 强制校验:必须选到末级类目(无子节点的叶子,且有完整路径 + 数字 id)
+      if (!isCategoryFullySelected()) {
+        return;   // isCategoryFullySelected 内部已 alert 提示
       }
       readStep2Form();
       goToStep(2);
