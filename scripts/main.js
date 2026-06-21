@@ -1203,38 +1203,30 @@ const initialProducts = [
       let rows = analyticsProductRows.slice();
       if (analyticsStoreValue !== "all") rows = rows.filter((r) => r.store === analyticsStoreValue);
       if (kw) rows = rows.filter((r) => String(r.sku || "").toLowerCase().includes(kw) || String(r.name || "").toLowerCase().includes(kw));
-      // 汇总卡片
+      // 汇总卡片(只保留有真实数据的指标)
       const totalRevenue = rows.reduce((s, r) => s + Number(r.revenue || 0), 0);
       const totalUnits = rows.reduce((s, r) => s + Number(r.orderedUnits || 0), 0);
-      const totalImpressions = rows.reduce((s, r) => s + Number(r.naturalImpressions || 0), 0);
-      const totalClicks = rows.reduce((s, r) => s + Number(r.totalClicks || 0), 0);
-      const ctr = totalImpressions ? (totalClicks / totalImpressions * 100) : 0;
+      const totalReturns = rows.reduce((s, r) => s + Number(r.returns || 0), 0);
+      const totalCancellations = rows.reduce((s, r) => s + Number(r.cancellations || 0), 0);
       if (summary) {
         summary.innerHTML = `
           <div class="panel metric"><span>总销售额</span><strong>${rub(totalRevenue)}</strong></div>
           <div class="panel metric"><span>总销售件数</span><strong>${Math.round(totalUnits)} 件</strong></div>
-          <div class="panel metric"><span>总曝光</span><strong>${Math.round(totalImpressions).toLocaleString()}</strong></div>
-          <div class="panel metric"><span>总点击</span><strong>${Math.round(totalClicks).toLocaleString()}</strong></div>
-          <div class="panel metric"><span>点击率</span><strong>${ctr.toFixed(2)}%</strong></div>`;
+          <div class="panel metric"><span>退货件数</span><strong>${Math.round(totalReturns)} 件</strong></div>
+          <div class="panel metric"><span>取消件数</span><strong>${Math.round(totalCancellations)} 件</strong></div>`;
       }
       // 明细表(按销售额降序)
       rows.sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0));
       body.innerHTML = rows.length ? rows.map((r) => {
-        const impressions = Number(r.naturalImpressions || 0);
-        const clicks = Number(r.totalClicks || 0);
-        const ctr2 = impressions ? (clicks / impressions * 100) : 0;
-        const conv = Number(r.naturalCartRate || 0);
         return '<tr>' +
           '<td><strong>' + escapeHtml(r.sku || "—") + '</strong><div class="sku">' + escapeHtml(r.name || "未命名商品") + '</div></td>' +
           '<td>' + escapeHtml(r.store || "—") + '</td>' +
           '<td class="money">' + rub(Number(r.revenue || 0)) + '</td>' +
           '<td>' + Math.round(Number(r.orderedUnits || 0)) + '</td>' +
-          '<td>' + impressions.toLocaleString() + '</td>' +
-          '<td>' + clicks.toLocaleString() + '</td>' +
-          '<td>' + ctr2.toFixed(2) + '%</td>' +
-          '<td>' + conv.toFixed(2) + '%</td>' +
+          '<td>' + Math.round(Number(r.returns || 0)) + '</td>' +
+          '<td>' + Math.round(Number(r.cancellations || 0)) + '</td>' +
         '</tr>';
-      }).join("") : '<tr><td colspan="8" class="muted-cell">暂无数据,请刷新或调整筛选条件</td></tr>';
+      }).join("") : '<tr><td colspan="6" class="muted-cell">暂无数据,请刷新或调整筛选条件</td></tr>';
     }
     async function refreshAnalytics(force = false) {
       await loadAnalyticsProducts(force);
