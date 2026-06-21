@@ -147,6 +147,24 @@ const initialProducts = [
     ["ozon_wb_order_range_cache_v1", "ozon_wb_store_analytics_cache_v1"].forEach((staleKey) => {
       if (localStorage.getItem(staleKey) !== null) localStorage.removeItem(staleKey);
     });
+    // 清理被早期 withCache bug 破坏的缓存条目(orders/rows 变成了对象而非数组)
+    let _cacheDirty = false;
+    Object.keys(orderRangeCache).forEach((k) => {
+      if (!orderRangeCache[k] || !Array.isArray(orderRangeCache[k].orders)) {
+        delete orderRangeCache[k]; _cacheDirty = true;
+      }
+    });
+    Object.keys(storeAnalyticsCache).forEach((k) => {
+      if (!storeAnalyticsCache[k] || !Array.isArray(storeAnalyticsCache[k].rows)) {
+        delete storeAnalyticsCache[k]; _cacheDirty = true;
+      }
+    });
+    if (_cacheDirty) {
+      try {
+        localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
+        localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
+      } catch {}
+    }
     let revenueChartHitboxes = [];
     let activeChartIndex = null;
     let adChartHitboxes = [];
@@ -537,7 +555,8 @@ const initialProducts = [
       }
       const cached = orderRangeCache[key];
       const includeToday = orderDateTo >= todayIso();
-      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && cached?.orders) {
+      // 防御:缓存数据可能被早期 withCache bug 破坏成对象,必须校验是数组
+      if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && cached && Array.isArray(cached.orders)) {
         orders = cached.orders;
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
