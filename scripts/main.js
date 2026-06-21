@@ -836,7 +836,8 @@ const initialProducts = [
       $("todayOrderCount").textContent = rangeOrders.length;
       if ($("summaryRangeText")) $("summaryRangeText").textContent = `当前统计范围：${orderDateFrom} 至 ${orderDateTo}`;
       if ($("orderRangeStatus")) {
-        $("orderRangeStatus").textContent = `当前订单范围：${orderDateFrom || "最早"} 至 ${orderDateTo || "今天"}，共 ${scopedOrders.length} 单。未出财务的订单先按历史模型预估，出财务后自动改为真实费用。`;
+        // 诊断信息:总订单数 / 过滤后 / 范围内,便于排查为何显示 0
+        $("orderRangeStatus").textContent = `订单数据：共 ${orders.length} 条，当前店铺过滤后 ${scopedOrders.length} 条，范围内 ${rangeOrders.length} 条。范围：${orderDateFrom || "最早"} 至 ${orderDateTo || "今天"}。`;
       }
       $("orderRows").innerHTML = [...scopedOrders].sort((a,b) => b.date.localeCompare(a.date)).map((order) => {
         const c = calcOrder(order);
