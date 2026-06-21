@@ -403,7 +403,9 @@ const initialProducts = [
         if (d < minDate) minDate = d;
         if (d > maxDate) maxDate = d;
       }
-      return minDate <= from && maxDate >= to;
+      const covered = minDate <= from && maxDate >= to;
+      if (!covered) console.log("[trendCover] 未覆盖:", { from, to, minDate, maxDate, today: todayIso() });
+      return covered;
     };
     // 从 trendOrders 本地筛选指定范围(避免重复请求)
     const ordersFromTrend = (from, to) => {
@@ -569,12 +571,12 @@ const initialProducts = [
     }
 
     async function loadBackendOrders(options = {}) {
-      if (!backendEnabled) return;
+      if (!backendEnabled) return false;
       const key = rangeCacheKey(orderDateFrom, orderDateTo);
       if (isFutureRange(orderDateFrom)) {
         orders = [];
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，日期还没到，暂无订单。`;
-        return;
+        return false;
       }
       const cached = orderRangeCache[key];
       const includeToday = orderDateTo >= todayIso();
@@ -586,7 +588,7 @@ const initialProducts = [
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单（${cached.fetchDate} 抓取）。`;
-        return;
+        return true;   // 本地命中,无需再调 API
       }
       // 智能本地筛选:trendOrders(累积历史)如果已覆盖目标范围,直接本地秒出,不再请求
       // 这样选子范围(如6-10~6-15)时,只要之前抓过更大的范围(如28天),就秒出
@@ -595,7 +597,7 @@ const initialProducts = [
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday: false, updatedAt: new Date().toISOString() };
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地历史数据筛选 ${orders.length} 条订单。`;
-        return;
+        return true;   // 本地命中,无需再调 API
       }
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在抓取 ${orderDateFrom} 至 ${orderDateTo} 的订单，请稍等...`;
       const params = new URLSearchParams();
@@ -610,6 +612,7 @@ const initialProducts = [
       orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday, updatedAt: new Date().toISOString() };
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已抓取并缓存 ${orders.length} 条订单。`;
       save();
+      return false;   // 走了 API
     }
 
     async function loadStoreAnalytics(options = {}) {
@@ -1942,8 +1945,13 @@ const initialProducts = [
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `正在加载 ${from} 至 ${to} 的数据,请稍候…`;
       try {
         // 先拉数据,再统一渲染,避免「旧数据先闪现一次再变正确」的观感问题
-        await loadBackendOrders();
-        await loadStoreAnalytics();
+        const localHit = await loadBackendOrders();
+        // 订单数据本地命中(缓存/历史覆盖)时,跳过店铺分析 API 调用,
+        // 因为范围总营业额/纯利/订单数都从 orders 本地算,不需要分析接口。
+        // 分析接口(点击/曝光)只有命中精确缓存时才用,否则留空,不阻塞。
+        if (!localHit) {
+          await loadStoreAnalytics();
+        }
         updateOrderDateButton();
         renderCalendar();
         renderAll();
