@@ -799,7 +799,17 @@ const initialProducts = [
       const formatOrders = (value) => `${Math.round(value)} 单`;
 
       ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = "#0b111e";
+      // 深色背景 + 微弱渐变氛围
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, "#141a2e");
+      bgGrad.addColorStop(1, "#0a0e1a");
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, width, height);
+      // 左上角微光
+      const glow = ctx.createRadialGradient(Math.min(width * 0.3, 240), 40, 20, Math.min(width * 0.3, 240), 40, Math.min(width * 0.6, 480));
+      glow.addColorStop(0, "rgba(91, 140, 255, 0.14)");
+      glow.addColorStop(1, "rgba(91, 140, 255, 0)");
+      ctx.fillStyle = glow;
       ctx.fillRect(0, 0, width, height);
 
       const maxValue = Math.max(...comparison.map((item) => item.revenue), ...current.map((item) => item.revenue), 1);
@@ -811,10 +821,10 @@ const initialProducts = [
       const toOrderY = (value) => chartY + chartH - (Number(value || 0) / orderAxisMax) * chartH;
       const toX = (index) => chartX + index * xStep;
 
-      ctx.strokeStyle = "rgba(148, 163, 184, .16)";
+      ctx.strokeStyle = "rgba(120, 140, 200, 0.10)";
       ctx.lineWidth = 1;
-      ctx.fillStyle = "#64748b";
-      ctx.font = "12px Microsoft YaHei, Arial";
+      ctx.fillStyle = "#7480a0";
+      ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
         const y = toY(value);
@@ -833,9 +843,9 @@ const initialProducts = [
       const orderPoints = current.map((item, index) => ({ x: toX(index), y: toOrderY(item.orders) }));
       if (activeChartIndex !== null && current[activeChartIndex]) {
         const activeX = toX(activeChartIndex);
-        ctx.fillStyle = "rgba(255, 255, 255, .06)";
+        ctx.fillStyle = "rgba(91, 140, 255, 0.08)";
         ctx.fillRect(activeX - Math.max(10, xStep / 2), chartY, Math.max(20, xStep), chartH);
-        ctx.strokeStyle = "rgba(250, 217, 97, .45)";
+        ctx.strokeStyle = "rgba(255, 200, 87, 0.55)";
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 6]);
         ctx.beginPath();
@@ -844,7 +854,7 @@ const initialProducts = [
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      drawSmoothLine(ctx, comparePoints, "rgba(148, 163, 184, .58)", 2, { dots: false, dashed: true });
+      drawSmoothLine(ctx, comparePoints, "rgba(155, 138, 255, 0.55)", 2, { dots: false, dashed: true });
 
       const barStep = chartW / Math.max(current.length, 1);
       const barW = Math.min(34, Math.max(8, barStep * .46));
@@ -853,8 +863,13 @@ const initialProducts = [
         const y = toY(item.revenue);
         const h = chartY + chartH - y;
         const grad = ctx.createLinearGradient(0, y, 0, chartY + chartH);
-        grad.addColorStop(0, index === activeChartIndex ? "#b9fbff" : "#00f2fe");
-        grad.addColorStop(1, index === activeChartIndex ? "#6bb8ff" : "#4facfe");
+        if (index === activeChartIndex) {
+          grad.addColorStop(0, "#9b8aff");
+          grad.addColorStop(1, "#5b8cff");
+        } else {
+          grad.addColorStop(0, "rgba(122, 125, 255, 0.95)");
+          grad.addColorStop(1, "rgba(91, 140, 255, 0.78)");
+        }
         ctx.fillStyle = grad;
         ctx.beginPath();
         const r = Math.min(5, barW / 2, h);
@@ -866,12 +881,26 @@ const initialProducts = [
         ctx.lineTo(x + barW, y + h);
         ctx.closePath();
         ctx.fill();
+        // 柱顶微光
+        if (h > 10) {
+          const topGrad = ctx.createLinearGradient(0, y, 0, y + Math.min(h, 18));
+          topGrad.addColorStop(0, "rgba(255, 255, 255, 0.18)");
+          topGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
+          ctx.fillStyle = topGrad;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.quadraticCurveTo(x + barW / 2, y - 1, x + barW, y);
+          ctx.lineTo(x + barW, y + Math.min(h, 18));
+          ctx.lineTo(x, y + Math.min(h, 18));
+          ctx.closePath();
+          ctx.fill();
+        }
       });
-      drawSmoothLine(ctx, orderPoints, "#fad961", 2.5, { dots: false });
+      drawSmoothLine(ctx, orderPoints, "#ffc857", 2.5, { dots: false });
       if (activeChartIndex !== null && orderPoints[activeChartIndex]) {
         const point = orderPoints[activeChartIndex];
-        ctx.fillStyle = "#0b111e";
-        ctx.strokeStyle = "#fad961";
+        ctx.fillStyle = "#0a0e1a";
+        ctx.strokeStyle = "#ffc857";
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
@@ -879,17 +908,17 @@ const initialProducts = [
         ctx.stroke();
       }
 
-      ctx.fillStyle = "#64748b";
-      ctx.font = "12px Microsoft YaHei, Arial";
+      ctx.fillStyle = "#7480a0";
+      ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       current.forEach((item, index) => {
         const interval = period <= 7 ? 1 : period <= 14 ? 2 : 4;
         if (index % interval !== 0 && index !== current.length - 1) return;
         ctx.textAlign = "center";
         ctx.fillText(item.date.slice(8), toX(index), height - 34);
         if (period >= 14 && (index === 2 || index === 16)) {
-          ctx.fillStyle = "#475569";
+          ctx.fillStyle = "#4a5578";
           ctx.fillText(index < 10 ? "Sa" : "Su", toX(index), height - 18);
-          ctx.fillStyle = "#64748b";
+          ctx.fillStyle = "#7480a0";
         }
       });
 
@@ -921,10 +950,17 @@ const initialProducts = [
 
     function drawAreaLine(ctx, points, baselineY, color) {
       if (!points.length) return;
+      const base = color || "rgba(91, 140, 255, 0.35)";
+      // 将 rgba 拆分并生成不透明度梯度
+      const make = (a) => base.replace(/rgba?\(([^)]+)\)/, (m, inner) => {
+        const parts = inner.split(",").map((s) => s.trim());
+        const r = parts[0], g = parts[1], b = parts[2];
+        return `rgba(${r}, ${g}, ${b}, ${a})`;
+      });
       const grad = ctx.createLinearGradient(0, Math.min(...points.map((point) => point.y)), 0, baselineY);
-      grad.addColorStop(0, "rgba(47, 156, 244, .22)");
-      grad.addColorStop(.58, "rgba(47, 156, 244, .08)");
-      grad.addColorStop(1, "rgba(47, 156, 244, 0)");
+      grad.addColorStop(0, make(0.35));
+      grad.addColorStop(0.55, make(0.12));
+      grad.addColorStop(1, make(0));
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.moveTo(points[0].x, baselineY);
@@ -962,7 +998,7 @@ const initialProducts = [
       if (options.dots === false) return;
       points.forEach((point, index) => {
         if (points.length > 14 && index % 2 !== 0 && index !== points.length - 1) return;
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = "#0a0e1a";
         ctx.beginPath();
         ctx.arc(point.x, point.y, 5.5, 0, Math.PI * 2);
         ctx.fill();
@@ -1423,10 +1459,21 @@ const initialProducts = [
       const step = chartW / Math.max(current.length - 1, 1);
       const toX = (index) => chartX + index * step;
       ctx.clearRect(0, 0, width, height);
-      const bg = ctx.createLinearGradient(0, 0, width, height);
-      bg.addColorStop(0, "#fffaf6"); bg.addColorStop(.55, "#f8fbff"); bg.addColorStop(1, "#ffffff");
-      ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
-      ctx.strokeStyle = "rgba(150, 164, 173, .24)"; ctx.fillStyle = "#667781"; ctx.font = "12px Microsoft YaHei, Arial";
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, "#141a2e");
+      bgGrad.addColorStop(1, "#0a0e1a");
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, width, height);
+      // 柔和发光
+      const glow = ctx.createRadialGradient(Math.min(width * 0.3, 240), 40, 20, Math.min(width * 0.3, 240), 40, Math.min(width * 0.6, 480));
+      glow.addColorStop(0, "rgba(91, 140, 255, 0.12)");
+      glow.addColorStop(1, "rgba(91, 140, 255, 0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.strokeStyle = "rgba(120, 140, 200, 0.10)";
+      ctx.fillStyle = "#7480a0";
+      ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       for (let i = 0; i <= 4; i++) {
         const value = axisMax / 4 * i;
         const y = toY(value);
@@ -1435,19 +1482,22 @@ const initialProducts = [
       }
       const previousPoints = previous.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
       const points = current.map((item, index) => ({ x: toX(index), y: toY(item.value) }));
-      if (previousPoints.length) drawSmoothLine(ctx, previousPoints, "rgba(47, 156, 244, .62)", 3, { dashed: true, dots: false });
-      drawSmoothLine(ctx, points, "#2f9cf4", 3.5);
+      // 上期线（紫色虚线）
+      if (previousPoints.length) drawSmoothLine(ctx, previousPoints, "rgba(155, 138, 255, 0.55)", 3, { dashed: true, dots: false });
+      // 本期线（蓝→紫渐变填充 + 主色描边）
+      if (points.length) drawAreaLine(ctx, points, chartY + chartH, "rgba(91, 140, 255, 0.35)");
+      drawSmoothLine(ctx, points, "#5b8cff", 3.5);
       if (activeAdChartIndex !== null && current[activeAdChartIndex]) {
         const x = toX(activeAdChartIndex);
-        ctx.strokeStyle = "rgba(77, 100, 122, .22)";
+        ctx.strokeStyle = "rgba(255, 200, 87, 0.45)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, chartY);
         ctx.lineTo(x, chartY + chartH);
         ctx.stroke();
         [points[activeAdChartIndex], previousPoints[activeAdChartIndex]].filter(Boolean).forEach((point, index) => {
-          ctx.fillStyle = "#fff";
-          ctx.strokeStyle = index ? "rgba(47, 156, 244, .75)" : "#2f9cf4";
+          ctx.fillStyle = "#0a0e1a";
+          ctx.strokeStyle = index ? "rgba(155, 138, 255, 0.9)" : "#9b8aff";
           ctx.lineWidth = 4;
           ctx.beginPath();
           ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
@@ -1455,13 +1505,13 @@ const initialProducts = [
           ctx.stroke();
         });
       }
-      ctx.fillStyle = "#465961"; ctx.font = "12px Microsoft YaHei, Arial";
+      ctx.fillStyle = "#7480a0"; ctx.font = "12px SF Pro Display, PingFang SC, Microsoft YaHei, Arial";
       const interval = current.length <= 7 ? 1 : current.length <= 14 ? 2 : 4;
       current.forEach((item, index) => { if (index % interval !== 0 && index !== current.length - 1) return; ctx.textAlign = "center"; ctx.fillText(item.date.slice(5), toX(index), height - 26); });
-      ctx.strokeStyle = "#2f9cf4"; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 150, height - 18); ctx.lineTo(chartX + chartW - 122, height - 18); ctx.stroke();
-      ctx.fillStyle = "#64748b"; ctx.textAlign = "left"; ctx.fillText("本期", chartX + chartW - 114, height - 14);
+      ctx.strokeStyle = "#5b8cff"; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 150, height - 18); ctx.lineTo(chartX + chartW - 122, height - 18); ctx.stroke();
+      ctx.fillStyle = "#aab3cf"; ctx.textAlign = "left"; ctx.fillText("本期", chartX + chartW - 114, height - 14);
       if (previousPoints.length) {
-        ctx.strokeStyle = "rgba(47, 156, 244, .62)"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 68, height - 18); ctx.lineTo(chartX + chartW - 40, height - 18); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(155, 138, 255, 0.65)"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(chartX + chartW - 68, height - 18); ctx.lineTo(chartX + chartW - 40, height - 18); ctx.stroke(); ctx.setLineDash([]);
         ctx.fillText("上期", chartX + chartW - 32, height - 14);
       }
       adChartHitboxes = current.map((item, index) => ({
@@ -2119,6 +2169,24 @@ const initialProducts = [
       });
     });
 
+    // 静默预缓存28天广告数据（每日一次，避免用户刷新后还要手动选大范围才有数据）
+    function precacheAds28Days() {
+      const today = adsTodayIso();
+      const cacheFrom = addDays(today, -27);
+      const cacheTo = today;
+      const key = `${cacheFrom}|${cacheTo}`;
+      const cache = adsRowsCache[key];
+      // 已有今日缓存或已有数据则跳过
+      if (cache?.rows?.length) {
+        const cacheDate = cache.updatedAt?.split("T")[0];
+        if (cacheDate === today) return;
+      }
+      // 静默后台预抓（不等完成，不阻塞页面）
+      loadBackendAds({ forceCreate: true, dateFrom: cacheFrom, dateTo: cacheTo })
+        .then(() => { save(); })
+        .catch(() => {});
+    }
+
     async function bootstrap() {
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
@@ -2144,6 +2212,8 @@ const initialProducts = [
       updateChartMenuText();
       renderAll();
       if (backendEnabled) autoRefreshAds();
+      // 页面加载后静默预缓存28天广告数据（每日一次）
+      if (backendEnabled) precacheAds28Days();
     }
 
     bootstrap();
