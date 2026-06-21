@@ -97,23 +97,54 @@ function storeList(env) {
 
 // ---------- 类目抓取 ----------
 
-async function fetchOzonCategoryTree(store) {
-  const response = await fetch("https://api-seller.ozon.ru/v3/category/tree", {
+async function fetchOzonCategoryTree(store, language = "ZH_HANS") {
+  const response = await fetch("https://api-seller.ozon.ru/v1/description-category/tree", {
     method: "POST",
     headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-    body: JSON.stringify({ category_id: 0, language: "default" }),
+    body: JSON.stringify({ language }),
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`Ozon 类目 API ${response.status}: ${text.slice(0, 240)}`);
-  const payload = JSON.parse(text);
-  const nodes = payload?.result || [];
-  return nodes.map((node) => ({
-    id: String(node.category_id ?? node.id ?? ""),
-    name: String(node.title ?? node.name ?? ""),
-    parentId: String(node.parent_id ?? node.parentId ?? "0"),
-    childrenCount: Number(node.children_count ?? node.has_children ? 1 : 0),
-    children: Array.isArray(node.children) ? node.children.length : 0,
-  }));
+  let payload = null;
+  try { payload = JSON.parse(text); } catch { payload = {}; }
+  const roots = Array.isArray(payload?.result) ? payload.result : [];
+  const flat = [];
+  const walk = (node, path, depth) => {
+    if (!node || typeof node !== "object") return;
+    const catId = node.description_category_id;
+    const catName = node.category_name;
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (catId !== undefined && catName) {
+      flat.push({
+        id: `cat-${catId}`,
+        categoryId: Number(catId),
+        typeId: 0,
+        name: String(catName),
+        fullName: [...path, catName].join(" / "),
+        parentId: path.length ? `cat-${path[path.length - 1]}` : "0",
+        childrenCount: children.length,
+        isLeaf: false,
+        depth,
+      });
+    }
+    if (node.type_id !== undefined && node.type_name) {
+      flat.push({
+        id: `type-${node.type_id}`,
+        categoryId: Number(catId || 0),
+        typeId: Number(node.type_id),
+        name: String(node.type_name),
+        fullName: [...path, String(node.type_name)].join(" / "),
+        parentId: catId !== undefined ? `cat-${catId}` : "0",
+        childrenCount: 0,
+        isLeaf: true,
+        disabled: Boolean(node.disabled),
+        depth,
+      });
+    }
+    children.forEach((child) => walk(child, catName ? [...path, catName] : path, depth + 1));
+  };
+  roots.forEach((root) => walk(root, [], 0));
+  return flat;
 }
 
 async function fetchWBCategories(store) {
@@ -188,6 +219,7 @@ async function getCategories(env, searchParams) {
 
   let raw = [];
   let storeName = "";
+  let nativeChinese = false;
   if (platform === "wb") {
     const stores = wbStores(env);
     const store = stores[storeIndex] || stores[0];
@@ -199,19 +231,36 @@ async function getCategories(env, searchParams) {
     const store = stores[storeIndex] || stores[0];
     if (!store) return { ok: false, error: "未配置 Ozon 店铺,请在 Cloudflare 环境变量配置 OZON_STORE_1_CLIENT_ID / API_KEY", categories: [] };
     storeName = store.name;
-    raw = await fetchOzonCategoryTree(store);
+    // /v1/description-category/tree 原生支持 ZH_HANS,直接返回中文,无需 OpenAI
+    raw = await fetchOzonCategoryTree(store, "ZH_HANS");
+    nativeChinese = true;
   }
 
-  const items = dedupeCategories(raw).slice(0, 800);
+  // Ozon:叶子类目(type)才能创建商品,优先展示;WB:保持原序
+  let items = dedupeCategories(raw);
+  if (platform !== "wb") {
+    items = items.sort((a, b) => Number(b.isLeaf) - Number(a.isLeaf) || a.depth - b.depth);
+  }
+  items = items.slice(0, 800);
+
+  // 仅当平台不提供原生中文(WB)且开启翻译时,才调用 OpenAI 兜底
   let translationMap = {};
-  if (translate) {
+  if (translate && !nativeChinese) {
     try { translationMap = await translateBatch(env, items.map((i) => i.name)); } catch { translationMap = {}; }
   }
-  const categories = items.map((item) => ({
-    ...item,
-    nameZh: translationMap[item.name] || item.name,
-  }));
-  return { ok: true, platform: platform === "wb" ? "WB" : "Ozon", storeName, count: categories.length, categories };
+  const categories = items.map((item) => {
+    const zh = nativeChinese
+      ? (item.fullName || item.name)
+      : (translationMap[item.name] || item.name);
+    return {
+      ...item,
+      nameZh: zh,
+      // 兼容前端旧字段:展示名 + 是否有子类目
+      displayName: item.fullName || item.name,
+      childrenCount: Number(item.childrenCount || 0),
+    };
+  });
+  return { ok: true, platform: platform === "wb" ? "WB" : "Ozon", storeName, nativeChinese, count: categories.length, categories };
 }
 
 // ---------- AI 生图 ----------
@@ -346,18 +395,27 @@ async function generateCopy(env, body) {
 // ---------- 发布 ----------
 
 async function publishOzonProduct(env, store, draft) {
-  const categoryId = Number(draft.categoryId) || 0;
+  const descriptionCategoryId = Number(draft.categoryId) || Number(draft.descriptionCategoryId) || 0;
+  const typeId = Number(draft.typeId) || 0;
   const images = (draft.images || []).filter(Boolean);
 
-  const itemResponse = await fetch("https://api-seller.ozon.ru/v2/category/info", {
-    method: "POST",
-    headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-    body: JSON.stringify({ category_id: categoryId, language: "default" }),
-  });
+  // 新版 Ozon:/v3/category/attribute 需要 description_category_id + type_id
   let requiredAttrs = [];
-  if (itemResponse.ok) {
-    const info = await itemResponse.json();
-    requiredAttrs = (info?.result || []).filter((a) => a.is_required);
+  if (descriptionCategoryId && typeId) {
+    try {
+      const attrResp = await fetch("https://api-seller.ozon.ru/v3/category/attribute", {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+        body: JSON.stringify({ description_category_id: [descriptionCategoryId], type_id: [typeId], language: "ZH_HANS" }),
+      });
+      if (attrResp.ok) {
+        const info = await attrResp.json();
+        const all = info?.result || [];
+        requiredAttrs = Array.isArray(all[0]?.attributes) ? all[0].attributes.filter((a) => a.is_required) : [];
+      }
+    } catch {
+      // 属性拉取失败不阻塞发布,用户可在后台补全必填属性
+    }
   }
 
   const attributes = requiredAttrs.slice(0, 20).map((attr) => ({
@@ -371,6 +429,9 @@ async function publishOzonProduct(env, store, draft) {
       name: String(draft.title || "").slice(0, 500),
       offer_id: String(draft.offerId || draft.code || `SKU-${Date.now()}`),
       sku: 0,
+      // 新版 API 用 description_category_id + type_id 取代旧 category_id
+      description_category_id: descriptionCategoryId,
+      type_id: typeId,
       price: { price: String(draft.price || "0"), old_price: String(draft.oldPrice || ""), premium_price: "" },
       vat: "0",
       weight_g: Math.round(amount(draft.weight) || 0),
@@ -446,6 +507,17 @@ async function publish(env, body) {
   const stores = ozonStores(env);
   const store = stores[storeIndex] || stores[0];
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  // 前端存的 categoryId 可能是 "cat-123" / "type-456" / 纯数字。
+  // 新版 Ozon 发布需要 description_category_id + type_id,这里做兼容解析。
+  const rawCat = String(draft.categoryId || "");
+  if (rawCat.startsWith("type-")) {
+    draft.typeId = Number(rawCat.slice(5)) || draft.typeId || 0;
+    // type 节点本身没有 category,保留外部传入的 descriptionCategoryId
+  } else if (rawCat.startsWith("cat-")) {
+    draft.descriptionCategoryId = Number(rawCat.slice(4)) || draft.descriptionCategoryId || 0;
+  } else if (/^\d+$/.test(rawCat)) {
+    draft.descriptionCategoryId = Number(rawCat);
+  }
   return await publishOzonProduct(env, store, draft);
 }
 
