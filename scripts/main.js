@@ -1196,7 +1196,17 @@ const initialProducts = [
         pendingAdDateAnchor = value;
         adDateFrom = value;
         adDateTo = value;
+        const key = `${adDateFrom}|${adDateTo}`;
+        if (adsRowsCache[key]) {
+          backendAds = adsRowsCache[key].rows || [];
+          adsStatusRows = adsRowsCache[key].status || [];
+        } else {
+          backendAds = [];
+          adsStatusRows = [];
+        }
         updateAdDateInputs();
+        renderAds();
+        await autoRefreshAds();
         return;
       }
       const sorted = [pendingAdDateAnchor, value].sort();
@@ -1341,11 +1351,14 @@ const initialProducts = [
       if ($("adImportStatus")) {
         const apiCount = adMetricRows().length;
         const xlsxCount = importedAds.length;
+        const stateInfo = adsStatusRows.map((row) => `${row.store}: ${row.state}`).filter(Boolean).join("；");
         $("adImportStatus").textContent = apiCount
           ? `已读取 API 广告数据 ${apiCount} 条`
           : xlsxCount
             ? `显示已上传 Excel 数据 ${xlsxCount} 条`
-            : "暂无广告数据，点击刷新按钮获取";
+            : stateInfo
+              ? `暂无数据（${stateInfo}），正在后台获取中…`
+              : "暂无广告数据，点击刷新按钮获取";
       }
 
       const summaryMap = new Map();
