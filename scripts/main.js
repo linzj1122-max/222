@@ -1099,15 +1099,14 @@ const initialProducts = [
           return { group, ...agg };
         });
         if (storeOverviewGroup === "all" && !groups.length) {
-          body.innerHTML = '<tr><td colspan="9" class="muted-cell">还没有创建店铺分组，请到「店铺设置」中新增分组。</td></tr>';
+          body.innerHTML = '<tr><td colspan="6" class="muted-cell">还没有创建店铺分组，请到「店铺设置」中新增分组。</td></tr>';
           return;
         }
         if (storeOverviewGroup !== "all" && !groups.length) {
-          body.innerHTML = '<tr><td colspan="9" class="muted-cell">该分组暂无数据。</td></tr>';
+          body.innerHTML = '<tr><td colspan="6" class="muted-cell">该分组暂无数据。</td></tr>';
           return;
         }
         body.innerHTML = rows.map((row) => {
-          const conversion = row.exposure ? row.cartAdds / row.exposure * 100 : 0;
           const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
           const profitClass = row.profit >= 0 ? "positive" : "negative";
           const memberLabel = (row.group.stores || []).length ? (row.group.stores.length + " 家店铺") : "未分配店铺";
@@ -1116,9 +1115,6 @@ const initialProducts = [
             '<td class="money">' + rub(row.revenue) + '</td>' +
             '<td class="money ' + profitClass + '"><strong>' + rub(row.profit) + '</strong></td>' +
             '<td>' + row.orders + '</td>' +
-            '<td>' + metricText(row.exposure) + '</td>' +
-            '<td>' + metricText(row.clicks) + '</td>' +
-            '<td>' + percentText(conversion) + '</td>' +
             '<td>' + row.refunds + '</td>' +
             '<td>' + refundRate.toFixed(2) + '%</td>' +
           '</tr>';
@@ -1128,10 +1124,6 @@ const initialProducts = [
 
       const rows = [...storeMap.values()].sort((a, b) => b.revenue - a.revenue);
       body.innerHTML = rows.length ? rows.map((row) => {
-        const analytics = analyticsForStore(row.store) || {};
-        const exposure = Number(analytics.totalImpressions || analytics.naturalImpressions || analytics.impressions || 0);
-        const clicks = Number(analytics.totalClicks || analytics.clicks || 0);
-        const conversion = Number(analytics.naturalCartRate || analytics.cartConversion || 0);
         const refundRate = row.orders ? row.refunds / row.orders * 100 : 0;
         const profitClass = row.profit >= 0 ? "positive" : "negative";
         return '<tr>' +
@@ -1139,13 +1131,10 @@ const initialProducts = [
           '<td class="money">' + rub(row.revenue) + '</td>' +
           '<td class="money ' + profitClass + '"><strong>' + rub(row.profit) + '</strong></td>' +
           '<td>' + row.orders + '</td>' +
-          '<td>' + metricText(exposure) + '</td>' +
-          '<td>' + metricText(clicks) + '</td>' +
-          '<td>' + percentText(conversion) + '</td>' +
           '<td>' + row.refunds + '</td>' +
           '<td>' + refundRate.toFixed(2) + '%</td>' +
         '</tr>';
-      }).join("") : '<tr><td colspan="9" class="muted-cell">当前时间范围暂无店铺数据</td></tr>';
+      }).join("") : '<tr><td colspan="6" class="muted-cell">当前时间范围暂无店铺数据</td></tr>';
     }
 
     // ============ 数据分析 tab ============
