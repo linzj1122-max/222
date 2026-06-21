@@ -259,12 +259,10 @@ async function getCategories(env, searchParams, headers = {}) {
     nativeChinese = true;
   }
 
-  // Ozon:叶子类目(type)才能创建商品,优先展示;WB:保持原序
+  // 前端按 fullName '/' 分列重建三级树,需要完整的扁平类目。
+  // 不做排序(排序会把叶子优先排前,反而挤掉一级/中间类目),也不截断,
+  // 仅按 id 去重,确保所有一级类目及其子级完整保留。
   let items = dedupeCategories(raw);
-  if (platform !== "wb") {
-    items = items.sort((a, b) => Number(b.isLeaf) - Number(a.isLeaf) || a.depth - b.depth);
-  }
-  items = items.slice(0, 800);
 
   // 仅当平台不提供原生中文(WB)且开启翻译时,才调用 OpenAI 兜底
   let translationMap = {};
