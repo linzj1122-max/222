@@ -612,6 +612,64 @@ async function probeMetricsBatch(store, from, to, dim, batch, invalidSink) {
   return found;
 }
 
+// 诊断:测试 /v3/product/info/list 接口返回的字段结构
+// 看商品详情是否含流量/访客/曝光数据(会员可能在商品详情里有)
+async function probeProductInfo(env) {
+  const store = ozonStores(env)[0];
+  if (!store) return { error: "未配置店铺" };
+  const headers = { "client-id": store.clientId, "api-key": store.apiKey, "content-type": "application/json" };
+  // 先用 analytics 拿一个有销量的 SKU
+  const today = new Date();
+  const utcMs = today.getTime() + today.getTimezoneOffset() * 60000;
+  const msk = new Date(utcMs + 3 * 3600000);
+  const to = msk.toISOString().slice(0, 10);
+  const from = `${to.slice(0, 8)}01`;
+  let testSku = "";
+  try {
+    const aResp = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ date_from: from, date_to: to, metrics: ["revenue"], dimension: ["sku"], filters: [], limit: 1, offset: 0 }),
+    });
+    const aPayload = await aResp.json();
+    const firstRow = (aPayload.result?.data || [])[0];
+    testSku = String(firstRow?.dimensions?.[0]?.id || "");
+  } catch {}
+  if (!testSku) return { error: "没找到有销量的SKU用于测试" };
+  const result = { store: store.name, testSku, fields: {} };
+  for (const body of [{ sku: [Number(testSku)] }, { offer_id: [testSku] }]) {
+    try {
+      const response = await fetch("https://api-seller.ozon.ru/v3/product/info/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json();
+      const key = body.sku ? "by_sku" : "by_offer_id";
+      if (!response.ok) {
+        result.fields[key] = { error: `${response.status}`, detail: String(payload.message || "").slice(0, 200) };
+        continue;
+      }
+      const item = (payload.result?.items || payload.items || [])[0];
+      if (!item) {
+        result.fields[key] = { error: "no item in response" };
+        continue;
+      }
+      const allKeys = Object.keys(item);
+      const metricsKeys = allKeys.filter((k) => /view|visit|click|impression|session|stat|analytic|exposure|traffic|cart|conversion|ctr/i.test(k));
+      result.fields[key] = {
+        topLevelKeys: allKeys,
+        trafficRelatedKeys: metricsKeys,
+        metrics: item.metrics || item.analytics || item.stats || null,
+        sampleItem: JSON.stringify(item).slice(0, 800),
+      };
+    } catch (e) {
+      result.fields[body.sku ? "by_sku" : "by_offer_id"] = { error: e.message || String(e) };
+    }
+  }
+  return result;
+}
+
 // 按天+店铺维度抓取分析数据(曝光/点击/转化/销售额/件数)
 // 用于:店铺经营概览随时间区间显示,以及数据分析按天展示
 // dimension 用 ["day"] 让 Ozon 每天返回一行,前端可本地 filter 任意子范围
@@ -1631,6 +1689,11 @@ export async function onRequest(context) {
     if (path === "probe/analytics-metrics") {
       const { from, to } = dateRange(url.searchParams);
       return json(await probeAnalyticsMetrics(env, from, to));
+    }
+    // 诊断:测试 /v3/product/info/list 接口返回的字段结构
+    // 看商品详情是否含流量/访客/曝光数据
+    if (path === "probe/product-info") {
+      return json(await probeProductInfo(env));
     }
     // 定时预热缓存:抓取常见范围(今天/7天/28天/本月/上月)的订单+分析,写入 KV。
     // 前端打开页面时后台静默调用一次;也可配外部 cron 定时调用。
