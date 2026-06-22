@@ -312,10 +312,10 @@ function extractHighlightsFromText(text, category) {
     }
   }
 
-  if (/мАч|мач|20000|10000|30000/.test(text) && !highlights.some((h) => h.includes("大容量"))) {
+  if (/мАч|мач|20000|10000|30000/.test(t) && !highlights.some((h) => h.includes("大容量"))) {
     highlights.push("大容量电池");
   }
-  if (/\d+\s*Вт/.test(text) && !highlights.some((h) => h.includes("功率"))) {
+  if (/\d+\s*Вт/i.test(t) && !highlights.some((h) => h.includes("功率"))) {
     highlights.push("高功率输出");
   }
   if (/(5\s*устройств|5\s*device|五台|五部)/i.test(text) && !highlights.some((h) => h.includes("多设备"))) {

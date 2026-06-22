@@ -1639,18 +1639,17 @@ export async function onRequest(context) {
       })));
     }
     if (path === "competitors") return json([]);
-    if (path === "integrations") {
+    if (path === "integrations" || path === "integrations/verify") {
       if (request.method === "POST") {
         const body = await request.json().catch(() => ({}));
+        if (body.action === "verify" || path === "integrations/verify") {
+          const clientId = String(body.clientId || "").trim();
+          const apiKey = String(body.secret || body.apiKey || "").trim();
+          return json(await verifyOzonCredentials(clientId, apiKey));
+        }
         return json({ id: crypto.randomUUID(), name: body.name || "未命名店铺", platform: body.platform || "Ozon", createdAt: new Date().toISOString() });
       }
       return json(integrations(env));
-    }
-    if (path === "integrations/verify") {
-      const body = await request.json().catch(() => ({}));
-      const clientId = String(body.clientId || "").trim();
-      const apiKey = String(body.secret || body.apiKey || "").trim();
-      return json(await verifyOzonCredentials(clientId, apiKey));
     }
     if (path.startsWith("integrations/")) {
       if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });

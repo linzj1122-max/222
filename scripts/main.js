@@ -3215,9 +3215,9 @@ const initialProducts = [
       if (btn) { btn.disabled = true; btn.textContent = "验证中..."; }
       try {
         if (backendEnabled) {
-          const result = await apiRequest("/api/integrations/verify", {
+          const result = await apiRequest("/api/integrations", {
             method: "POST",
-            body: JSON.stringify({ clientId, secret })
+            body: JSON.stringify({ action: "verify", clientId, secret })
           });
           if (result.ok) {
             setApiVerifyStatus(true, "✓ " + (result.message || "验证成功，凭证有效"));
