@@ -83,7 +83,7 @@
       btn.className = "tab-btn";
       btn.dataset.tab = TAB_ID;
       btn.type = "button";
-      btn.innerHTML = `<span>${TAB_LABEL}</span>`;
+      btn.innerHTML = `<span>🧺</span>货盘管理`;
       const settingsBtn = nav.querySelector('[data-tab="settings"]');
       if (settingsBtn) nav.insertBefore(btn, settingsBtn);
       else nav.appendChild(btn);

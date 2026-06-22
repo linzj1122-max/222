@@ -122,8 +122,28 @@ aside > section:first-child {
 /* 导航按钮 */
 nav {
   display: grid;
+  grid-auto-rows: auto;
   gap: 4px;
   margin-top: 4px;
+}
+
+/* 侧边栏功能列业务顺序（与 4 个 JS 注入顺序解耦）
+   order 数值越小越靠前；settings 放最后 */
+.tab-btn[data-tab="dashboard"]   { order: 10; }
+.tab-btn[data-tab="orderProfit"] { order: 20; }
+.tab-btn[data-tab="costs"]       { order: 30; }
+.tab-btn[data-tab="sourcing"]    { order: 35; }
+.tab-btn[data-tab="listing"]     { order: 38; }
+.tab-btn[data-tab="ads"]         { order: 40; }
+.tab-btn[data-tab="analytics"]   { order: 45; }
+.tab-btn[data-tab="aiStudio"]    { order: 48; }
+.tab-btn[data-tab="competitors"] { order: 50; }
+.tab-btn[data-tab="settings"]    { order: 90; margin-top: 10px; }
+
+/* 给 nav 留出 4px 左边距，让 active 状态的指示条显示出来 */
+nav {
+  padding-left: 4px;
+  margin-left: -4px;
 }
 
 .tab-btn {
@@ -142,7 +162,22 @@ nav {
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: left;
+  line-height: 1.2;
+  min-height: 44px;
   transition: all 0.18s ease;
+}
+/* 选中态左侧高亮指示条 */
+.tab-btn.active::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand), var(--accent-sage));
+  box-shadow: 0 0 8px rgba(107, 142, 175, 0.4);
 }
 
 .tab-btn span {
@@ -153,9 +188,10 @@ nav {
   justify-content: center;
   border-radius: 8px;
   background: rgba(120, 110, 90, 0.06);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-3);
   transition: inherit;
+  flex-shrink: 0;
 }
 
 .tab-btn:hover:not(.active) {
