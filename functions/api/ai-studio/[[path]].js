@@ -70,12 +70,12 @@ async function analyzeProduct(env, body) {
 
   const prompt = [
     "你是资深电商选品专家。请仔细分析图片中的产品，输出严格的 JSON，字段如下：",
-    "- category：产品类目（中文，如"移动电源/充电宝"）",
+    "- category：产品类目（中文，如「移动电源/充电宝」）",
     "- categoryRu：俄文类目名（地道表达）",
     "- appearance：外观描述（颜色/形状/材质/尺寸感，中文，50~120字）",
     "- features：核心功能/卖点数组（中文，6~10条，每条不超过25字）",
     "- featuresRu：对应的俄文卖点数组（与 features 一一对应，地道俄文）",
-    "- audience：目标受众（中文，如"商务出差/学生/户外爱好者"）",
+    "- audience：目标受众（中文，如「商务出差/学生/户外爱好者」）",
     "- scenario：典型使用场景（中文，2~3个）",
     "只输出 JSON，不要任何解释或前后缀。",
     productName ? `\n用户告知产品名：${productName}。` : "",
