@@ -48,8 +48,9 @@
     productName: "",
     extraInfo: "",
     platform: "Ozon",
-    similarUrl: "",         // 同款链接
-    similarExtracted: null, // 后端抓取结果
+    similarUrl: "",
+    similarExtracted: null,
+    templateData: null,    // 后端自动识别的品类模板 { id, name, usps, ozonKeywords }
     prompts: null,
   };
 
@@ -229,7 +230,6 @@
 
   // ---- 核心：生成提示词 ----
   function mergeSellingPoints() {
-    // 优先级：手动补充 > 抓取结果 > 内置品类模板
     const parts = [];
     if (state.extraInfo) parts.push(`【手动补充】\n${state.extraInfo}`);
     if (state.similarExtracted) {
@@ -243,6 +243,10 @@
         const specs = Object.entries(e.specs).map(([k, v]) => `${k}: ${v}`).join("，");
         parts.push(`【自动提取的参数】\n${specs}`);
       }
+    }
+    // 自动品类识别模板卖点（无同款链接时兜底）
+    if (!state.similarExtracted && state.templateData && state.templateData.usps && state.templateData.usps.length) {
+      parts.push(`【识别为「${state.templateData.name}」的典型卖点】\n${state.templateData.usps.map((h, i) => `${i + 1}. ${h}`).join("\n")}`);
     }
     return parts.join("\n\n");
   }
@@ -361,11 +365,24 @@ ${highlights ? `【重点突出以下卖点（按重要性排序）】\n${state.
     if (status) status.textContent = `同款已识别为「${e.categoryName || "通用"}」品类，已自动提取 ${e.highlights?.length || 0} 条核心卖点。`;
   }
 
-  function generateAll() {
+  async function generateAll() {
     readForm();
     if (!state.productName && !state.extraInfo && !state.referenceImages.length) {
       alert("请至少填写产品名称，或上传参考图，或填写补充卖点。");
       return;
+    }
+    // 自动识别品类 + 获取模板卖点（即使没有同款链接也能注入品类卖点）
+    if (state.productName && !state.similarExtracted) {
+      try {
+        const res = await fetch(API("product-types"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ productName: state.productName, text: state.productName + " " + state.extraInfo }),
+        }).then((r) => r.json());
+        if (res.ok && res.template && res.template.usps.length) {
+          state.templateData = res.template;
+        }
+      } catch { /* 网络失败不阻塞生成 */ }
     }
     state.prompts = {
       copyPrompt: buildCopyPrompt(),
@@ -373,7 +390,8 @@ ${highlights ? `【重点突出以下卖点（按重要性排序）】\n${state.
     };
     renderPrompts();
     pushHistory();
-    setStatus("提示词已生成 ✅ 已自动整合同款抓取的卖点（如有）。", false);
+    const typeInfo = state.templateData ? `，识别品类：${state.templateData.name}` : "";
+    setStatus(`提示词已生成 ✅ 已自动整合同款抓取的卖点（如有）${typeInfo}。`, false);
     $("ai_promptsPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -531,6 +549,7 @@ ${highlights ? `【重点突出以下卖点（按重要性排序）】\n${state.
       state.platform = "Ozon";
       state.similarUrl = "";
       state.similarExtracted = null;
+      state.templateData = null;
       state.prompts = null;
       const card = $("ai_similarCard");
       if (card) card.hidden = true;
@@ -567,6 +586,7 @@ ${highlights ? `【重点突出以下卖点（按重要性排序）】\n${state.
         state.platform = h.platform || "Ozon";
         state.similarUrl = h.similarUrl || "";
         state.similarExtracted = h.similarExtracted || null;
+        state.templateData = null;
         state.prompts = h.prompts || null;
         renderAll();
         if (state.similarExtracted) {

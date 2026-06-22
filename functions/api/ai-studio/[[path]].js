@@ -136,19 +136,58 @@ async function fetchSimilar(env, body) {
 
   let html;
   try {
-    const resp = await fetch(url, {
-      headers: {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "accept-language": "ru-RU,ru;q=0.9,zh-CN;q=0.8,en;q=0.7",
-      },
-      redirect: "follow",
-      cf: { cacheTtl: 0, cacheEverything: false },
-    });
-    if (!resp.ok) {
+    // Ozon/WB 反爬策略:无限重定向 + User-Agent 检测。手动限制最多 3 次跳转 + 模拟真实浏览器 cookie/header
+    const MAX_REDIRECTS = 3;
+    let currentUrl = url;
+    let resp = null;
+    for (let attempt = 0; attempt <= MAX_REDIRECTS; attempt += 1) {
+      const fetchResp = await fetch(currentUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+          "accept-language": "ru-RU,ru;q=0.9,zh-CN;q=0.8,en;q=0.7",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "referer": "https://www.ozon.ru/",
+          "cache-control": "max-age=0",
+          "cookie": "ozon_tz=Europe/Moscow; __session_id=guest",
+        },
+        redirect: "manual",
+        cf: { cacheTtl: 0, cacheEverything: false },
+      });
+      const status = fetchResp.status;
+      // 成功响应(非重定向) → 取内容
+      if (status >= 200 && status < 300) {
+        resp = fetchResp;
+        break;
+      }
+      // 重定向(301/302/307/308) → 继续追
+      if ([301, 302, 307, 308].includes(status)) {
+        const location = fetchResp.headers.get("location");
+        if (!location || location === currentUrl) {
+          resp = fetchResp;
+          break;
+        }
+        currentUrl = new URL(location, currentUrl).href;
+        continue;
+      }
+      // 其他状态码 → 报错
+      resp = fetchResp;
+      break;
+    }
+    if (!resp) {
+      return { ok: false, error: `抓取失败：重定向次数超过限制（${platform} 反爬机制）`, platform, url };
+    }
+    if (!resp.ok && !resp.body) {
       return { ok: false, error: `抓取失败：HTTP ${resp.status}（${platform} 平台可能反爬或链接已失效）`, platform, url };
     }
     html = await resp.text();
+    // Ozon 反爬:即使 200 也可能返回空/验证页面,检测
+    if (!html || html.length < 100 || /captcha|turnstile|challenge|blocked|access.denied|api\.ozon\.ru.*error/i.test(html)) {
+      return { ok: false, error: `抓取失败：页面被反爬拦截（${platform} 需要浏览器验证）`, platform, url, htmlPreview: html?.slice(0, 300) };
+    }
   } catch (e) {
     return { ok: false, error: `抓取异常：${e.message || e}`, platform, url };
   }
@@ -1071,7 +1110,18 @@ export async function onRequest(context) {
       const body = await request.json().catch(() => ({}));
       const text = String(body?.text || body?.productName || "");
       const cat = guessCategoryByKeywords(text);
-      return json({ ok: true, category: cat });
+      const tpl = CATEGORY_TEMPLATES[cat.id];
+      return json({
+        ok: true,
+        category: cat,
+        template: tpl ? {
+          id: tpl.id,
+          name: tpl.name,
+          usps: tpl.usps.map((u) => u.text),
+          matchKeywords: tpl.matchKeywords,
+          ozonKeywords: tpl.ozonKeywords,
+        } : null,
+      });
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {
