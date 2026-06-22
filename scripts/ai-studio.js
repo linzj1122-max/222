@@ -1,15 +1,17 @@
 /* =========================================================
- *  AI 生图 / 文本工作室（AI Studio）
+ *  AI 生图 / 文本工作室（AI Studio）— 纯前端提示词生成器
  *  ---------------------------------------------------------
  *  独立自包含模块（与 sourcing.js / listing.js 同构）：
  *    - 自带 localStorage key，不与 main.js 共用存储；
- *    - 自行注入导航按钮、页面 DOM、内联样式；
- *    - 自行绑定事件，不修改 main.js 任何逻辑；
- *  依赖：后端 /api/ai-studio/* 代理（见 functions/api/ai-studio/[[path]].js）。
+ *    - 自行注入导航按钮、页面 DOM、事件；
+ *    - 纯前端零后端依赖，不调用任何付费 API。
  *
- *  工作流：上传参考图 + 产品名 + 补充卖点 →
- *    ① 一键生成（识图 → 俄文标题/描述/20标签 + 中文翻译 → 9 张 3:4 主图）
- *    ② 也可分步：仅生成文案 / 仅生成图片
+ *  工作流：上传参考图 + 填产品名 + 补充卖点 →
+ *    一键生成可直接复制到 ChatGPT / GPT-Image 的提示词：
+ *      ① 俄文文案提示词（按资深俄文电商文案 + Yandex SEO 模板）
+ *      ② 整套 9 张主图的统一提示词（1封面+2展示+3卖点+1细节+1说明+1详情）
+ *      ③ 9 张分图各自的精细化提示词
+ *    用户拿着提示词去 ChatGPT Plus / GPT-Image 手动生成即可。
  * ========================================================= */
 (function () {
   "use strict";
@@ -17,8 +19,6 @@
   const STORAGE_KEY = "ozon_wb_ai_studio_history_v1";
   const TAB_ID = "aiStudio";
   const TAB_LABEL = "🎨 AI生图/文本";
-
-  const API = (sub) => `/api/ai-studio/${sub}`;
 
   // ---- 局部工具（避免污染全局） ----
   const $ = (id) => document.getElementById(id);
@@ -32,9 +32,7 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
   const escapeAttr = escapeHtml;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // 图片转 dataURL（用于上传参考图与生成结果回写）
   function readFileAsDataURL(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -44,39 +42,30 @@
     });
   }
 
-  // 把远端图片 URL 转为 dataURL（便于历史记录本地持久化，避免外链过期）
-  async function urlToDataURL(url) {
-    if (!url || typeof url !== "string") return "";
-    if (url.startsWith("data:")) return url;
-    try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      return await new Promise((resolve) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result);
-        r.readAsDataURL(blob);
-      });
-    } catch {
-      return url;   // 转换失败就保留原 URL
-    }
-  }
+  // 9 张图角色定义（严格对应"1封面+2展示+3卖点+1细节+1说明+1详情"）
+  const IMAGE_ROLES = [
+    { key: "cover",    name: "封面主图",   desc: "抓眼球且突出产品主体，带符合应用场景的真实使用者" },
+    { key: "display1", name: "展示图 1",   desc: "清晰展示产品全貌与典型使用场景" },
+    { key: "display2", name: "展示图 2",   desc: "另一角度展示产品全貌与使用场景" },
+    { key: "usp1",     name: "卖点图 1",   desc: "聚焦第 1 个核心卖点（如容量/功率/续航）" },
+    { key: "usp2",     name: "卖点图 2",   desc: "聚焦第 2 个核心卖点（如接口/便携/安全）" },
+    { key: "usp3",     name: "卖点图 3",   desc: "聚焦第 3 个核心卖点（如附加功能/材质）" },
+    { key: "detail",   name: "细节图",     desc: "聚焦材质、接口、做工等细节特写" },
+    { key: "guide",    name: "使用说明图", desc: "简明图示使用方法 / 步骤" },
+    { key: "specs",    name: "产品详情图", desc: "汇总核心参数的详情图" },
+  ];
 
   // ---- 状态 ----
-  // 当前工作台状态（不入历史，历史单独存）
   const state = {
-    referenceImages: [],   // dataURL 数组
+    referenceImages: [],
     productName: "",
     extraInfo: "",
     platform: "Ozon",
-    analysis: null,        // 识图结果
-    copy: null,            // 文案结果
-    images: [],            // 生成图结果 [{role,url,...}]
-    busy: false,
+    prompts: null,        // {copyPrompt, groupPrompt, imagePrompts:[]}
   };
 
   let history = [];
   try { history = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") || []; } catch { history = []; }
-
   const saveHistory = () => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, 50))); }
     catch (e) { console.warn("[ai-studio] 历史保存失败", e); }
@@ -96,7 +85,6 @@
       else nav.appendChild(btn);
       btn.addEventListener("click", () => activateTab(TAB_ID));
     }
-
     const main = document.querySelector("main");
     if (main && !$(TAB_ID)) {
       const section = document.createElement("section");
@@ -112,15 +100,15 @@
       <section class="dashboard-brief">
         <div>
           <h2>AI 生图 / 文本工作室</h2>
-          <p>上传产品参考图 + 填产品名，一键生成地道俄文标题/描述/20个SEO标签（附中文翻译）与 9 张 3:4 Ozon 电商主图。</p>
+          <p>上传产品参考图 + 填写产品信息，一键生成可直接粘贴到 ChatGPT / GPT-Image 的俄文文案提示词与 9 张主图提示词。零 API 成本。</p>
         </div>
-        <span class="live-chip"><span></span>Ozon / WB 文案 + 主图</span>
+        <span class="live-chip"><span></span>提示词生成器</span>
       </section>
 
       <section class="panel">
         <div class="toolbar">
           <h3>第一步 · 上传参考图与产品信息</h3>
-          <span class="status">支持多图，第一张为产品主体参考。</span>
+          <span class="status">第一张为产品主体参考，整套图会严格依据它生成。</span>
         </div>
         <div class="ai-studio-input">
           <div class="ai-studio-upload">
@@ -137,7 +125,7 @@
             <label>产品名称（中文，例如：20000毫安超薄充电宝）
               <input id="ai_productName" type="text" placeholder="告诉AI这是什么产品" />
             </label>
-            <label>补充卖点 / 参数（可选，越详细生成越准）
+            <label>补充卖点 / 参数（越详细提示词越准）
               <textarea id="ai_extraInfo" rows="5" placeholder="例如：长6.85cm，高14.4cm，重210g，电池容量20000毫安，充电功率10W，自带数据线，多U口输出，电量数显，聚合物锂离子电芯，自带苹果/安卓三线+USB，可同时为五部设备充电，带LED手电，符合民航携带规定"></textarea>
             </label>
             <label class="inline-select">目标平台
@@ -148,55 +136,54 @@
               </select>
             </label>
             <div class="actions ai-studio-actions">
-              <button class="primary" type="button" id="ai_generateAll">🚀 一键生成（文案+主图）</button>
-              <button class="secondary" type="button" id="ai_generateCopy">仅生成文案</button>
-              <button class="secondary" type="button" id="ai_generateImages">仅生成主图</button>
+              <button class="primary" type="button" id="ai_generateAll">🚀 一键生成全部提示词</button>
+              <button class="secondary" type="button" id="ai_clearForm">清空</button>
             </div>
             <div id="ai_status" class="table-status">就绪。上传参考图并填写产品信息后点击生成。</div>
           </div>
         </div>
       </section>
 
-      <section class="panel" id="ai_copyPanel" hidden>
+      <section class="panel" id="ai_promptsPanel" hidden>
         <div class="toolbar">
-          <h3>第二步 · 俄文商品文案（含中文翻译）</h3>
-          <div class="ai-copy-actions">
-            <button class="secondary" type="button" id="ai_copyTitle">复制标题</button>
-            <button class="secondary" type="button" id="ai_copyDesc">复制描述</button>
-            <button class="secondary" type="button" id="ai_copyTags">复制标签</button>
-            <button class="secondary" type="button" id="ai_copyAllRu">复制完整俄文</button>
-          </div>
+          <h3>第二步 · 生成的提示词</h3>
+          <span class="status">复制对应提示词，连同参考图一起粘贴到 ChatGPT / GPT-Image 即可生成。</span>
         </div>
-        <div class="ai-copy-grid">
-          <div class="ai-copy-block ai-copy-ru">
-            <div class="ai-copy-head">🇷🇺 俄文版本</div>
-            <div class="ai-copy-field"><span class="ai-copy-label">Название</span><div id="ai_titleRu" class="ai-copy-text"></div></div>
-            <div class="ai-copy-field"><span class="ai-copy-label">Описание</span><div id="ai_descRu" class="ai-copy-text"></div></div>
-            <div class="ai-copy-field"><span class="ai-copy-label">Хэштеги</span><div id="ai_tagsRu" class="ai-copy-text"></div></div>
-          </div>
-          <div class="ai-copy-block ai-copy-zh">
-            <div class="ai-copy-head">🇨🇳 中文翻译</div>
-            <div class="ai-copy-field"><span class="ai-copy-label">商品标题</span><div id="ai_titleZh" class="ai-copy-text"></div></div>
-            <div class="ai-copy-field"><span class="ai-copy-label">商品简介</span><div id="ai_descZh" class="ai-copy-text"></div></div>
-            <div class="ai-copy-field"><span class="ai-copy-label">主题标签</span><div id="ai_tagsZh" class="ai-copy-text"></div></div>
-          </div>
-        </div>
-      </section>
 
-      <section class="panel" id="ai_imagesPanel" hidden>
-        <div class="toolbar">
-          <h3>第三步 · Ozon 电商主图组图（9 张 · 3:4）</h3>
-          <div class="ai-img-actions">
-            <button class="secondary" type="button" id="ai_downloadAll">打包下载（新窗口）</button>
+        <div class="ai-prompt-tabs">
+          <button class="ai-prompt-tab active" type="button" data-prompt-tab="copy">📝 文案提示词</button>
+          <button class="ai-prompt-tab" type="button" data-prompt-tab="group">🖼️ 整套主图提示词</button>
+          <button class="ai-prompt-tab" type="button" data-prompt-tab="single">📋 9 张分图提示词</button>
+        </div>
+
+        <div class="ai-prompt-pane active" data-prompt-pane="copy">
+          <div class="ai-prompt-block">
+            <div class="ai-prompt-block-head">
+              <span>俄文文案生成提示词（直接粘贴到 ChatGPT 对话框）</span>
+              <button class="secondary" type="button" data-copy="copyPrompt">复制</button>
+            </div>
+            <pre id="ai_copyPrompt" class="ai-prompt-text"></pre>
           </div>
         </div>
-        <div class="notice">每张图角色：1封面 + 2展示 + 3卖点 + 1细节 + 1说明 + 1详情。整套色系一致，画面文案为地道俄文。</div>
-        <div class="ai-image-grid" id="ai_imageGrid"></div>
+
+        <div class="ai-prompt-pane" data-prompt-pane="group">
+          <div class="ai-prompt-block">
+            <div class="ai-prompt-block-head">
+              <span>整套 9 张主图统一提示词（粘贴到 GPT-Image 一次性生成整套）</span>
+              <button class="secondary" type="button" data-copy="groupPrompt">复制</button>
+            </div>
+            <pre id="ai_groupPrompt" class="ai-prompt-text"></pre>
+          </div>
+        </div>
+
+        <div class="ai-prompt-pane" data-prompt-pane="single">
+          <div id="ai_singlePrompts"></div>
+        </div>
       </section>
 
       <section class="panel">
         <div class="toolbar">
-          <h3>生成历史</h3>
+          <h3>历史记录</h3>
           <span class="status">本地保存最近 50 条，点击可回填。</span>
           <button class="danger" type="button" id="ai_clearHistory" style="margin-left:auto">清空历史</button>
         </div>
@@ -229,7 +216,126 @@
     if ($("ai_platform")) $("ai_platform").value = state.platform || "Ozon";
   }
 
-  // ---- 渲染：参考图缩略图 ----
+  // ---- 核心：生成提示词（纯前端模板，无任何 API 调用） ----
+
+  // 文案提示词：严格按用户提供的"资深俄罗斯本土电商文案 + Yandex SEO"模板
+  function buildCopyPrompt() {
+    const productName = state.productName || "该产品";
+    const extra = state.extraInfo || "";
+    const platform = state.platform;
+
+    return `请你扮演一位资深的俄罗斯本土电商文案专家和 Yandex SEO 优化师。接下来，我会发给你几张产品图片。请仔细分析图片中的产品外观、功能、卖点及目标受众，为我生成一份地道、高转化率的俄语电商商品详情文案。
+
+具体要求如下：
+
+俄语标题（Название）：必须符合俄罗斯主流电商平台（如 Ozon, Wildberries, Yandex.Market）的搜索习惯。使用本地消费者真实搜索的高频长尾词和核心词，结构紧凑，卖点前置。
+
+俄语简介（Описание）：文案需极具吸引力且专业。突出核心优势、使用场景和材质细节，语言必须是纯正的俄语母语表达，带有强烈的购买引导（Call to Action），绝对避免机器翻译的生硬感。
+
+主题标签（Теги/Хэштеги）：生成 20 个用于优化 SEO 的俄语标签，必须包含大词、精准属性词和场景词，符合 Yandex 搜索词逻辑。
+
+排版与翻译：先完整输出俄文版本，然后使用分割线隔开，在结尾附上对应的完整中文翻译。
+
+输出格式：
+
+[俄文版本]
+Название: [生成地道的俄文标题]
+Описание: [生成分段清晰的俄文简介，可使用 Emoji 作为列表符号增强阅读体验]
+Хэштеги: [20 个俄文 SEO 标签，以 # 开头，空格隔开]
+
+[中文翻译版本]
+商品标题：[中文标题]
+商品简介：[中文简介]
+主题标签：[20 个中文标签]
+
+【本次生成的产品信息】
+产品名称：${productName}
+目标平台：${platform}
+${extra ? `补充卖点/参数（请在文案中重点突出）：\n${extra}` : "（未提供补充信息，请从参考图自行分析卖点）"}`;
+  }
+
+  // 整套主图提示词：对应"1封面+2展示+3卖点+1细节+1说明+1详情"
+  function buildGroupImagePrompt() {
+    const productName = state.productName || "该产品";
+    const extra = state.extraInfo || "";
+    const platform = state.platform;
+    const sizeReq = '3:4 竖版（建议 1200×1600px，适配 Ozon / WB / Yandex.Market 主图）';
+
+    return `生成一组${platform}电商主图，共 9 张（1 张封面 + 2 张展示 + 3 张卖点 + 1 张细节 + 1 张使用说明 + 1 张产品详情），整套图色系风格须完全一致，商业级精修。
+
+【产品信息】
+产品：${productName}
+${extra ? `核心卖点/参数：\n${extra}` : "（请从参考图识别核心卖点）"}
+
+【整套图统一要求】
+- 尺寸：${sizeReq}
+- 画面中出现的所有文案、标签、按钮、参数必须是地道俄文（кириллица），无错别字、无伪文字、无乱码。
+- 严格保持产品外观、颜色、形状、比例与参考图一致，不得擅自改变产品工业设计或添加不存在的功能。
+- 构图干净，白底或浅色生活化场景，主体居中突出。
+- 整套 9 张图色调、字体、版式必须保持统一（主色 + 辅色 + 光感一致）。
+
+【9 张图角色分工】
+1. 封面主图：抓眼球且突出产品主体，带符合应用场景的真实使用者；
+2. 展示图 1：清晰展示产品全貌与典型使用场景；
+3. 展示图 2：另一角度展示产品全貌与使用场景；
+4. 卖点图 1：聚焦第 1 个核心卖点（如容量/功率/续航）；
+5. 卖点图 2：聚焦第 2 个核心卖点（如接口/便携/安全）；
+6. 卖点图 3：聚焦第 3 个核心卖点（如附加功能/材质）；
+7. 细节图：聚焦材质、接口、做工等细节特写；
+8. 使用说明图：简明图示使用方法 / 步骤；
+9. 产品详情图：汇总核心参数的详情图。
+
+请严格依据我提供的参考图生成，保持产品一致性。`;
+  }
+
+  // 9 张分图提示词：每张独立、可直接逐张喂给 GPT-Image
+  function buildSingleImagePrompts() {
+    const productName = state.productName || "该产品";
+    const extra = state.extraInfo || "";
+    const platform = state.platform;
+    const sizeReq = '尺寸 3:4 竖版（1200×1600px），画面所有文字必须是地道俄文（кириллица），严格保持产品外观与参考图一致。';
+
+    const commonStyle = `商业级精修，${platform} 电商主图风格，构图干净，白底或浅色生活化场景，主体居中突出。${sizeReq}`;
+
+    return IMAGE_ROLES.map((role, i) => {
+      const uspHint = (extra && role.key.startsWith("usp"))
+        ? `\n请从以下卖点中挑选 ${role.key.slice(3)} 个作为本图核心：\n${extra}`
+        : "";
+      return {
+        index: i + 1,
+        role: role.key,
+        roleName: role.name,
+        prompt: `请根据我提供的参考图，为「${productName}」生成第 ${i + 1} 张 ${platform} 电商主图。
+
+【本张图角色】${role.name}
+【本张图要求】${role.desc}
+${uspHint}
+
+【统一风格要求】
+${commonStyle}
+
+严格依据参考图生成，保持产品外观、颜色、形状、比例一致，不得改变工业设计或添加不存在的功能。`,
+      };
+    });
+  }
+
+  function generateAll() {
+    readForm();
+    if (!state.productName && !state.extraInfo && !state.referenceImages.length) {
+      alert("请至少填写产品名称，或上传参考图，或填写补充卖点。");
+      return;
+    }
+    const copyPrompt = buildCopyPrompt();
+    const groupPrompt = buildGroupImagePrompt();
+    const imagePrompts = buildSingleImagePrompts();
+    state.prompts = { copyPrompt, groupPrompt, imagePrompts };
+    renderPrompts();
+    pushHistory();
+    setStatus("提示词已生成 ✅ 点击「复制」按钮，连同参考图粘贴到 ChatGPT 即可。", false);
+    $("ai_promptsPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ---- 渲染 ----
   function renderThumbs() {
     const row = $("ai_thumbRow");
     if (!row) return;
@@ -245,59 +351,39 @@
       </div>`).join("");
   }
 
-  // ---- 渲染：文案结果 ----
-  function renderCopy() {
-    const panel = $("ai_copyPanel");
+  function renderPrompts() {
+    const panel = $("ai_promptsPanel");
     if (!panel) return;
-    if (!state.copy) { panel.hidden = true; return; }
+    if (!state.prompts) { panel.hidden = true; return; }
     panel.hidden = false;
-    const c = state.copy;
-    $("ai_titleRu").textContent = c.title || "—";
-    $("ai_descRu").textContent = c.description || "—";
-    $("ai_tagsRu").textContent = c.tags || "—";
-    $("ai_titleZh").textContent = c.titleZh || "—";
-    $("ai_descZh").textContent = c.descriptionZh || "—";
-    $("ai_tagsZh").textContent = c.tagsZh || "—";
-  }
-
-  // ---- 渲染：图片结果 ----
-  function renderImages() {
-    const panel = $("ai_imagesPanel");
-    const grid = $("ai_imageGrid");
-    if (!panel || !grid) return;
-    if (!state.images || !state.images.length) { panel.hidden = true; return; }
-    panel.hidden = false;
-    grid.innerHTML = state.images.map((img) => {
-      if (!img.ok) {
-        return `<div class="ai-image-card ai-image-failed">
-          <div class="ai-image-fallback">❌<small>${escapeHtml(img.role_name || "图 " + img.index)}</small><span>${escapeHtml(img.error || "生成失败")}</span></div>
-        </div>`;
-      }
-      return `<div class="ai-image-card">
-        <img src="${escapeAttr(img.url)}" alt="${escapeAttr(img.role_name || "")}" loading="lazy" />
-        <div class="ai-image-meta">
-          <span class="ai-image-role">${escapeHtml(img.role_name || "图 " + img.index)}</span>
-          <a href="${escapeAttr(img.url)}" target="_blank" rel="noopener" download="${escapeAttr((img.role || "image") + ".png")}">下载</a>
+    $("ai_copyPrompt").textContent = state.prompts.copyPrompt;
+    $("ai_groupPrompt").textContent = state.prompts.groupPrompt;
+    const singleBox = $("ai_singlePrompts");
+    singleBox.innerHTML = state.prompts.imagePrompts.map((p) => `
+      <div class="ai-prompt-block">
+        <div class="ai-prompt-block-head">
+          <span class="ai-prompt-role-tag">第 ${p.index} 张 · ${escapeHtml(p.roleName)}</span>
+          <button class="secondary" type="button" data-copy-single="${p.index}">复制</button>
         </div>
-      </div>`;
-    }).join("");
+        <pre class="ai-prompt-text" data-single-index="${p.index}">${escapeHtml(p.prompt)}</pre>
+      </div>
+    `).join("");
   }
 
-  // ---- 渲染：历史 ----
   function renderHistory() {
     const box = $("ai_historyList");
     if (!box) return;
     if (!history.length) {
-      box.innerHTML = `<div class="ai-history-empty muted-cell">暂无生成历史。</div>`;
+      box.innerHTML = `<div class="ai-history-empty muted-cell">暂无历史记录。</div>`;
       return;
     }
     box.innerHTML = history.map((h) => {
-      const cover = (h.referenceImages && h.referenceImages[0]) || (h.images && h.images[0] && h.images[0].url) || "";
+      const cover = (h.referenceImages && h.referenceImages[0]) || "";
       return `<div class="ai-history-row">
         <div class="ai-history-cover">${cover ? `<img src="${escapeAttr(cover)}" alt="" />` : "<span>📷</span>"}</div>
         <div class="ai-history-info">
-          <strong>${escapeHtml(h.productName || h.copy?.titleZh || "未命名")}</strong>
-          <small>${escapeHtml(h.platform || "")} · ${escapeHtml(h.updatedAt || "")} · ${h.images ? h.images.filter((x) => x.ok).length + " 张图" : "无图"}</small>
+          <strong>${escapeHtml(h.productName || "未命名")}</strong>
+          <small>${escapeHtml(h.platform || "")} · ${escapeHtml(h.updatedAt || "")}</small>
         </div>
         <div class="ai-history-actions">
           <button class="secondary" type="button" data-hist-load="${escapeAttr(h.id)}">回填</button>
@@ -310,42 +396,26 @@
   function renderAll() {
     fillForm();
     renderThumbs();
-    renderCopy();
-    renderImages();
+    renderPrompts();
     renderHistory();
   }
 
-  // ---- 状态条 ----
   function setStatus(msg, busy = false) {
     const el = $("ai_status");
     if (el) el.textContent = msg;
-    state.busy = busy;
-    ["ai_generateAll", "ai_generateCopy", "ai_generateImages"].forEach((id) => {
-      const b = $(id);
-      if (b) b.disabled = busy;
-    });
+    const btn = $("ai_generateAll");
+    if (btn) btn.disabled = busy;
   }
 
-  // ---- 调后端：收集请求体 ----
-  function buildRequestBody() {
-    return {
-      productName: state.productName,
-      extraInfo: state.extraInfo,
-      platform: state.platform,
-      referenceImages: state.referenceImages,
-    };
-  }
-
-  // ---- 保存到历史 ----
+  // ---- 历史 ----
   function pushHistory() {
     const item = {
       id: uid(),
       updatedAt: nowIso(),
       productName: state.productName,
       platform: state.platform,
-      referenceImages: state.referenceImages.slice(0, 2),   // 只存前 2 张参考图，节省 localStorage
-      copy: state.copy,
-      images: (state.images || []).map((img) => ({ ...img, url: img.url })).slice(0, 9),
+      referenceImages: state.referenceImages.slice(0, 2),
+      prompts: state.prompts,
     };
     history.unshift(item);
     history = history.slice(0, 50);
@@ -353,257 +423,117 @@
     renderHistory();
   }
 
-  // ---- 生成：文案 ----
-  async function doGenerateCopy() {
-    readForm();
-    if (!state.referenceImages.length && !state.extraInfo) {
-      alert("请至少上传 1 张参考图，或在「补充卖点」里填写产品信息。");
-      return;
-    }
-    setStatus("正在分析图片并生成俄文文案…", true);
-    try {
-      // 先识图（若尚未识图），再生成文案
-      let analysis = state.analysis;
-      if (!analysis && state.referenceImages.length) {
-        const ar = await fetch(API("analyze"), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(buildRequestBody()),
-        }).then((r) => r.json());
-        if (!ar.ok) throw new Error(ar.error || "识图失败");
-        analysis = ar.analysis;
-        state.analysis = analysis;
-      }
-      const cr = await fetch(API("generate-copy"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...buildRequestBody(), analysis }),
-      }).then((r) => r.json());
-      if (!cr.ok) throw new Error(cr.error || "文案生成失败");
-      state.copy = {
-        title: cr.title, description: cr.description, tags: cr.tags,
-        titleZh: cr.titleZh, descriptionZh: cr.descriptionZh, tagsZh: cr.tagsZh,
-      };
-      renderCopy();
-      setStatus("文案已生成 ✅ 可继续生成主图，或一键生成全部。", false);
-      pushHistory();
-    } catch (e) {
-      setStatus("文案生成失败：" + (e.message || e), false);
-      alert("文案生成失败：" + (e.message || e));
-    }
-  }
-
-  // ---- 生成：图片 ----
-  async function doGenerateImages() {
-    readForm();
-    if (!state.referenceImages.length && !state.extraInfo && !state.analysis) {
-      alert("请先上传参考图或填写产品信息。");
-      return;
-    }
-    setStatus("正在生成 9 张主图，每张约 10~20 秒，请耐心等待…", true);
-    try {
-      let analysis = state.analysis;
-      if (!analysis && state.referenceImages.length) {
-        const ar = await fetch(API("analyze"), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(buildRequestBody()),
-        }).then((r) => r.json());
-        if (!ar.ok) throw new Error(ar.error || "识图失败");
-        analysis = ar.analysis;
-        state.analysis = analysis;
-      }
-      const ir = await fetch(API("generate-images"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...buildRequestBody(), analysis, copy: state.copy }),
-      }).then((r) => r.json());
-      if (!ir.ok) throw new Error(ir.error || "生图失败");
-      // 远端 URL 转 dataURL，便于本地持久化与下载
-      setStatus("正在缓存图片到本地…", true);
-      const imgs = [];
-      for (const r of (ir.results || [])) {
-        if (r.ok) {
-          const dataUrl = await urlToDataURL(r.url);
-          imgs.push({ ...r, url: dataUrl });
-        } else {
-          imgs.push(r);
-        }
-      }
-      state.images = imgs;
-      renderImages();
-      const okCount = imgs.filter((x) => x.ok).length;
-      setStatus(`主图生成完成 ✅ 成功 ${okCount}/${imgs.length} 张。`, false);
-      pushHistory();
-    } catch (e) {
-      setStatus("生图失败：" + (e.message || e), false);
-      alert("生图失败：" + (e.message || e));
-    }
-  }
-
-  // ---- 生成：一键全流程 ----
-  async function doGenerateAll() {
-    readForm();
-    if (!state.referenceImages.length && !state.extraInfo) {
-      alert("请至少上传 1 张参考图，或在「补充卖点」里填写产品信息。");
-      return;
-    }
-    setStatus("一键生成中：识图 → 文案 → 9 张主图，全程约 2~4 分钟…", true);
-    try {
-      const res = await fetch(API("generate-all"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildRequestBody()),
-      }).then((r) => r.json());
-      if (!res.ok) throw new Error(res.error || "生成失败");
-      state.analysis = res.analysis;
-      state.copy = res.copy;
-      // 远端图片转 dataURL
-      setStatus("正在缓存图片到本地…", true);
-      const imgs = [];
-      for (const r of (res.images?.results || [])) {
-        if (r.ok) {
-          const dataUrl = await urlToDataURL(r.url);
-          imgs.push({ ...r, url: dataUrl });
-        } else {
-          imgs.push(r);
-        }
-      }
-      state.images = imgs;
-      renderCopy();
-      renderImages();
-      const okCount = imgs.filter((x) => x.ok).length;
-      setStatus(`一键生成完成 ✅ 文案已生成，主图成功 ${okCount}/${imgs.length} 张。`, false);
-      pushHistory();
-    } catch (e) {
-      setStatus("一键生成失败：" + (e.message || e), false);
-      alert("一键生成失败：" + (e.message || e));
-    }
-  }
-
-  // ---- 复制到剪贴板 ----
-  async function copyText(text, label = "内容") {
-    if (!text || text === "—") { alert("暂无内容可复制。"); return; }
+  // ---- 复制 ----
+  async function copyText(text, label = "提示词") {
+    if (!text) { alert("暂无内容可复制。"); return; }
     try {
       await navigator.clipboard.writeText(text);
-      setStatus(`已复制${label}到剪贴板 ✅`, state.busy);
+      setStatus(`已复制${label} ✅`, false);
     } catch {
-      // 降级：选中文本
       const ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); setStatus(`已复制${label} ✅`, state.busy); }
+      try { document.execCommand("copy"); setStatus(`已复制${label} ✅`, false); }
       catch { alert("复制失败，请手动选中复制。"); }
       document.body.removeChild(ta);
     }
   }
 
-  // ---- 事件绑定 ----
+  // ---- 事件 ----
   function bindEvents() {
-    // 图片上传（点击 + 拖拽）
     const dropzone = $("aiDropzone");
     const fileInput = $("ai_images");
     if (fileInput) {
       fileInput.addEventListener("change", async (e) => {
-        const files = [...(e.target.files || [])];
-        for (const file of files) {
+        for (const file of [...(e.target.files || [])]) {
           if (file.size > 4 * 1024 * 1024) { alert(`${file.name} 超过 4MB，已跳过（请压缩后再传）。`); continue; }
-          try {
-            const dataUrl = await readFileAsDataURL(file);
-            state.referenceImages.push(dataUrl);
-          } catch (err) {
-            alert(`${file.name} 读取失败：${err.message}`);
-          }
+          try { state.referenceImages.push(await readFileAsDataURL(file)); }
+          catch (err) { alert(`${file.name} 读取失败：${err.message}`); }
         }
         e.target.value = "";
         renderThumbs();
       });
     }
     if (dropzone) {
-      ["dragover", "dragenter"].forEach((ev) => {
-        dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("is-drag"); });
-      });
-      ["dragleave", "drop"].forEach((ev) => {
-        dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("is-drag"); });
-      });
+      ["dragover", "dragenter"].forEach((ev) =>
+        dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("is-drag"); })
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("is-drag"); })
+      );
       dropzone.addEventListener("drop", async (e) => {
         const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
         for (const file of files) {
           if (file.size > 4 * 1024 * 1024) { alert(`${file.name} 超过 4MB，已跳过。`); continue; }
-          try {
-            const dataUrl = await readFileAsDataURL(file);
-            state.referenceImages.push(dataUrl);
-          } catch (err) {
-            alert(`${file.name} 读取失败：${err.message}`);
-          }
+          try { state.referenceImages.push(await readFileAsDataURL(file)); }
+          catch (err) { alert(`${file.name} 读取失败：${err.message}`); }
         }
         renderThumbs();
       });
     }
 
-    // 移除参考图
     $("ai_thumbRow")?.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-rm-img]");
       if (!btn) return;
-      const i = Number(btn.getAttribute("data-rm-img"));
-      state.referenceImages.splice(i, 1);
-      // 移除参考图后清空识图缓存，强制下次重新分析
-      state.analysis = null;
+      state.referenceImages.splice(Number(btn.getAttribute("data-rm-img")), 1);
       renderThumbs();
     });
 
-    // 表单实时回写
     ["ai_productName", "ai_extraInfo", "ai_platform"].forEach((id) => {
       $(id)?.addEventListener("input", readForm);
       $(id)?.addEventListener("change", readForm);
     });
 
-    // 生成按钮
-    $("ai_generateAll")?.addEventListener("click", doGenerateAll);
-    $("ai_generateCopy")?.addEventListener("click", doGenerateCopy);
-    $("ai_generateImages")?.addEventListener("click", doGenerateImages);
-
-    // 复制按钮
-    $("ai_copyTitle")?.addEventListener("click", () => copyText(state.copy?.title, "标题"));
-    $("ai_copyDesc")?.addEventListener("click", () => copyText(state.copy?.description, "描述"));
-    $("ai_copyTags")?.addEventListener("click", () => copyText(state.copy?.tags, "标签"));
-    $("ai_copyAllRu")?.addEventListener("click", () => {
-      const c = state.copy || {};
-      const text = `Название: ${c.title || ""}\n\nОписание: ${c.description || ""}\n\nХэштеги: ${c.tags || ""}`;
-      copyText(text, "完整俄文");
+    $("ai_generateAll")?.addEventListener("click", generateAll);
+    $("ai_clearForm")?.addEventListener("click", () => {
+      if (!confirm("确认清空当前表单与参考图？（历史记录不受影响）")) return;
+      state.referenceImages = [];
+      state.productName = "";
+      state.extraInfo = "";
+      state.platform = "Ozon";
+      state.prompts = null;
+      renderAll();
+      setStatus("已清空。", false);
     });
 
-    // 打包下载（逐张在新窗口打开，浏览器原生下载）
-    $("ai_downloadAll")?.addEventListener("click", () => {
-      const ok = (state.images || []).filter((x) => x.ok);
-      if (!ok.length) { alert("暂无成功生成的图片。"); return; }
-      ok.forEach((img, i) => {
-        setTimeout(() => {
-          const a = document.createElement("a");
-          a.href = img.url;
-          a.download = `${img.role || "image"}_${i + 1}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        }, i * 250);
+    // 提示词 tab 切换
+    document.querySelectorAll("[data-prompt-tab]")?.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const key = tab.dataset.promptTab;
+        document.querySelectorAll("[data-prompt-tab]").forEach((t) => t.classList.toggle("active", t === tab));
+        document.querySelectorAll("[data-prompt-pane]").forEach((p) => {
+          p.classList.toggle("active", p.dataset.promptPane === key);
+        });
       });
     });
 
-    // 历史：回填 + 删除
+    // 复制按钮（文案 + 整组 + 分图，事件委托）
+    $("ai_promptsPanel")?.addEventListener("click", (e) => {
+      const copyBtn = e.target.closest("[data-copy]");
+      const copySingle = e.target.closest("[data-copy-single]");
+      if (copyBtn) {
+        const key = copyBtn.getAttribute("data-copy");
+        const map = { copyPrompt: "文案提示词", groupPrompt: "整套主图提示词" };
+        copyText(state.prompts?.[key], map[key] || "提示词");
+      } else if (copySingle) {
+        const idx = Number(copySingle.getAttribute("data-copy-single"));
+        const p = state.prompts?.imagePrompts?.find((x) => x.index === idx);
+        copyText(p?.prompt, `第 ${idx} 张提示词`);
+      }
+    });
+
+    // 历史
     $("ai_historyList")?.addEventListener("click", (e) => {
       const load = e.target.closest("[data-hist-load]");
       const del = e.target.closest("[data-hist-del]");
       if (load) {
-        const id = load.getAttribute("data-hist-load");
-        const h = history.find((x) => x.id === id);
+        const h = history.find((x) => x.id === load.getAttribute("data-hist-load"));
         if (!h) return;
         state.referenceImages = [...(h.referenceImages || [])];
         state.productName = h.productName || "";
         state.platform = h.platform || "Ozon";
-        state.copy = h.copy || null;
-        state.images = h.images || [];
-        state.analysis = null;
+        state.prompts = h.prompts || null;
         renderAll();
         $("aiStudio")?.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (del) {
@@ -616,10 +546,9 @@
       }
     });
 
-    // 清空历史
     $("ai_clearHistory")?.addEventListener("click", () => {
       if (!history.length) { alert("历史已为空。"); return; }
-      if (confirm(`确认清空全部 ${history.length} 条历史？此操作不可撤销。`)) {
+      if (confirm(`确认清空全部 ${history.length} 条历史？`)) {
         history = [];
         saveHistory();
         renderHistory();
