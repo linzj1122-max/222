@@ -2416,3 +2416,239 @@ label.inline-select > select {
     grid-template-columns: 1fr;
   }
 }
+
+/* =========================================================
+   AI 生图 / 文本工作室（AI Studio）
+   ========================================================= */
+#aiStudio .dashboard-brief { margin-bottom: 4px; }
+
+/* 第一步：上传 + 信息输入区 */
+.ai-studio-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 22px;
+}
+@media (max-width: 900px) {
+  .ai-studio-input { grid-template-columns: 1fr; }
+}
+
+/* 拖拽上传区 */
+.ai-studio-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 36px 20px;
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-align: center;
+}
+.ai-studio-dropzone:hover,
+.ai-studio-dropzone.is-drag {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.ai-studio-dropzone .ai-dropzone-icon { font-size: 34px; line-height: 1; }
+.ai-studio-dropzone .ai-dropzone-text { font-size: 14px; font-weight: 600; color: var(--ink-1); }
+.ai-studio-dropzone .ai-dropzone-hint { font-size: 12px; color: var(--ink-3); }
+
+/* 参考图缩略图 */
+.ai-thumb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  min-height: 32px;
+}
+.ai-thumb-empty {
+  width: 100%;
+  padding: 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-3);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+}
+.ai-thumb {
+  position: relative;
+  width: 88px;
+  height: 110px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-sm);
+}
+.ai-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ai-thumb-badge {
+  position: absolute; top: 4px; left: 4px;
+  font-size: 10px; font-weight: 700; color: #fff;
+  background: rgba(107, 142, 175, 0.85);
+  padding: 2px 6px; border-radius: 999px;
+}
+.ai-thumb .rm {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; line-height: 18px;
+  border: none; border-radius: 50%;
+  background: rgba(60, 50, 40, 0.6); color: #fff;
+  font-size: 14px; cursor: pointer; padding: 0;
+  transition: background 0.15s ease;
+}
+.ai-thumb .rm:hover { background: var(--red); }
+
+/* 右侧字段区 */
+.ai-studio-fields { display: flex; flex-direction: column; gap: 14px; }
+.ai-studio-fields textarea { min-height: 96px; resize: vertical; }
+.ai-studio-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.ai-studio-actions .primary { flex: 1 1 auto; min-width: 200px; }
+
+/* 第二步：文案结果区 */
+.ai-copy-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ai-copy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 6px;
+}
+@media (max-width: 900px) {
+  .ai-copy-grid { grid-template-columns: 1fr; }
+}
+.ai-copy-block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.ai-copy-block.ai-copy-ru { border-top: 3px solid var(--brand); }
+.ai-copy-block.ai-copy-zh { border-top: 3px solid var(--accent-sage); }
+.ai-copy-head {
+  padding: 8px 14px;
+  background: var(--bg-3);
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+}
+.ai-copy-field {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ai-copy-field:first-of-type { border-top: none; }
+.ai-copy-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ai-copy-text {
+  font-size: 13px;
+  color: var(--ink-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* 第三步：图片网格 */
+.ai-img-actions { display: flex; gap: 8px; }
+.ai-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.ai-image-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+.ai-image-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.ai-image-card img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: var(--bg-3);
+  display: block;
+}
+.ai-image-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.ai-image-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.ai-image-meta a {
+  font-size: 12px;
+  color: var(--brand-dark);
+  text-decoration: none;
+  font-weight: 600;
+}
+.ai-image-meta a:hover { text-decoration: underline; }
+.ai-image-failed { aspect-ratio: 3 / 4; }
+.ai-image-fallback {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 13px;
+  padding: 12px;
+  text-align: center;
+}
+.ai-image-fallback small { font-weight: 700; font-size: 12px; }
+.ai-image-fallback span { font-size: 11.5px; color: var(--ink-3); }
+
+/* 历史列表 */
+.ai-history-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+.ai-history-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.ai-history-row:last-child { border-bottom: none; }
+.ai-history-cover {
+  width: 52px; height: 64px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  border: 1px solid var(--line);
+}
+.ai-history-cover img { width: 100%; height: 100%; object-fit: cover; }
+.ai-history-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ai-history-info strong { font-size: 13.5px; color: var(--ink-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-history-info small { font-size: 11.5px; color: var(--ink-3); }
+.ai-history-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ai-history-actions button { padding: 5px 10px; font-size: 12px; min-height: 28px; height: auto; }
