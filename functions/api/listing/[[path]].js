@@ -242,7 +242,9 @@ async function translateBatch(env, texts) {
 // KV 绑定名:env.LISTING_CACHE(在 Cloudflare Pages 设置里绑定)。
 // 命中 KV 直接返回,不调 Ozon/WB;未绑定 KV 时优雅降级为每次抓取。
 // key 规则:cat:<平台>:<店铺clientId 或 token 标识>
-const CAT_KV_TTL = 60 * 60 * 24 * 30; // 30 天
+// TTL 5 年 ≈ 永久:Ozon/WB 类目极少变化,首次抓取后基本不需要重抓;
+// 如需重抓,在「商品上架」页点击「↻ 刷新类目」按钮,会主动清除 KV 缓存并重新拉取。
+const CAT_KV_TTL = 60 * 60 * 24 * 365 * 5; // 5 年（实际永久）
 
 function catKvKey(platform, store) {
   const idPart = store.clientId || store.token || "default";
@@ -741,9 +743,9 @@ async function getCategoryAttributes(env, searchParams, headers = {}) {
       dictionary: Number(a.dictionary_id || 0),
       values: Array.isArray(a.values) ? a.values.slice(0, 200).map((v) => ({ id: v.id, value: v.value })) : [],
     }));
-    // 缓存到 KV(30 天)
+    // 缓存到 KV(5 年,实际永久——类目属性极少变化)
     if (env.LISTING_CACHE) {
-      try { await env.LISTING_CACHE.put(cacheKey, JSON.stringify({ attributes, ts: Date.now() }), { expirationTtl: 30 * 24 * 3600 }); } catch {}
+      try { await env.LISTING_CACHE.put(cacheKey, JSON.stringify({ attributes, ts: Date.now() }), { expirationTtl: 60 * 60 * 24 * 365 * 5 }); } catch {}
     }
     return { ok: true, attributes, source: "fresh", categoryId, typeId, total: attributes.length, required: attributes.filter((a) => a.isRequired).length };
   } catch (e) {
