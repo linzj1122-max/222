@@ -1336,7 +1336,7 @@ async function fetchAdsStatisticsReport(headers, uuid) {
   return { ok: false, status: response.status, error: payload?.error || text.slice(0, 240) };
 }
 
-async function pollAdsStatisticsStatus(headers, uuid, { maxAttempts = 20, intervalMs = 3000 } = {}) {
+async function pollAdsStatisticsStatus(headers, uuid, { maxAttempts = 8, intervalMs = 2000 } = {}) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const status = await fetchAdsStatisticsStatus(headers, uuid);
     if (/OK|SUCCESS|DONE|COMPLETED/i.test(status.state)) return { ok: true, state: status.state };

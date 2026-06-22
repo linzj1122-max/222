@@ -567,7 +567,7 @@ const initialProducts = [
       adsAutoRefreshing = true;
       try {
         const key = `${adDateFrom}|${adDateTo}`;
-        if (adsRowsCache[key]) {
+        if (adsRowsCache[key]?.rows?.length) {
           backendAds = adsRowsCache[key].rows || [];
           adsStatusRows = adsRowsCache[key].status || [];
           renderAds();
@@ -581,7 +581,15 @@ const initialProducts = [
           return;
         }
         renderAds();
-        await loadBackendAds({ forceCreate: true, dateFrom: adDateFrom, dateTo: adDateTo });
+        const wideFrom = addDays(adDateFrom < todayIso() ? adDateFrom : todayIso(), -30);
+        const wideTo = todayIso();
+        await loadBackendAds({ forceCreate: true, dateFrom: wideFrom, dateTo: wideTo });
+        const wideKey = `${wideFrom}|${wideTo}`;
+        const wideRows = adsRowsCache[wideKey]?.rows || backendAds;
+        if (wideRows.length) {
+          backendAds = wideRows;
+          adsStatusRows = adsRowsCache[wideKey]?.status || adsStatusRows;
+        }
         renderAds();
       } catch {} finally {
         adsAutoRefreshing = false;
