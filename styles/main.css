@@ -192,6 +192,9 @@ nav {
   color: var(--ink-3);
   transition: inherit;
   flex-shrink: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
 }
 
 .tab-btn:hover:not(.active) {
