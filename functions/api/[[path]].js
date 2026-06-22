@@ -340,25 +340,39 @@ function integrations(env) {
 
 async function verifyOzonCredentials(clientId, apiKey) {
   if (!clientId || !apiKey) return { ok: false, status: 0, error: "缺少 Client ID 或 API 密钥" };
-  try {
-    const response = await fetch("https://api-seller.ozon.ru/v1/supplier", {
-      method: "POST",
-      headers: { "content-type": "application/json", "client-id": clientId, "api-key": apiKey },
-      body: JSON.stringify({}),
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = JSON.parse(text); } catch { payload = null; }
-    if (response.ok) {
-      const name = payload?.result?.name || payload?.name || "";
-      return { ok: true, status: response.status, storeName: name, message: name ? `验证成功：${name}` : "验证成功，凭证有效" };
+  const endpoints = [
+    "https://api-seller.ozon.ru/v3/product/info/list",
+    "https://api-seller.ozon.ru/v2/product/list",
+  ];
+  let lastError = "";
+  for (const endpoint of endpoints) {
+    try {
+      const body = endpoint.includes("/list") && endpoint.includes("product/list")
+        ? JSON.stringify({ filter: { visibility: "ALL" }, limit: 1, last_id: "" })
+        : JSON.stringify({ sku: [], offer_id: [] });
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": clientId, "api-key": apiKey },
+        body,
+      });
+      const text = await response.text();
+      let payload = null;
+      try { payload = JSON.parse(text); } catch { payload = null; }
+      if (response.ok) {
+        return { ok: true, status: response.status, message: "验证成功：Client ID 与 API 密钥有效，已通过 Ozon 校验" };
+      }
+      if (payload && (payload.code || payload.message)) {
+        const msg = payload.message || payload.error?.message || "凭证被 Ozon 拒绝";
+        if (/deactivated|invalid|unauthor|access|api-key/i.test(msg)) {
+          return { ok: false, status: response.status, error: `Ozon 拒绝：${msg}（请到 Ozon 后台重新生成密钥）`, code: payload.code || "" };
+        }
+        lastError = msg;
+      }
+    } catch (error) {
+      lastError = error.message || String(error);
     }
-    const code = payload?.code || payload?.error?.code || "";
-    const message = payload?.message || payload?.error?.message || text.slice(0, 200) || `HTTP ${response.status}`;
-    return { ok: false, status: response.status, error: message, code };
-  } catch (error) {
-    return { ok: false, status: 0, error: error.message || String(error) };
   }
+  return { ok: false, status: 0, error: lastError || "无法连接 Ozon API，请稍后重试" };
 }
 
 const ANALYTICS_METRICS = ["revenue", "ordered_units", "session_view", "hits_view_search", "hits_tocart_search", "conv_tocart"];
