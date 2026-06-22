@@ -46,7 +46,7 @@ const initialProducts = [
     const feeScopeKey = (platform, mode, fulfillment) => `${platform}|${mode}|${fulfillment}`;
     const FULFILLMENT_OPTIONS = (platform, mode) => {
       if (mode === "cross") {
-        return platform === "Ozon" ? ["FBP"] : ["FBS"];
+        return platform === "Ozon" ? ["FBP", "直发"] : ["FBS", "直发"];
       }
       return ["FBO", "FBS"];
     };
