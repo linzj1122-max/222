@@ -1454,9 +1454,12 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         continue;
       }
       const taskMap = await loadAdsTaskMapFromKV(env, key);
-      const reportResults = await Promise.all(campaignIds.slice(0, 10).map((campaignId) => fetchAdsCampaignReport(headers, account, campaignId, from, to, taskMap[String(campaignId)] || "")));
-      for (const result of reportResults) {
-        if (result.uuid) taskMap[String(result.campaignId)] = result.uuid;
+      const reportResults = [];
+      for (const campaignId of campaignIds.slice(0, 10)) {
+        const result = await fetchAdsCampaignReport(headers, account, campaignId, from, to, taskMap[String(campaignId)] || "");
+        reportResults.push(result);
+        if (result.uuid) taskMap[String(campaignId)] = result.uuid;
+        if (result.activeLimit) break;
       }
       await saveAdsTaskMapToKV(env, key, taskMap);
       const perCampaignMeta = [];
