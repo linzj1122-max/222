@@ -1867,6 +1867,7 @@ const initialProducts = [
       pendingAdDateAnchor = null;
       adDateFrom = sorted[0];
       adDateTo = sorted[1];
+      $("adDateRangePanel")?.classList.remove("open");
       updateAdDateInputs();
       await autoRefreshAds();
     }
