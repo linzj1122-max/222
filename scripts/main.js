@@ -374,6 +374,44 @@ const initialProducts = [
       return false;
     }
 
+    // 广告缓存持久化到 KV(跨设备/跨部署共享)。原因:Cloudflare Functions 内存
+    // 每次冷启动都清空,必须把已拉到的数据持久化,否则重启后一片空白。
+    let cloudAdsSyncing = false;
+    function syncAdsCacheToCloud() {
+      if (cloudAdsSyncing || !backendEnabled) return;
+      cloudAdsSyncing = true;
+      fetch("/api/ads-cache", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cache: adsRowsCache, tasks: adsTaskCache }),
+      }).catch((e) => console.warn("[ads-cache] 云端同步失败:", e.message))
+        .finally(() => { cloudAdsSyncing = false; });
+    }
+    async function loadAdsCacheFromCloud() {
+      if (!backendEnabled) return false;
+      try {
+        const res = await fetch("/api/ads-cache");
+        const data = await res.json();
+        if (data.ok && data.cache && typeof data.cache === "object") {
+          const cloudKeys = Object.keys(data.cache);
+          for (const k of cloudKeys) {
+            if (!adsRowsCache[k] || (adsRowsCache[k]?.updatedAt || 0) < (data.cache[k]?.updatedAt || 0)) {
+              adsRowsCache[k] = data.cache[k];
+            }
+          }
+          if (data.tasks && typeof data.tasks === "object") {
+            for (const k of Object.keys(data.tasks)) {
+              if (!adsTaskCache[k]) adsTaskCache[k] = data.tasks[k];
+            }
+          }
+          return cloudKeys.length > 0;
+        }
+      } catch (e) {
+        console.warn("[ads-cache] 云端加载失败:", e.message);
+      }
+      return false;
+    }
+
     async function apiRequest(path, options = {}) {
       const response = await fetch(path, {
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -482,10 +520,10 @@ const initialProducts = [
           backendAds = newRows;
           adsStatusRows = newStatus;
         }
-        if (backendAds.length) {
-          const cleanStatus = adsStatusRows.filter((row) => !row.uuid || /READY|OK|SUCCESS|DONE|COMPLETED|CACHED/i.test(String(row.state || "")));
-          adsRowsCache[key] = { rows: backendAds, status: cleanStatus, updatedAt: new Date().toISOString() };
+        if (adsStatusRows.length || backendAds.length) {
+          adsRowsCache[key] = { rows: backendAds, status: adsStatusRows, updatedAt: new Date().toISOString() };
           save();
+          syncAdsCacheToCloud();
         }
         fetchAdImagesForRows(backendAds).then(renderAds);
         const found = adsStatusRows.find((row) => row.uuid);
@@ -3561,6 +3599,10 @@ const initialProducts = [
       // 启动时从云端 KV 加载店铺(若 KV 有数据则覆盖本地,解决重新部署/换设备丢失问题)
       loadStoresFromCloud().then((loaded) => {
         if (loaded) { renderApiConfigs(); renderAll(); }
+      });
+      // 启动时从云端 KV 加载广告缓存,避免后端冷启动后一片空白
+      loadAdsCacheFromCloud().then((loaded) => {
+        if (loaded) { renderAds(); }
       });
       if (backendEnabled) autoRefreshAds();
       // 页面加载后静默预缓存28天广告数据（每日一次）

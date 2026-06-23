@@ -1360,15 +1360,37 @@ async function pollAdsStatisticsStatus(headers, uuid, { maxAttempts = 8, interva
   return { ok: false, state: "TIMEOUT", error: `still not ready after ${maxAttempts * intervalMs / 1000}s` };
 }
 
-async function fetchAdsCampaignReport(headers, account, campaignId, from, to) {
-  const created = await createAdsStatisticsReport(headers, [campaignId], from, to);
-  if (!created.ok) return { campaignId, ok: false, error: created.error, activeLimit: created.activeLimit };
-  const uuid = created.uuid;
+async function fetchAdsCampaignReport(headers, account, campaignId, from, to, existingUuid = "") {
+  let uuid = existingUuid;
+  if (!uuid) {
+    const created = await createAdsStatisticsReport(headers, [campaignId], from, to);
+    if (!created.ok) return { campaignId, ok: false, error: created.error, activeLimit: created.activeLimit };
+    uuid = created.uuid;
+  }
   const polled = await pollAdsStatisticsStatus(headers, uuid);
   if (!polled.ok) return { campaignId, ok: false, uuid, error: polled.error, state: polled.state };
   const report = await fetchAdsStatisticsReport(headers, uuid);
   if (!report.ok) return { campaignId, ok: false, uuid, error: report.error, state: "REPORT_PENDING" };
   return { campaignId, ok: true, uuid, payload: report.payload };
+}
+
+async function loadAdsTaskMapFromKV(env, key) {
+  if (!env.LISTING_CACHE) return {};
+  try {
+    const raw = await env.LISTING_CACHE.get(`ads:task:${key}`, "json");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveAdsTaskMapToKV(env, key, map) {
+  if (!env.LISTING_CACHE) return;
+  try {
+    await env.LISTING_CACHE.put(`ads:task:${key}`, JSON.stringify({ ...map, _ts: Date.now() }));
+  } catch (e) {
+    console.warn("[ads:task] KV write failed:", e.message);
+  }
 }
 
 async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
@@ -1431,7 +1453,12 @@ async function fetchOzonAdsDailyProducts(env, from, to, options = {}) {
         meta.push({ store: account.name, state: "NO_CAMPAIGNS", rows: 0, campaigns: 0 });
         continue;
       }
-      const reportResults = await Promise.all(campaignIds.slice(0, 10).map((campaignId) => fetchAdsCampaignReport(headers, account, campaignId, from, to)));
+      const taskMap = await loadAdsTaskMapFromKV(env, key);
+      const reportResults = await Promise.all(campaignIds.slice(0, 10).map((campaignId) => fetchAdsCampaignReport(headers, account, campaignId, from, to, taskMap[String(campaignId)] || "")));
+      for (const result of reportResults) {
+        if (result.uuid) taskMap[String(result.campaignId)] = result.uuid;
+      }
+      await saveAdsTaskMapToKV(env, key, taskMap);
       const perCampaignMeta = [];
       for (const result of reportResults) {
         if (result.ok) {
@@ -1687,6 +1714,25 @@ export async function onRequest(context) {
         return json({ ok: true, stores: [], ts: 0 });
       } catch (e) {
         return json({ ok: false, error: "读取店铺失败:" + (e.message || String(e)) });
+      }
+    }
+    if (path === "ads-cache") {
+      if (!env.LISTING_CACHE) return json({ ok: false, error: "未绑定 KV,无法持久化广告缓存" }, 503);
+      if (request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const cache = body.cache && typeof body.cache === "object" ? body.cache : {};
+        const tasks = body.tasks && typeof body.tasks === "object" ? body.tasks : {};
+        await env.LISTING_CACHE.put("ads:cache", JSON.stringify({ cache, tasks, ts: Date.now() }));
+        return json({ ok: true, keys: Object.keys(cache).length, tasks: Object.keys(tasks).length });
+      }
+      try {
+        const raw = await env.LISTING_CACHE.get("ads:cache", "json");
+        if (raw && typeof raw === "object") {
+          return json({ ok: true, cache: raw.cache || {}, tasks: raw.tasks || {}, ts: raw.ts || 0 });
+        }
+        return json({ ok: true, cache: {}, tasks: {}, ts: 0 });
+      } catch (e) {
+        return json({ ok: false, error: "读取广告缓存失败:" + (e.message || String(e)) });
       }
     }
     if (path === "probe/ozon-analytics") {
