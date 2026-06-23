@@ -521,6 +521,18 @@ const initialProducts = [
           adsStatusRows = newStatus;
         }
         if (adsStatusRows.length || backendAds.length) {
+          // 按天拆分缓存:每一天的数据单独存入 adsRowsCache[date]
+          const dayMap = {};
+          for (const row of backendAds) {
+            const d = row.date || row.dateFrom || "";
+            if (!d) continue;
+            if (!dayMap[d]) dayMap[d] = [];
+            dayMap[d].push(row);
+          }
+          for (const [date, rows] of Object.entries(dayMap)) {
+            adsRowsCache[date] = { rows, status: adsStatusRows, updatedAt: new Date().toISOString() };
+          }
+          // 同时保留范围缓存,用于快速命中
           adsRowsCache[key] = { rows: backendAds, status: adsStatusRows, updatedAt: new Date().toISOString() };
           save();
           syncAdsCacheToCloud();
@@ -603,34 +615,62 @@ const initialProducts = [
     async function autoRefreshAds() {
       if (!backendEnabled || adsAutoRefreshing) return;
       adsAutoRefreshing = true;
+      setAdsLoading(true);
       try {
         const key = `${adDateFrom}|${adDateTo}`;
+        // 1. 先检查精确范围缓存
         if (adsRowsCache[key]?.rows?.length) {
           backendAds = adsRowsCache[key].rows || [];
           adsStatusRows = adsRowsCache[key].status || [];
           renderAds();
           return;
         }
-        const covered = adsRowsCoverRange(adDateFrom, adDateTo);
-        if (covered?.rows?.length) {
-          backendAds = covered.rows;
-          adsStatusRows = covered.status;
+        // 2. 按天检查缓存:收集已有缓存的天数和缺失的天数
+        const days = [];
+        let cursor = new Date(`${adDateFrom}T00:00:00`);
+        const end = new Date(`${adDateTo}T00:00:00`);
+        const cachedRows = [];
+        const missingDays = [];
+        while (cursor <= end) {
+          const day = cursor.toISOString().slice(0, 10);
+          days.push(day);
+          if (adsRowsCache[day]?.rows?.length) {
+            cachedRows.push(...adsRowsCache[day].rows);
+          } else {
+            missingDays.push(day);
+          }
+          cursor.setDate(cursor.getDate() + 1);
+        }
+        // 如果全部天数都有缓存,直接显示
+        if (missingDays.length === 0 && cachedRows.length > 0) {
+          backendAds = cachedRows;
+          adsStatusRows = [];
           renderAds();
           return;
         }
-        renderAds();
-        const wideFrom = addDays(adDateFrom < todayIso() ? adDateFrom : todayIso(), -30);
-        const wideTo = todayIso();
-        await loadBackendAds({ forceCreate: true, dateFrom: wideFrom, dateTo: wideTo });
-        const wideKey = `${wideFrom}|${wideTo}`;
-        const wideRows = adsRowsCache[wideKey]?.rows || backendAds;
-        if (wideRows.length) {
-          backendAds = wideRows;
-          adsStatusRows = adsRowsCache[wideKey]?.status || adsStatusRows;
+        // 如果部分天数有缓存,先显示已有数据
+        if (cachedRows.length > 0) {
+          backendAds = cachedRows;
+          renderAds();
+        }
+        // 3. 抓取缺失的天数(如果有)
+        if (missingDays.length > 0) {
+          const missingFrom = missingDays[0];
+          const missingTo = missingDays[missingDays.length - 1];
+          await loadBackendAds({ forceCreate: true, dateFrom: missingFrom, dateTo: missingTo });
+          // 合并新抓取的数据到已有数据
+          const newRows = backendAds.filter((row) => {
+            const d = row.date || row.dateFrom || "";
+            return missingDays.includes(d);
+          });
+          if (cachedRows.length > 0) {
+            backendAds = [...cachedRows, ...newRows];
+          }
         }
         renderAds();
       } catch {} finally {
         adsAutoRefreshing = false;
+        setAdsLoading(false);
       }
     }
 
@@ -1809,7 +1849,6 @@ const initialProducts = [
           }
           $("adDateRangePanel")?.classList.remove("open");
           updateAdDateInputs();
-          renderAds();
           await autoRefreshAds();
         });
       });
@@ -1821,7 +1860,6 @@ const initialProducts = [
         adDateFrom = value;
         adDateTo = value;
         updateAdDateInputs();
-        renderAds();
         await autoRefreshAds();
         return;
       }
@@ -1830,7 +1868,6 @@ const initialProducts = [
       adDateFrom = sorted[0];
       adDateTo = sorted[1];
       updateAdDateInputs();
-      renderAds();
       await autoRefreshAds();
     }
 
