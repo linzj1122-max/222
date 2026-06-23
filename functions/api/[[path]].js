@@ -1676,11 +1676,22 @@ export async function onRequest(context) {
       const cacheable = isHistoricalRange(to);
       const uuidExtra = url.searchParams.get("uuid") || "";
       const key = dataCacheKey("ads", null, from, to, uuidExtra);
-      return json(await withCache(env, key, 6 * 3600, cacheable, force, () => fetchOzonAdsDailyProducts(env, from, to, {
+      // 自定义缓存:只缓存 rows 有数据的结果,避免限流错误被缓存
+      if (!force && cacheable) {
+        const cached = await kvGetData(env, key);
+        if (cached && cached.data && Array.isArray(cached.data.rows) && cached.data.rows.length > 0) {
+          return json({ ...cached.data, _cache: { hit: true, ts: cached.ts } });
+        }
+      }
+      const fresh = await fetchOzonAdsDailyProducts(env, from, to, {
         force: url.searchParams.get("force") === "1",
         create: url.searchParams.get("create") === "1",
         uuid: uuidExtra,
-      })));
+      });
+      if (cacheable && fresh.rows && fresh.rows.length > 0) {
+        await kvPutData(env, key, fresh, 6 * 3600);
+      }
+      return json(fresh);
     }
     if (path === "competitors") return json([]);
     if (path === "integrations" || path === "integrations/verify") {
