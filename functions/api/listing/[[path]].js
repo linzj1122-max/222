@@ -178,6 +178,177 @@ function normalizeTemplateAttribute(attr) {
   };
 }
 
+function extractBalancedJsonObject(text, marker) {
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const start = text.indexOf("{", markerIndex + marker.length);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parse1688Context(html) {
+  const raw = extractBalancedJsonObject(html, "window.contextPath,");
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function parse1688OfferDetails(html) {
+  const raw = extractBalancedJsonObject(html, "window.offer_details");
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function uniqList(list, limit = 100) {
+  return [...new Set((list || []).filter(Boolean).map((item) => String(item).trim()).filter(Boolean))].slice(0, limit);
+}
+
+function htmlDecode(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function extractImageUrls(value) {
+  const text = htmlDecode(value);
+  return uniqList([...text.matchAll(/https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp)(?:_[a-z]+)?/gi)].map((m) => m[0]), 80);
+}
+
+function attrPairsFromCpv(cpv) {
+  const rows = [];
+  const add = (items) => {
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      const name = compactText(item?.name || item?.propertyName || "");
+      const values = Array.isArray(item?.values) ? item.values : [item?.value].filter(Boolean);
+      const value = values.map((v) => compactText(v)).filter(Boolean).join("; ");
+      if (name && value) rows.push({ name, value });
+    });
+  };
+  add(cpv?.decisionCpv);
+  add(cpv?.normalCpv);
+  return rows;
+}
+
+function firstPrice(model) {
+  const fields = model || {};
+  const candidates = [
+    fields.priceModel?.currentPrices?.[0]?.price,
+    fields.finalPriceModel?.tradeWithoutPromotion?.offerPriceDisplay,
+    fields.priceModel?.originalPriceDisplay,
+    fields.finalPriceModel?.tradeWithoutPromotion?.offerMinPrice,
+  ];
+  return candidates.map(amount).find((n) => n > 0) || 0;
+}
+
+function parse1688ProductFromContext(context, html, sourceUrl) {
+  const data = context?.result?.data || {};
+  const titleFields = data.productTitle?.fields || {};
+  const galleryFields = data.gallery?.fields || {};
+  const priceFields = data.mainPrice?.fields || {};
+  const packFields = data.productPackInfo?.fields || {};
+  const shippingFields = data.shippingServices?.fields || {};
+  const cpv = galleryFields.CpvEnhance || {};
+  const attrs = attrPairsFromCpv(cpv);
+  const attrMap = new Map(attrs.map((item) => [item.name, item.value]));
+  const skuRows = priceFields.finalPriceModel?.tradeWithoutPromotion?.skuMapOriginal || [];
+  const packRows = packFields.pieceWeightScale?.pieceWeightScaleInfo || [];
+  const sku = skuRows[0] || {};
+  const pack = packRows[0] || {};
+  const price = firstPrice(priceFields);
+  const shipping = amount(shippingFields.freightInfo?.totalCost);
+  const offerDetails = parse1688OfferDetails(html);
+  const detailImages = extractImageUrls(offerDetails?.content || "");
+  const galleryImages = uniqList([...(galleryFields.mainImage || []), ...(galleryFields.offerImgList || [])], 20);
+  const productName = attrMap.get("产品名称") || attrMap.get("商品名称") || titleFields.title || galleryFields.subject || "";
+  const spec = attrMap.get("产品规格") || sku.specAttrs || pack.sku1 || "";
+  const weight = amount(pack.weight) || amount(shippingFields.freightInfo?.skuWeight?.[sku.skuId]) * 1000 || 0;
+  const dimensions = {
+    length: amount(pack.length) ? amount(pack.length) * 10 : 0,
+    width: amount(pack.width) ? amount(pack.width) * 10 : 0,
+    height: amount(pack.height) ? amount(pack.height) * 10 : 0,
+  };
+  return {
+    ok: true,
+    source: "1688",
+    sourceUrl,
+    offerId: String(galleryFields.offerId || titleFields.editUrl?.match(/offerId=(\d+)/)?.[1] || ""),
+    title: compactText(titleFields.title || galleryFields.subject || productName, 500),
+    productName: compactText(productName, 300),
+    brand: compactText(attrMap.get("品牌") || titleFields.tagList?.[0]?.brandText || "", 120),
+    code: compactText(attrMap.get("货号") || sku.skuId || "", 80),
+    model: compactText(spec || productName, 200),
+    spec: compactText(spec, 300),
+    unit: compactText(titleFields.unit || priceFields.unit || "", 20),
+    price,
+    originalPrice: amount(priceFields.priceModel?.originalPrices?.[0]?.price || priceFields.priceModel?.originalPriceDisplay),
+    shipping,
+    purchaseCost: Math.round((price + shipping) * 100) / 100,
+    stock: amount(sku.canBookCount),
+    weight,
+    ...dimensions,
+    attributes: attrs,
+    images: galleryImages,
+    detailImages,
+    variants: skuRows.map((row) => ({
+      skuId: String(row.skuId || ""),
+      spec: compactText(row.specAttrs || ""),
+      price,
+      stock: amount(row.canBookCount),
+      weight: amount((packRows.find((item) => String(item.skuId) === String(row.skuId)) || {}).weight),
+    })),
+    rawHints: {
+      targetLocation: compactText(shippingFields.targetLocation || shippingFields.freightInfo?.recieveAddress || ""),
+      freightText: shipping ? `另需运费(预估): ¥${shipping}` : "",
+    },
+  };
+}
+
+async function import1688Product(body) {
+  const sourceUrl = String(body?.url || "").trim();
+  if (!/^https:\/\/detail\.1688\.com\/offer\/\d+\.html/i.test(sourceUrl)) {
+    return { ok: false, error: "请填写 1688 商品详情链接，例如 https://detail.1688.com/offer/xxxx.html" };
+  }
+  const res = await fetch(sourceUrl, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "referer": "https://www.1688.com/",
+    },
+  });
+  const html = await res.text();
+  if (!res.ok || !html) return { ok: false, error: `1688 页面读取失败:${res.status}` };
+  if (/_____tmd_____\/punish|x5secdata|punish\?/.test(html)) {
+    return { ok: false, error: "1688 对云端抓取返回了验证页。请在已登录浏览器中打开商品页后，用浏览器抓取兜底导入。" };
+  }
+  if (/验证码|滑块|login|登录/.test(html) && !html.includes("window.context")) {
+    return { ok: false, error: "1688 要求登录或验证码，后端暂时无法直接抓取。请先在浏览器打开该链接后再试。" };
+  }
+  const context = parse1688Context(html);
+  if (!context?.result?.data) return { ok: false, error: "未解析到 1688 商品结构化数据，可能被反爬或页面结构变化。" };
+  return parse1688ProductFromContext(context, html, sourceUrl);
+}
+
 function templateKvKeys(template) {
   const keys = [];
   const name = String(template?.name || "").trim();
@@ -1309,6 +1480,10 @@ export async function onRequest(context) {
     if (path === "generate-copy") {
       const body = await request.json().catch(() => ({}));
       return json(await generateCopy(env, body));
+    }
+    if (path === "import-1688") {
+      const body = await request.json().catch(() => ({}));
+      return json(await import1688Product(body));
     }
     if (path === "preflight") {
       const body = await request.json().catch(() => ({}));

@@ -125,9 +125,21 @@
       if (okAt(mid)) high = mid;
       else low = mid;
     }
-    const priceRmb = high;
-    const evalResult = evaluateGuooPrice(priceRmb, scheme, inputs);
-    return { scheme, priceRmb, priceRub: Math.ceil(evalResult.saleRub), ...evalResult };
+    const minimumPriceRmb = high;
+    const evalResult = evaluateGuooPrice(minimumPriceRmb, scheme, inputs);
+    const recommendedPriceRmb = Math.ceil(minimumPriceRmb * 2 * 100) / 100;
+    const recommendedEval = evaluateGuooPrice(recommendedPriceRmb, scheme, inputs);
+    return {
+      scheme,
+      priceRmb: minimumPriceRmb,
+      minimumPriceRmb,
+      minimumPriceRub: Math.ceil(evalResult.saleRub),
+      recommendedPriceRmb,
+      recommendedPriceRub: Math.ceil(recommendedEval.saleRub),
+      recommendedGrossRate: recommendedEval.grossRate,
+      recommendedGrossProfit: recommendedEval.grossProfit,
+      ...evalResult,
+    };
   }
 
   function calculateGuooPricing() {
@@ -146,10 +158,9 @@
     if (inputs.targetGrossRate < 0.65) inputs.targetGrossRate = 0.65;
     const candidates = GUOO_RFBS_STANDARD.map((scheme) => solvePriceForScheme(scheme, inputs)).filter(Boolean);
     if (!candidates.length) return { ok: false, error: "未找到满足 GUOO realFBS 限制且毛利率≥65%的方案,请检查价格区间/重量/尺寸。" };
-    candidates.sort((a, b) => a.priceRub - b.priceRub);
+    candidates.sort((a, b) => a.minimumPriceRmb - b.minimumPriceRmb);
     const best = candidates[0];
-    const finalEval = evaluateGuooPrice(best.priceRub / inputs.exchangeRate, best.scheme, inputs);
-    return { ok: true, ...best, ...finalEval, targetGrossRate: inputs.targetGrossRate, exchangeRate: inputs.exchangeRate, purchaseCost: inputs.purchaseCost, kg: inputs.kg, dim: inputs.dim };
+    return { ok: true, ...best, targetGrossRate: inputs.targetGrossRate, exchangeRate: inputs.exchangeRate, purchaseCost: inputs.purchaseCost, kg: inputs.kg, dim: inputs.dim };
   }
 
   // ---- 草稿状态 ----
@@ -172,6 +183,9 @@
     brand: "",
     model: "",
     purchaseCost: "",
+    sourceUrl1688: "",
+    purchasePrice1688: "",
+    purchaseShipping1688: "",
     targetGrossRate: "65",
     commissionRate: "12",
     exchangeRate: "11.5",
@@ -329,6 +343,20 @@
         <hr class="listing-divider" />
 
         <div data-source-pane="single">
+          <section class="listing-import-box">
+            <div class="toolbar">
+              <div>
+                <h3>1688 链接导入</h3>
+                <p class="section-note">粘贴 1688 商品详情链接后，会自动填入基础信息、采购成本、图片，并只写入当前 Ozon 类目支持的属性。</p>
+              </div>
+              <button class="primary" type="button" id="lst_import1688">导入并匹配属性</button>
+            </div>
+            <div class="cols-2">
+              <label>1688 商品链接<input id="lst_sourceUrl1688" type="url" placeholder="https://detail.1688.com/offer/xxxx.html" /></label>
+              <div class="listing-import-cost" id="lst_1688Cost">商品价/运费会自动读取。</div>
+            </div>
+            <div class="table-status" id="lst_1688Status">先选择 Ozon 末级类目，再导入 1688 链接，属性匹配会更准确。</div>
+          </section>
           <div class="cols-3">
             <label>货号<input id="lst_code" type="text" placeholder="例如 HS" /></label>
             <label>品牌<input id="lst_brand" type="text" placeholder="例如 Baseus" /></label>
@@ -342,13 +370,13 @@
           <div class="cols-3">
             <label>汇率 RUB/CNY<input id="lst_exchangeRate" type="number" step="0.0001" min="1" value="11.5" /></label>
             <label style="display:flex;align-items:flex-end;">
-              <button class="secondary" type="button" id="lst_calcPrice">按 GUOO 规则测算定价</button>
+              <button class="secondary" type="button" id="lst_calcPrice">按 GUOO 规则测算 RMB 定价</button>
             </label>
             <div class="listing-pricing-result" id="lst_pricingResult">填写采购成本、重量、尺寸后可测算售价。</div>
           </div>
           <div class="cols-3">
-            <label>售价 RUB<input id="lst_price" type="number" step="0.01" min="0" placeholder="例如 1890" /></label>
-            <label>折扣前价格 RUB<input id="lst_oldPrice" type="number" step="0.01" min="0" placeholder="例如 2590" /></label>
+            <label>售价 RMB<input id="lst_price" type="number" step="0.01" min="0" placeholder="例如 39.90" /></label>
+            <label>折扣前价格 RMB<input id="lst_oldPrice" type="number" step="0.01" min="0" placeholder="例如 59.90" /></label>
             <label>重量 g<input id="lst_weight" type="number" step="1" min="0" placeholder="例如 210" /></label>
           </div>
           <div class="cols-3">
@@ -1195,6 +1223,162 @@
     if (status && (!silent || count > 0)) status.textContent = `已自动生成 ${count} 个属性，可继续手动修改。`;
   }
 
+  function normalizeImportKey(value) {
+    return normalizeAttrText(value)
+      .replace(/[()（）【】\[\]{}]/g, "")
+      .replace(/\s+/g, "");
+  }
+
+  function importFactEntries(product) {
+    const entries = [];
+    const put = (name, value) => {
+      const text = Array.isArray(value) ? value.filter(Boolean).join("; ") : String(value || "").trim();
+      if (name && text) entries.push({ name: String(name), key: normalizeImportKey(name), value: text });
+    };
+    put("标题", product.title);
+    put("产品名称", product.productName);
+    put("品牌", product.brand);
+    put("货号", product.code);
+    put("型号", product.model);
+    put("规格", product.spec);
+    put("净含量", (product.attributes || []).find((item) => item.name === "净含量")?.value);
+    put("重量", product.weight ? String(product.weight) : "");
+    put("长", product.length ? String(product.length) : "");
+    put("宽", product.width ? String(product.width) : "");
+    put("高", product.height ? String(product.height) : "");
+    (product.attributes || []).forEach((item) => put(item.name, item.value));
+    return entries;
+  }
+
+  function attrAliases(attr) {
+    const text = `${attr.name || ""} ${attr.description || ""}`;
+    const key = normalizeImportKey(text);
+    const aliases = [key];
+    const pairs = [
+      ["品牌", ["brand", "бренд", "斜褉械薪写"]],
+      ["型号", ["model", "модель", "屑芯写械谢褜"]],
+      ["货号", ["sku", "offer", "артикул", "邪褉褌懈泻褍谢"]],
+      ["标题", ["title", "name", "название", "薪邪蟹胁邪薪"]],
+      ["产品名称", ["商品名称", "name", "название"]],
+      ["净含量", ["容量", "volume", "объем", "объемтовара"]],
+      ["规格", ["产品规格", "尺寸", "size", "размер"]],
+      ["重量", ["weight", "вес"]],
+      ["长", ["length", "длина"]],
+      ["宽", ["width", "ширина"]],
+      ["高", ["height", "высота"]],
+      ["适用人群", ["人群", "gender", "пол"]],
+      ["适用肤质", ["肤质", "skin"]],
+      ["化妆品功效", ["功效", "effect", "назначение"]],
+      ["质地", ["texture"]],
+      ["保质期", ["shelf", "срок"]],
+      ["产地", ["country", "origin", "страна"]],
+      ["包装种类", ["包装", "package"]],
+    ];
+    pairs.forEach(([cn, items]) => {
+      const keys = [cn, ...items].map(normalizeImportKey);
+      if (keys.some((item) => key.includes(item) || item.includes(key))) aliases.push(...keys);
+    });
+    return [...new Set(aliases.filter(Boolean))];
+  }
+
+  function matchImportValueToAttr(attr, entries) {
+    const aliases = attrAliases(attr);
+    const hit = entries.find((entry) => aliases.some((alias) => entry.key === alias || entry.key.includes(alias) || alias.includes(entry.key)));
+    if (!hit) return "";
+    return (attr.dictionary || attr.values?.length) ? chooseDictionaryValue(attr, hit.value) : hit.value;
+  }
+
+  function appendImportedParamRows(product, usedNames) {
+    const exists = new Set((draft.paramRows || []).map((row) => normalizeImportKey(row.name)));
+    const rows = (product.attributes || [])
+      .filter((item) => item.name && item.value && !usedNames.has(normalizeImportKey(item.name)) && !exists.has(normalizeImportKey(item.name)))
+      .slice(0, 24)
+      .map((item) => ({ name: item.name, value: item.value }));
+    draft.paramRows = [...(draft.paramRows || []), ...rows];
+  }
+
+  function applyImported1688Product(product) {
+    readStep2Form();
+    draft.sourceUrl1688 = product.sourceUrl || draft.sourceUrl1688;
+    draft.title = product.title || draft.title;
+    draft.description = product.title || draft.description;
+    draft.code = product.code || product.offerId || draft.code;
+    draft.brand = product.brand || draft.brand;
+    draft.model = product.productName || product.model || draft.model;
+    draft.purchasePrice1688 = product.price ? String(product.price) : draft.purchasePrice1688;
+    draft.purchaseShipping1688 = product.shipping ? String(product.shipping) : draft.purchaseShipping1688;
+    draft.purchaseCost = product.purchaseCost ? String(product.purchaseCost) : draft.purchaseCost;
+    draft.weight = product.weight ? String(Math.round(Number(product.weight))) : draft.weight;
+    draft.length = product.length ? String(Number(product.length).toFixed(1)) : draft.length;
+    draft.width = product.width ? String(Number(product.width).toFixed(1)) : draft.width;
+    draft.height = product.height ? String(Number(product.height).toFixed(1)) : draft.height;
+    const imgs = [...(product.images || []), ...(product.detailImages || [])].filter(Boolean);
+    if (imgs.length) {
+      const existing = new Set(draft.images || []);
+      draft.images = [...(draft.images || []), ...imgs.filter((src) => !existing.has(src))].slice(0, 15);
+    }
+    const entries = importFactEntries(product);
+    const usedNames = new Set();
+    let matched = 0;
+    currentAttributes.forEach((attr) => {
+      if (!attr?.id) return;
+      const value = matchImportValueToAttr(attr, entries);
+      if (!String(value || "").trim()) return;
+      attrValues[attr.id] = attr.isCollection ? String(value).split(";").map((item) => item.trim()).filter(Boolean) : String(value).trim();
+      matched += 1;
+      attrAliases(attr).forEach((alias) => usedNames.add(alias));
+    });
+    draft.attrValues = attrValues;
+    appendImportedParamRows(product, usedNames);
+    fillStep2Form();
+    renderAttrForm();
+    persistDraft();
+    const cost = $("lst_1688Cost");
+    if (cost) cost.textContent = `商品 ¥${Number(product.price || 0).toFixed(2)} + 运费 ¥${Number(product.shipping || 0).toFixed(2)} = 成本 ¥${Number(product.purchaseCost || 0).toFixed(2)}`;
+    const status = $("lst_1688Status");
+    const skipped = Math.max(0, (product.attributes || []).length - matched);
+    if (status) status.textContent = `已导入 1688 商品，匹配 Ozon 属性 ${matched} 个；未匹配的 ${skipped} 个已放入结构化产品参数，不会作为 Ozon 属性提交。`;
+  }
+
+  async function import1688Link() {
+    const input = $("lst_sourceUrl1688");
+    const status = $("lst_1688Status");
+    const btn = $("lst_import1688");
+    const url = String(input?.value || draft.sourceUrl1688 || "").trim();
+    if (!url) { alert("请先粘贴 1688 商品链接。"); return; }
+    if (!currentAttributes.length && draft.descriptionCategoryId && draft.typeId) {
+      await loadCategoryAttributes();
+    }
+    if (status) status.textContent = "正在抓取 1688 商品并匹配 Ozon 属性...";
+    if (btn) { btn.disabled = true; btn.textContent = "导入中..."; }
+    try {
+      const res = await fetch(API("import-1688"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({ url }),
+      });
+      const data = await readJsonResponse(res);
+      if (!data.ok) throw new Error(data.error || "1688 导入失败");
+      applyImported1688Product(data);
+      if (!currentAttributes.length && status) status.textContent += " 当前还没有 Ozon 类目属性，只填入了基础信息和产品参数。";
+    } catch (e) {
+      if (status) status.textContent = "1688 导入失败:" + (e.message || e);
+      alert("1688 导入失败:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "导入并匹配属性"; }
+    }
+  }
+
+  window.ozonWbImport1688Product = (product) => {
+    applyImported1688Product(product || {});
+    return {
+      ok: true,
+      attrCount: Object.keys(draft.attrValues || {}).length,
+      imageCount: (draft.images || []).length,
+      purchaseCost: draft.purchaseCost,
+    };
+  };
+
   function parseVariantDimensions(text) {
     return String(text || "")
       .split(/\n+/)
@@ -1265,7 +1449,7 @@
     box.innerHTML = `
       <div class="table-wrap">
         <table>
-          <thead><tr>${dimNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}<th>SKU</th><th>条码</th><th>售价 RUB</th><th>折扣前</th><th>库存</th><th>操作</th></tr></thead>
+          <thead><tr>${dimNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}<th>SKU</th><th>条码</th><th>售价 RMB</th><th>折扣前</th><th>库存</th><th>操作</th></tr></thead>
           <tbody>
             ${variants.map((variant, index) => `
               <tr data-variant-row="${index}">
@@ -1569,7 +1753,7 @@
 
   // ---- 收集第二步表单(产品信息 + 图片 + 文案) ----
   function readStep2Form() {
-    const fields = ["code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
+    const fields = ["sourceUrl1688", "code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
     fields.forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) draft[k] = el.value;
@@ -1589,10 +1773,18 @@
   }
 
   function fillStep2Form() {
-    ["code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
+    ["sourceUrl1688", "code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) el.value = draft[k] ?? "";
     });
+    const cost = $("lst_1688Cost");
+    if (cost) {
+      const price = Number(draft.purchasePrice1688 || 0);
+      const shipping = Number(draft.purchaseShipping1688 || 0);
+      cost.textContent = price || shipping
+        ? `商品 ¥${price.toFixed(2)} + 运费 ¥${shipping.toFixed(2)} = 成本 ¥${Number(draft.purchaseCost || 0).toFixed(2)}`
+        : "商品价/运费会自动读取。";
+    }
     $("lst_title") && ($("lst_title").value = draft.title || "");
     $("lst_description") && ($("lst_description").value = draft.description || "");
     $("lst_tags") && ($("lst_tags").value = draft.tags || "");
@@ -1617,9 +1809,12 @@
       return;
     }
     box.classList.remove("is-error");
+    const minimumPrice = Number(r.minimumPriceRmb || r.priceRmb || 0);
+    const recommendedPrice = Number(r.recommendedPriceRmb || minimumPrice * 2 || 0);
     box.innerHTML = `
       <strong>${escapeHtml(r.scheme?.name || "")}</strong> · ${escapeHtml(r.scheme?.method || "")}
-      <span>建议售价 ${Number(r.priceRub || 0).toFixed(0)}₽</span>
+      <span>最低售价 ¥${minimumPrice.toFixed(2)}</span>
+      <span>建议售价 ¥${recommendedPrice.toFixed(2)}</span>
       <span>毛利率 ${(Number(r.grossRate || 0) * 100).toFixed(1)}%</span>
       <span>运费 ¥${Number(r.freight || 0).toFixed(2)}</span>
       <span>计费重 ${Number(r.chargeKg || 0).toFixed(3)}kg</span>`;
@@ -1634,9 +1829,11 @@
       persistDraft();
       return;
     }
-    draft.price = String(result.priceRub);
-    const oldPrice = Math.ceil((result.priceRub * 1.35) / 10) * 10;
-    if (!toNumber(draft.oldPrice) || toNumber(draft.oldPrice) < result.priceRub) draft.oldPrice = String(oldPrice);
+    const minimumPrice = Number(result.minimumPriceRmb || result.priceRmb || 0);
+    const recommendedPrice = Number(result.recommendedPriceRmb || minimumPrice * 2 || 0);
+    draft.price = recommendedPrice.toFixed(2);
+    const oldPrice = Math.ceil(recommendedPrice * 1.35 * 100) / 100;
+    if (!toNumber(draft.oldPrice) || toNumber(draft.oldPrice) < recommendedPrice) draft.oldPrice = oldPrice.toFixed(2);
     fillStep2Form();
     persistDraft();
   }
@@ -2327,6 +2524,8 @@
     $("lst_generateCopy")?.addEventListener("click", generateCopy);
     $("lst_generateImages")?.addEventListener("click", generateImages);
     $("lst_calcPrice")?.addEventListener("click", runGuooPricing);
+    $("lst_import1688")?.addEventListener("click", import1688Link);
+    $("lst_sourceUrl1688")?.addEventListener("input", (e) => { draft.sourceUrl1688 = e.target.value; persistDraft(); });
     $("lst_addParamRow")?.addEventListener("click", () => {
       readParamRows();
       draft.paramRows = [...(draft.paramRows || []), { name: "", value: "" }];
