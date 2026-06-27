@@ -18,6 +18,7 @@
 
   const STORAGE_KEY = "ozon_wb_listing_drafts_v1";
   const CAT_CACHE_KEY = "ozon_wb_listing_cat_cache_v1";
+  const TEMPLATE_CACHE_KEY = "ozon_wb_listing_template_cache_v1";
   const STORE_KEY = "ozon_wb_api_configs_v1";
   const TAB_ID = "listing";
   const TAB_LABEL = "🚀 商品上架";
@@ -74,6 +75,15 @@
     return Number.isFinite(n) ? n : 0;
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function readJsonResponse(response) {
+    const text = await response.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : {}; } catch {
+      throw new Error(`接口返回非 JSON:${response.status} ${text.slice(0, 120)}`);
+    }
+    if (!response.ok) throw new Error(data.error || data.message || `API 请求失败:${response.status}`);
+    return data;
+  }
 
   // ---- 草稿状态 ----
   const emptyDraft = () => ({
@@ -103,6 +113,7 @@
     sellingPoints: "",
     images: [],   // dataURL 数组（参考图/单图）
     attrValues: {},   // 类目必填属性的值 { attrId: value }
+    attrDefinitions: [],
     // 第三步产出
     generatedImages: [],
     title: "",
@@ -110,6 +121,11 @@
     tags: "",
     // 发布
     publishResult: null,
+    preflightResult: null,
+    auditResult: null,
+    productId: "",
+    stockWarehouseId: "",
+    stockQty: "20",
   });
 
   let draft = emptyDraft();
@@ -228,6 +244,10 @@
             <label>宽 mm<input id="lst_width" type="number" step="0.1" min="0" placeholder="68.5" /></label>
             <label>高 mm<input id="lst_height" type="number" step="0.1" min="0" placeholder="144" /></label>
           </div>
+          <div class="cols-2">
+            <label>产品参数<textarea id="lst_params" rows="3" placeholder="材质、容量、适用场景、包装清单等"></textarea></label>
+            <label>核心卖点<textarea id="lst_sellingPoints" rows="3" placeholder="每行一个卖点,用于生成俄文文案和电商图"></textarea></label>
+          </div>
         </div>
 
         <div data-source-pane="tray" hidden>
@@ -247,7 +267,11 @@
 
         <hr class="listing-divider" />
         <div id="lst_attrsWrap" class="listing-attrs-wrap">
-          <div class="table-status" id="lst_attrsStatus">选择末级类目后,将自动加载该类目的必填属性。</div>
+          <div class="toolbar">
+            <div class="table-status" id="lst_attrsStatus">选择末级类目后,将自动加载该类目的必填属性。</div>
+            <button class="secondary" type="button" id="lst_importTemplate">导入 Ozon 模板表格</button>
+            <input id="lst_templateFile" type="file" accept=".xlsx,.xls" hidden />
+          </div>
           <div id="lst_attrsList"></div>
         </div>
 
@@ -255,6 +279,13 @@
         <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
         <label>搜索标签(<strong>每行一个</strong>,每个标签 ≤ 30 字符,最多 20 个)<textarea id="lst_tags" rows="4" placeholder="每行输入一个标签,例如:&#10;массажер&#10;для шеи"></textarea></label>
         <div id="lst_tagHint" class="table-status">提示:Ozon 要求每个标签单独一行,单个标签不超过 30 个字符(含 #)。</div>
+        <div class="actions">
+          <button class="secondary" type="button" id="lst_generateCopy">AI 生成俄文文案</button>
+          <button class="secondary" type="button" id="lst_generateImages">AI 生成 9 张商品图</button>
+          <button class="secondary" type="button" id="lst_applyGenImages" hidden>将生成图加入商品图片</button>
+        </div>
+        <div id="lst_aiStatus" class="table-status">可先上传参考图,再生成俄文文案或商品图。</div>
+        <div class="listing-gen-grid" id="lst_genGrid"></div>
 
         <div class="actions">
           <button class="secondary" type="button" id="lst_backTo1">← 上一步</button>
@@ -274,6 +305,20 @@
             <button class="primary" type="button" id="lst_publish">立即发布</button>
           </label>
         </div>
+        <div class="actions">
+          <button class="secondary" type="button" id="lst_preflight">上传前自检</button>
+          <button class="secondary" type="button" id="lst_pollStatus">轮询上架状态</button>
+          <button class="secondary" type="button" id="lst_auditProduct">完整性检查</button>
+          <button class="secondary" type="button" id="lst_loadWarehouses">加载仓库</button>
+        </div>
+        <div class="cols-3">
+          <label>库存仓库<select id="lst_stockWarehouse"><option value="">先加载仓库</option></select></label>
+          <label>库存数量<input id="lst_stockQty" type="number" min="0" step="1" value="20" /></label>
+          <label style="display:flex;align-items:flex-end;">
+            <button class="secondary" type="button" id="lst_setStock">设置库存</button>
+          </label>
+        </div>
+        <div class="listing-flow-checks" id="lst_flowChecks"></div>
         <div class="listing-log" id="lst_log">就绪。</div>
         <div class="actions">
           <button class="secondary" type="button" id="lst_backTo3">← 上一步</button>
@@ -325,6 +370,8 @@
     if (draft.step === 3) {
       $("lst_pubStore") && ($("lst_pubStore").value = String(draft.storeIndex));
       $("lst_pubOfferId") && ($("lst_pubOfferId").value = draft.code || draft.offerId || "");
+      $("lst_stockQty") && ($("lst_stockQty").value = draft.stockQty || "20");
+      renderFlowChecks();
     }
   }
 
@@ -462,7 +509,7 @@
         API(`categories?platform=${encodeURIComponent(platform)}&storeIndex=${storeIndex}`),
         { headers: storeHeaders() }
       );
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!data.ok) throw new Error(data.error || "抓取失败");
       categoryCache = data.categories || [];
       categoryTree = buildTree(categoryCache);
@@ -642,10 +689,122 @@
   // 加载类目的必填属性并渲染表单(进入第二步时触发)
   let currentAttributes = [];   // 当前类目的属性列表
   let attrValues = {};          // 用户填的属性值 { attrId: value }
+  function loadTemplateCache() {
+    try { return JSON.parse(localStorage.getItem(TEMPLATE_CACHE_KEY) || "{}") || {}; }
+    catch { return {}; }
+  }
+  function saveTemplateCache(cache) {
+    try { localStorage.setItem(TEMPLATE_CACHE_KEY, JSON.stringify(cache)); } catch {}
+  }
+  function templateCacheKeys(template = {}) {
+    const keys = [];
+    const name = String(template.name || "").trim();
+    if (name) keys.push(`name:${name}`);
+    if (template.categoryId && template.typeId) keys.push(`cat:${template.categoryId}:${template.typeId}`);
+    return keys;
+  }
+  function rememberTemplate(template) {
+    const cache = loadTemplateCache();
+    templateCacheKeys(template).forEach((key) => { cache[key] = template; });
+    saveTemplateCache(cache);
+  }
+  function findCachedTemplateForDraft() {
+    const cache = loadTemplateCache();
+    const exactKey = draft.descriptionCategoryId && draft.typeId ? `cat:${draft.descriptionCategoryId}:${draft.typeId}` : "";
+    if (exactKey && cache[exactKey]) return cache[exactKey];
+    const names = [draft.categoryNameZh, draft.categoryName, draft.categoryFullPath]
+      .map((v) => String(v || "").split("/").pop().trim())
+      .filter(Boolean);
+    for (const name of names) {
+      if (cache[`name:${name}`]) return cache[`name:${name}`];
+    }
+    return null;
+  }
+  function decodeBase64Utf8(value) {
+    const bin = atob(value);
+    const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  function orderedLookupValues(attr) {
+    const lookup = attr.LookupData || {};
+    const values = lookup.Values || {};
+    const ordered = Array.isArray(lookup.OrderedValueIDs) ? lookup.OrderedValueIDs : Object.keys(values);
+    return ordered.map((id) => values[String(id)] || values[id]).filter(Boolean).map((v) => ({
+      id: Number(v.ID || v.id || 0),
+      value: String(v.Value || v.value || ""),
+    })).filter((v) => v.value);
+  }
+  function normalizeTemplateAttribute(attr) {
+    const values = orderedLookupValues(attr);
+    return {
+      id: Number(attr.ID || attr.id || 0),
+      name: String(attr.Name || attr.name || ""),
+      description: String(attr.Label?.Value || attr.description || ""),
+      isRequired: Boolean(attr.IsRequired || attr.isRequired),
+      type: String(attr.Type || attr.type || "String"),
+      isCollection: Boolean(attr.IsCollection || attr.isCollection),
+      maxValueCount: Number(attr.MaxValueCount || attr.maxValueCount || 0),
+      complexId: Number(attr.ComplexID || attr.complexId || 0),
+      complexName: String(attr.ComplexName || attr.complexName || ""),
+      dictionary: values.length ? 1 : 0,
+      values,
+      source: "xlsx-template",
+    };
+  }
+  async function parseOzonTemplateFile(file) {
+    if (!window.XLSX) throw new Error("页面未加载 XLSX 解析库");
+    const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const ws = wb.Sheets.configs;
+    if (!ws) throw new Error("模板中没有 configs sheet");
+    const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+    const row = rows.find((r) => r[0] === "XLS_TEMPLATE_INFO_BASE64");
+    if (!row) throw new Error("没有找到 XLS_TEMPLATE_INFO_BASE64");
+    const raw = decodeBase64Utf8(row.slice(1).filter(Boolean).join(""));
+    const info = JSON.parse(raw);
+    const attributes = Object.values(info.attributes || {})
+      .map(normalizeTemplateAttribute)
+      .filter((a) => a.id && a.name);
+    return {
+      name: String(info.name || file.name.replace(/\.(xlsx|xls)$/i, "")),
+      categoryId: draft.descriptionCategoryId || 0,
+      typeId: draft.typeId || 0,
+      platform: draft.platform || "Ozon",
+      importedAt: nowIso(),
+      fileName: file.name,
+      attributes,
+      complexGroups: info.complex_list || {},
+    };
+  }
+  async function pushTemplateToKv(template) {
+    try {
+      const res = await fetch(API("template-cache"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({ template }),
+      });
+      return await readJsonResponse(res);
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
+  function applyTemplateAttributes(template, source = "模板") {
+    currentAttributes = Array.isArray(template?.attributes) ? template.attributes : [];
+    draft.attrDefinitions = currentAttributes;
+    attrValues = { ...(draft.attrValues || {}) };
+    renderAttrForm();
+    const reqCount = currentAttributes.filter((a) => a.isRequired).length;
+    const status = $("lst_attrsStatus");
+    if (status) status.textContent = `${source}:「${template.name || "未命名模板"}」共 ${currentAttributes.length} 个字段(其中 ${reqCount} 个必填)。`;
+  }
   async function loadCategoryAttributes() {
     const box = $("lst_attrsList");
     const status = $("lst_attrsStatus");
     if (!draft.descriptionCategoryId || !draft.typeId) {
+      const cachedTemplate = findCachedTemplateForDraft();
+      if (cachedTemplate) {
+        applyTemplateAttributes(cachedTemplate, "本地模板缓存");
+        return;
+      }
       currentAttributes = [];
       attrValues = {};
       if (box) box.innerHTML = "";
@@ -657,16 +816,22 @@
       const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${draft.storeIndex || 0}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}`), {
         headers: storeHeaders(),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!data.ok) throw new Error(data.error || "加载属性失败");
       currentAttributes = data.attributes || [];
+      draft.attrDefinitions = currentAttributes;
       attrValues = { ...(draft.attrValues || {}) };   // 恢复已填的值
       renderAttrForm();
       const reqCount = currentAttributes.filter((a) => a.isRequired).length;
       if (status) status.textContent = `该类目共 ${currentAttributes.length} 个属性(其中 ${reqCount} 个必填)。来源:${data.source === "cache" ? "缓存" : "实时"}。`;
     } catch (e) {
-      if (status) status.textContent = "属性加载失败:" + (e.message || e);
-      if (box) box.innerHTML = "";
+      const cachedTemplate = findCachedTemplateForDraft();
+      if (cachedTemplate) {
+        applyTemplateAttributes(cachedTemplate, "属性接口失败,已使用本地模板缓存");
+      } else {
+        if (status) status.textContent = "属性加载失败:" + (e.message || e);
+        if (box) box.innerHTML = "";
+      }
     }
   }
 
@@ -678,33 +843,55 @@
     // 必填在前,可选在后
     const sorted = [...currentAttributes].sort((a, b) => Number(b.isRequired) - Number(a.isRequired));
     box.innerHTML = sorted.map((a) => {
-      const val = escapeAttr(attrValues[a.id] || "");
+      const rawVal = attrValues[a.id];
+      const vals = Array.isArray(rawVal) ? rawVal.map(String) : String(rawVal || "").split(";").map((v) => v.trim()).filter(Boolean);
+      const val = escapeAttr(Array.isArray(rawVal) ? vals.join(";") : (rawVal || ""));
       const star = a.isRequired ? `<span style="color:#dc2626">*</span>` : "";
       const isDict = a.dictionary || (a.values && a.values.length);
+      const type = String(a.type || "").toLowerCase();
       const field = isDict
-        ? `<select data-attr-id="${a.id}"><option value="">请选择</option>${(a.values || []).map((v) => `<option value="${escapeAttr(v.value)}" ${val === escapeAttr(v.value) ? "selected" : ""}>${escapeHtml(v.value)}</option>`).join("")}</select>`
-        : `<input type="text" data-attr-id="${a.id}" value="${val}" placeholder="${escapeAttr(a.description || a.name)}" />`;
+        ? `<select data-attr-id="${a.id}" ${a.isCollection ? `multiple size="${Math.min(Math.max((a.values || []).length, 3), 6)}"` : ""}>
+            ${a.isCollection ? "" : `<option value="">请选择</option>`}
+            ${(a.values || []).map((v) => {
+              const selected = vals.includes(String(v.value)) || vals.includes(String(v.id));
+              return `<option value="${escapeAttr(v.value)}" ${selected ? "selected" : ""}>${escapeHtml(v.value)}</option>`;
+            }).join("")}
+          </select>`
+        : type === "boolean"
+          ? `<select data-attr-id="${a.id}"><option value="">请选择</option><option value="true" ${String(rawVal) === "true" ? "selected" : ""}>是</option><option value="false" ${String(rawVal) === "false" ? "selected" : ""}>否</option></select>`
+          : type === "multiline"
+            ? `<textarea data-attr-id="${a.id}" rows="3" placeholder="${escapeAttr(a.description || a.name)}">${val}</textarea>`
+            : `<input type="${type === "integer" || type === "decimal" ? "number" : "text"}" data-attr-id="${a.id}" value="${val}" placeholder="${escapeAttr(a.description || a.name)}" />`;
+      const meta = [
+        a.isCollection ? `可多选${a.maxValueCount ? `,最多 ${a.maxValueCount} 个` : ""}` : "",
+        a.complexName ? `分组:${a.complexName}` : "",
+      ].filter(Boolean).join(" · ");
       return `<label class="listing-attr-row ${a.isRequired ? "is-required" : ""}">
-        <span class="listing-attr-name">${star} ${escapeHtml(a.name)}</span>
+        <span class="listing-attr-name">${star} ${escapeHtml(a.name)}${meta ? `<small class="muted"> ${escapeHtml(meta)}</small>` : ""}</span>
         ${field}
       </label>`;
     }).join("");
     // 绑定输入事件,实时保存值
     box.querySelectorAll("[data-attr-id]").forEach((el) => {
       el.addEventListener("input", () => {
-        attrValues[el.getAttribute("data-attr-id")] = el.value;
+        attrValues[el.getAttribute("data-attr-id")] = el.multiple ? [...el.selectedOptions].map((o) => o.value) : el.value;
         draft.attrValues = attrValues;
+        persistDraft();
       });
       el.addEventListener("change", () => {
-        attrValues[el.getAttribute("data-attr-id")] = el.value;
+        attrValues[el.getAttribute("data-attr-id")] = el.multiple ? [...el.selectedOptions].map((o) => o.value) : el.value;
         draft.attrValues = attrValues;
+        persistDraft();
       });
     });
   }
 
   // 校验必填属性是否都填了
   function validateRequiredAttrs() {
-    const missing = currentAttributes.filter((a) => a.isRequired && !attrValues[a.id]);
+    const missing = currentAttributes.filter((a) => {
+      const v = attrValues[a.id];
+      return a.isRequired && (Array.isArray(v) ? !v.length : !String(v || "").trim());
+    });
     if (missing.length) {
       const names = missing.map((a) => a.name).join("、");
       alert(`以下必填属性未填写:${names}`);
@@ -823,6 +1010,113 @@
       </div>`).join("");
   }
 
+  function renderGeneratedImages(pendingCount = 0) {
+    const grid = $("lst_genGrid");
+    if (!grid) return;
+    const images = (draft.generatedImages || []).filter(Boolean);
+    if (pendingCount) {
+      grid.innerHTML = Array.from({ length: pendingCount }, (_, i) => `
+        <div class="listing-gen-cell pending"><span class="tag">${i + 1}</span></div>`).join("");
+    } else {
+      grid.innerHTML = images.map((src, i) => `
+        <div class="listing-gen-cell">
+          <img src="${escapeAttr(src)}" alt="AI 生成图 ${i + 1}" />
+          <span class="tag">${i + 1}</span>
+        </div>`).join("");
+    }
+    const applyBtn = $("lst_applyGenImages");
+    if (applyBtn) applyBtn.hidden = !images.length || Boolean(pendingCount);
+  }
+
+  function aiProductPayload() {
+    readStep2Form();
+    return {
+      title: draft.title,
+      brand: draft.brand,
+      model: draft.model,
+      categoryZh: draft.categoryNameZh,
+      category: draft.categoryFullPath || draft.categoryName,
+      params: draft.params,
+      sellingPoints: draft.sellingPoints,
+      price: draft.price,
+      oldPrice: draft.oldPrice,
+      weight: draft.weight,
+      size: [draft.length, draft.width, draft.height].filter(Boolean).join(" x "),
+    };
+  }
+
+  function normalizeTags(value) {
+    return String(value || "")
+      .split(/[\n,，;；]+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+      .join("\n");
+  }
+
+  async function generateCopy() {
+    const btn = $("lst_generateCopy");
+    const status = $("lst_aiStatus");
+    if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
+    if (status) status.textContent = "正在生成俄文标题、描述和搜索标签…";
+    try {
+      const res = await fetch(API("generate-copy"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({ product: aiProductPayload() }),
+      });
+      const data = await readJsonResponse(res);
+      if (!data.ok) throw new Error(data.error || "文案生成失败");
+      draft.title = data.title || draft.title;
+      draft.description = data.description || draft.description;
+      draft.tags = normalizeTags(data.tags || draft.tags);
+      fillStep2Form();
+      persistDraft();
+      if (status) status.textContent = "文案已生成并写入表单。";
+    } catch (e) {
+      if (status) status.textContent = "文案生成失败:" + (e.message || e);
+      alert("文案生成失败:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "AI 生成俄文文案"; }
+    }
+  }
+
+  async function generateImages() {
+    if (!draft.images.length) {
+      alert("请先上传至少 1 张参考图,再生成商品图。");
+      return;
+    }
+    const btn = $("lst_generateImages");
+    const status = $("lst_aiStatus");
+    if (btn) { btn.disabled = true; btn.textContent = "生图中…"; }
+    if (status) status.textContent = "正在生成 9 张商品图,可能需要一些时间…";
+    renderGeneratedImages(9);
+    try {
+      const res = await fetch(API("generate-images"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({
+          product: aiProductPayload(),
+          referenceImages: draft.images.slice(0, 4),
+          count: 9,
+        }),
+      });
+      const data = await readJsonResponse(res);
+      if (!data.ok) throw new Error(data.error || "生图失败");
+      draft.generatedImages = (data.results || []).filter((item) => item.ok && item.url).map((item) => item.url);
+      renderGeneratedImages();
+      persistDraft();
+      if (status) status.textContent = `已生成 ${draft.generatedImages.length} 张商品图。`;
+    } catch (e) {
+      draft.generatedImages = [];
+      renderGeneratedImages();
+      if (status) status.textContent = "生图失败:" + (e.message || e);
+      alert("生图失败:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "AI 生成 9 张商品图"; }
+    }
+  }
+
   // ---- 渲染:货盘选择 ----
   function renderTrayRows() {
     const tbody = $("lst_trayRows");
@@ -845,7 +1139,7 @@
 
   // ---- 收集第二步表单(产品信息 + 图片 + 文案) ----
   function readStep2Form() {
-    const fields = ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height"];
+    const fields = ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
     fields.forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) draft[k] = el.value;
@@ -860,7 +1154,7 @@
   }
 
   function fillStep2Form() {
-    ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height"].forEach((k) => {
+    ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) el.value = draft[k] ?? "";
     });
@@ -872,13 +1166,89 @@
     const storeSel = $("lst_storeIndex");
     if (storeSel) storeSel.value = String(draft.storeIndex);
     renderThumbs();
+    renderGeneratedImages();
+  }
+
+  function publishPayload() {
+    readStep2Form();
+    const offerId = $("lst_pubOfferId")?.value || draft.code;
+    const storeIndex = Number($("lst_pubStore")?.value || draft.storeIndex || 0);
+    const attrDefinitions = currentAttributes.length ? currentAttributes : (draft.attrDefinitions || []);
+    draft.attrDefinitions = attrDefinitions;
+    return {
+      platform: draft.platform,
+      storeIndex,
+      draft: {
+        title: draft.title,
+        description: draft.description,
+        offerId,
+        code: draft.code,
+        brand: draft.brand,
+        model: draft.model,
+        categoryId: draft.categoryId,
+        categoryFullPath: draft.categoryFullPath,
+        typeId: draft.typeId || 0,
+        descriptionCategoryId: draft.descriptionCategoryId || 0,
+        price: draft.price,
+        oldPrice: draft.oldPrice,
+        weight: draft.weight,
+        length: draft.length,
+        width: draft.width,
+        height: draft.height,
+        params: draft.params,
+        sellingPoints: draft.sellingPoints,
+        tags: draft.tags,
+        images: (draft.images || []).filter(Boolean),
+        attrValues: draft.attrValues || {},
+        attrDefinitions,
+      },
+    };
+  }
+
+  function renderFlowChecks() {
+    const box = $("lst_flowChecks");
+    if (!box) return;
+    const checks = draft.preflightResult?.checks || [];
+    const audit = draft.auditResult || null;
+    const checkHtml = checks.length ? checks.map((check) => `
+      <span class="listing-flow-chip ${check.ok ? "is-ok" : "is-bad"}">
+        ${check.ok ? "✓" : "!"} ${escapeHtml(check.label)} <small>${escapeHtml(check.detail || "")}</small>
+      </span>`).join("") : `<span class="muted-cell">还没有上传前自检结果。</span>`;
+    const auditHtml = audit ? `
+      <span class="listing-flow-chip ${audit.status === "complete" ? "is-ok" : "is-warn"}">
+        完整性 ${escapeHtml(audit.status || "-")} <small>${Number(audit.attributeCount || 0)} 属性 / Rich ${audit.richWritten ? "已写入" : "未确认"}</small>
+      </span>` : "";
+    box.innerHTML = `${checkHtml}${auditHtml}`;
+  }
+
+  async function runPreflight() {
+    const btn = $("lst_preflight");
+    if (btn) { btn.disabled = true; btn.textContent = "自检中…"; }
+    try {
+      const payload = publishPayload();
+      const res = await fetch(API("preflight"), { method: "POST", headers: storeHeaders(), body: JSON.stringify(payload) });
+      const data = await readJsonResponse(res);
+      draft.preflightResult = data;
+      persistDraft();
+      renderFlowChecks();
+      const failed = (data.checks || []).filter((check) => !check.ok);
+      log(failed.length ? `上传前自检未通过:${failed.map((x) => x.label).join("、")}` : `上传前自检通过:SKU=${data.offerId || payload.draft.offerId}`);
+      return data;
+    } catch (e) {
+      log("上传前自检异常:" + (e.message || e));
+      alert("上传前自检异常:" + (e.message || e));
+      return { ok: false, error: e.message || String(e) };
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "上传前自检"; }
+    }
   }
 
   // ---- 第三步:发布 ----
   async function runPublish() {
-    readStep2Form();
-    const offerId = $("lst_pubOfferId")?.value || draft.code;
-    const storeIndex = Number($("lst_pubStore")?.value || 0);
+    const preflight = await runPreflight();
+    if (!preflight.ok && !confirm("上传前自检未通过,仍然尝试发布?")) return;
+    const payload = publishPayload();
+    const offerId = payload.draft.offerId;
     const images = (draft.images || []).filter(Boolean);
     if (!draft.title) { alert("缺少标题"); return; }
     if (!images.length) { alert("请至少上传 1 张商品图片"); return; }
@@ -889,37 +1259,17 @@
       const res = await fetch(API("publish"), {
         method: "POST",
         headers: storeHeaders(),
-        body: JSON.stringify({
-          platform: draft.platform,
-          storeIndex,
-          draft: {
-            title: draft.title,
-            description: draft.description,
-            offerId,
-            code: draft.code,
-            brand: draft.brand,
-            categoryId: draft.categoryId,
-            categoryFullPath: draft.categoryFullPath,
-            typeId: draft.typeId || 0,
-            descriptionCategoryId: draft.descriptionCategoryId || 0,
-            price: draft.price,
-            oldPrice: draft.oldPrice,
-            weight: draft.weight,
-            length: draft.length,
-            width: draft.width,
-            height: draft.height,
-            images,
-            attrValues: draft.attrValues || {},
-          },
-        }),
+        body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       draft.publishResult = data;
       if (data.ok) {
         // 标记为上架中(Ozon 异步任务,需稍后检测)
         draft.publishStatus = "pending";
         draft.publishError = "";
         draft.publishTaskId = data.taskId || "";
+        draft.productId = data.productId || draft.productId || "";
+        draft.offerId = data.offerId || offerId;
         draft.publishedAt = nowIso();
         log(`发布请求已提交:${data.taskId ? "任务 ID " + data.taskId : "成功"}${data.offerId ? ",SKU=" + data.offerId : ""}`);
         alert("发布请求已提交!草稿状态已标记为「上架中」,可在草稿列表点击「检测状态」查看结果。");
@@ -949,13 +1299,15 @@
     const btn = document.querySelector(`[data-draft-check-status="${CSS.escape(draftId)}"]`);
     if (btn) { btn.disabled = true; btn.textContent = "检测中…"; }
     try {
-      const res = await fetch(API(`publish-status?taskId=${encodeURIComponent(d.publishTaskId || "")}&offerId=${encodeURIComponent(d.code || "")}&storeIndex=${d.storeIndex || 0}&platform=${encodeURIComponent(d.platform || "Ozon")}`), {
+      const res = await fetch(API(`publish-status?taskId=${encodeURIComponent(d.publishTaskId || "")}&offerId=${encodeURIComponent(d.offerId || d.code || "")}&storeIndex=${d.storeIndex || 0}&platform=${encodeURIComponent(d.platform || "Ozon")}`), {
         headers: storeHeaders(),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (data.ok) {
         d.publishStatus = data.status || "pending";
         d.publishError = data.error || "";
+        d.productId = data.productId || d.productId || "";
+        d.offerId = data.offerId || d.offerId || d.code || "";
         if (data.status === "done") log(`「${d.title || d.code}」上架成功!`);
         else if (data.status === "failed") log(`「${d.title || d.code}」上架失败:${data.error || ""}`);
         else log(`「${d.title || d.code}」仍在处理中…`);
@@ -969,9 +1321,120 @@
       if (draft.id === draftId) {
         draft.publishStatus = d.publishStatus;
         draft.publishError = d.publishError;
+        draft.productId = d.productId || draft.productId || "";
+        draft.offerId = d.offerId || draft.offerId || "";
       }
       saveDraft();
       renderDraftList();
+      renderFlowChecks();
+    }
+  }
+
+  async function pollCurrentStatus(maxAttempts = 12) {
+    const id = draft.id;
+    const btn = $("lst_pollStatus");
+    if (btn) { btn.disabled = true; btn.textContent = "轮询中…"; }
+    for (let i = 0; i < maxAttempts; i += 1) {
+      await checkPublishStatus(id);
+      const latest = drafts.find((x) => x.id === id) || draft;
+      if (latest.publishStatus === "done" || latest.publishStatus === "failed") break;
+      await sleep(i < 3 ? 3000 : 6000);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "轮询上架状态"; }
+  }
+
+  async function auditCurrentProduct() {
+    const btn = $("lst_auditProduct");
+    if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
+    try {
+      const payload = publishPayload();
+      const expectedAttributes = (currentAttributes || [])
+        .filter((attr) => attr.id && (attr.isRequired || hasAttrValue(attr.id)))
+        .map((attr) => Number(attr.id));
+      const res = await fetch(API("audit-product"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({
+          platform: draft.platform,
+          storeIndex: payload.storeIndex,
+          offerId: draft.offerId || payload.draft.offerId || draft.code,
+          productId: draft.productId || draft.publishResult?.productId || 0,
+          expectedAttributes,
+        }),
+      });
+      const data = await readJsonResponse(res);
+      draft.auditResult = data;
+      draft.productId = data.productId || draft.productId || "";
+      persistDraft();
+      renderFlowChecks();
+      log(data.ok ? `完整性检查:${data.status || "-"}, 属性 ${data.attributeCount || 0}, Rich Content ${data.richWritten ? "已写入" : "未确认"}` : `完整性检查失败:${data.error || ""}`);
+    } catch (e) {
+      log("完整性检查异常:" + (e.message || e));
+      alert("完整性检查异常:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "完整性检查"; }
+    }
+  }
+
+  function hasAttrValue(attrId) {
+    const value = (draft.attrValues || {})[attrId];
+    return Array.isArray(value) ? value.length > 0 : String(value || "").trim() !== "";
+  }
+
+  async function loadWarehouses() {
+    const btn = $("lst_loadWarehouses");
+    const sel = $("lst_stockWarehouse");
+    if (btn) { btn.disabled = true; btn.textContent = "加载中…"; }
+    try {
+      const payload = publishPayload();
+      const res = await fetch(API(`warehouses?platform=${encodeURIComponent(draft.platform)}&storeIndex=${payload.storeIndex}`), { headers: storeHeaders() });
+      const data = await readJsonResponse(res);
+      if (!data.ok) throw new Error(data.error || "仓库加载失败");
+      if (sel) {
+        sel.innerHTML = (data.warehouses || []).map((w) => `<option value="${escapeAttr(w.id)}">${escapeHtml(w.name || w.id)}</option>`).join("") || `<option value="">没有可用仓库</option>`;
+        if (draft.stockWarehouseId) sel.value = String(draft.stockWarehouseId);
+        draft.stockWarehouseId = sel.value || draft.stockWarehouseId || "";
+      }
+      persistDraft();
+      log(`已加载 ${data.warehouses?.length || 0} 个仓库。`);
+    } catch (e) {
+      log("仓库加载失败:" + (e.message || e));
+      alert("仓库加载失败:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "加载仓库"; }
+    }
+  }
+
+  async function setStock() {
+    const warehouseId = $("lst_stockWarehouse")?.value || draft.stockWarehouseId;
+    const stock = $("lst_stockQty")?.value || draft.stockQty || "20";
+    if (!warehouseId) { alert("请先选择库存仓库"); return; }
+    const btn = $("lst_setStock");
+    if (btn) { btn.disabled = true; btn.textContent = "设置中…"; }
+    try {
+      const payload = publishPayload();
+      const res = await fetch(API("set-stock"), {
+        method: "POST",
+        headers: storeHeaders(),
+        body: JSON.stringify({
+          platform: draft.platform,
+          storeIndex: payload.storeIndex,
+          offerId: draft.offerId || payload.draft.offerId || draft.code,
+          productId: draft.productId || draft.publishResult?.productId || 0,
+          stocks: [{ warehouseId, stock }],
+        }),
+      });
+      const data = await readJsonResponse(res);
+      if (!data.ok) throw new Error(data.error || "库存设置失败");
+      draft.stockWarehouseId = warehouseId;
+      draft.stockQty = stock;
+      persistDraft();
+      log(`库存已提交:仓库 ${warehouseId}, 数量 ${stock}`);
+    } catch (e) {
+      log("库存设置失败:" + (e.message || e));
+      alert("库存设置失败:" + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "设置库存"; }
     }
   }
 
@@ -1128,6 +1591,43 @@
       persistDraft();
     });
 
+    $("lst_importTemplate")?.addEventListener("click", () => $("lst_templateFile")?.click());
+    $("lst_templateFile")?.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const status = $("lst_attrsStatus");
+      if (status) status.textContent = `正在解析模板:${file.name}…`;
+      try {
+        const template = await parseOzonTemplateFile(file);
+        rememberTemplate(template);
+        applyTemplateAttributes(template, "已导入模板");
+        const kv = await pushTemplateToKv(template);
+        if (status) {
+          const reqCount = template.attributes.filter((a) => a.isRequired).length;
+          status.textContent = `已导入「${template.name}」模板: ${template.attributes.length} 个字段,${reqCount} 个必填。${kv.ok ? "已写入 KV 缓存。" : "已保存本地缓存,KV 暂不可用。"}`;
+        }
+      } catch (err) {
+        if (status) status.textContent = "模板导入失败:" + (err.message || err);
+        alert("模板导入失败:" + (err.message || err));
+      } finally {
+        e.target.value = "";
+      }
+    });
+
+    $("lst_generateCopy")?.addEventListener("click", generateCopy);
+    $("lst_generateImages")?.addEventListener("click", generateImages);
+    $("lst_applyGenImages")?.addEventListener("click", () => {
+      const generated = (draft.generatedImages || []).filter(Boolean);
+      if (!generated.length) return;
+      const existing = new Set(draft.images || []);
+      const additions = generated.filter((src) => !existing.has(src));
+      draft.images = [...draft.images, ...additions].slice(0, 15);
+      renderThumbs();
+      persistDraft();
+      const status = $("lst_aiStatus");
+      if (status) status.textContent = additions.length ? `已将 ${additions.length} 张生成图加入商品图片。` : "这些生成图已在商品图片中。";
+    });
+
     // 货盘选用
     $("lst_trayRows")?.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-tray-pick]");
@@ -1165,6 +1665,13 @@
     });
 
     $("lst_publish")?.addEventListener("click", runPublish);
+    $("lst_preflight")?.addEventListener("click", runPreflight);
+    $("lst_pollStatus")?.addEventListener("click", () => pollCurrentStatus());
+    $("lst_auditProduct")?.addEventListener("click", auditCurrentProduct);
+    $("lst_loadWarehouses")?.addEventListener("click", loadWarehouses);
+    $("lst_setStock")?.addEventListener("click", setStock);
+    $("lst_stockWarehouse")?.addEventListener("change", (e) => { draft.stockWarehouseId = e.target.value; persistDraft(); });
+    $("lst_stockQty")?.addEventListener("input", (e) => { draft.stockQty = e.target.value; persistDraft(); });
     $("lst_newDraft")?.addEventListener("click", () => {
       persistDraft();
       draft = emptyDraft();
@@ -1228,12 +1735,15 @@
       renderDraftList();
     });
 
-    // 第三步字段实时回写
-    ["lst_title", "lst_description", "lst_tags"].forEach((id) => {
+    // 文案和补充信息实时回写
+    ["lst_title", "lst_description", "lst_tags", "lst_params", "lst_sellingPoints"].forEach((id) => {
       $(id)?.addEventListener("input", () => {
         if (id === "lst_title") draft.title = $(id).value;
         if (id === "lst_description") draft.description = $(id).value;
         if (id === "lst_tags") draft.tags = $(id).value;
+        if (id === "lst_params") draft.params = $(id).value;
+        if (id === "lst_sellingPoints") draft.sellingPoints = $(id).value;
+        persistDraft();
       });
     });
   }

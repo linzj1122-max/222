@@ -41,6 +41,113 @@ function amount(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function hasValue(value) {
+  return Array.isArray(value) ? value.length > 0 : String(value ?? "").trim() !== "";
+}
+
+function compactText(value, limit = 0) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return limit ? text.slice(0, limit) : text;
+}
+
+function splitLines(value, limit = 20) {
+  return String(value || "")
+    .split(/[\n,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function buildRichContent(draft) {
+  const title = compactText(draft.title || draft.model || draft.code, 500);
+  const bullets = [
+    ...splitLines(draft.sellingPoints || draft.description, 8),
+    ...splitLines(draft.params, 8),
+  ].filter(Boolean).slice(0, 10);
+  const blocks = [];
+  if (title) {
+    blocks.push({ type: "text", content: [{ type: "text", text: title }] });
+  }
+  if (bullets.length) {
+    blocks.push({
+      type: "list",
+      content: bullets.map((text) => ({ type: "list_item", content: [{ type: "text", text }] })),
+    });
+  }
+  const description = compactText(draft.description, 3000);
+  if (description) {
+    blocks.push({ type: "text", content: [{ type: "text", text: description }] });
+  }
+  return JSON.stringify({ version: 1, blocks });
+}
+
+function autoAttrValue(attr, draft) {
+  const name = `${attr.name || ""} ${attr.description || ""}`.toLowerCase();
+  if (/rich|content|контент|рич/.test(name)) return buildRichContent(draft);
+  if (/аннотац|описан|description|desc/.test(name)) return draft.description || draft.sellingPoints || draft.params || "";
+  if (/ключ|поиск|search|tag|тег/.test(name)) return splitLines(draft.tags, 20).join("; ");
+  if (/бренд|brand/.test(name)) return draft.brand || "";
+  if (/модель|model/.test(name)) return draft.model || draft.code || "";
+  if (/артикул|sku|offer/.test(name)) return draft.offerId || draft.code || "";
+  if (/назван|title|name/.test(name)) return draft.title || draft.model || "";
+  if (/материал|material/.test(name)) {
+    const material = String(draft.params || "").match(/(?:материал|material|材质)\s*[:：]\s*([^;\n,，]+)/i);
+    return material?.[1]?.trim() || "";
+  }
+  return "";
+}
+
+function attrValueItems(attr, rawValue) {
+  const list = Array.isArray(rawValue) ? rawValue : String(rawValue ?? "").split(";").map((v) => v.trim()).filter(Boolean);
+  const values = Array.isArray(attr.values) ? attr.values : [];
+  return list.filter(Boolean).map((value) => {
+    const matched = values.find((item) => String(item.value) === String(value) || String(item.id) === String(value));
+    return {
+      dictionary_value_id: matched?.id ? Number(matched.id) : 0,
+      value: String(matched?.value || value),
+    };
+  });
+}
+
+function buildOzonAttributePayload(draft, definitions) {
+  const attrValues = draft.attrValues || {};
+  return (definitions || [])
+    .map((attr) => ({ ...attr, _value: hasValue(attrValues[attr.id]) ? attrValues[attr.id] : autoAttrValue(attr, draft) }))
+    .filter((attr) => attr && attr.id && hasValue(attr._value))
+    .map((attr) => ({
+      complex_id: Number(attr.complexId || attr.complex_id || 0),
+      id: Number(attr.id),
+      values: attrValueItems(attr, attr._value),
+    }))
+    .filter((attr) => attr.values.length);
+}
+
+function normalizeTemplateAttribute(attr) {
+  const values = Array.isArray(attr.values) ? attr.values.map((v) => ({ id: Number(v.id || 0), value: String(v.value || "") })).filter((v) => v.value) : [];
+  return {
+    id: Number(attr.id || 0),
+    name: String(attr.name || ""),
+    description: String(attr.description || ""),
+    isRequired: Boolean(attr.isRequired),
+    type: String(attr.type || "String"),
+    isCollection: Boolean(attr.isCollection),
+    maxValueCount: Number(attr.maxValueCount || 0),
+    complexId: Number(attr.complexId || 0),
+    complexName: String(attr.complexName || ""),
+    dictionary: values.length ? 1 : Number(attr.dictionary || 0),
+    values,
+    source: attr.source || "xlsx-template",
+  };
+}
+
+function templateKvKeys(template) {
+  const keys = [];
+  const name = String(template?.name || "").trim();
+  if (name) keys.push(`template:name:${name}`);
+  if (template?.categoryId && template?.typeId) keys.push(`template:cat:${template.categoryId}:${template.typeId}`);
+  return keys;
+}
+
 function openaiBaseUrl(env) {
   return String(env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE).replace(/\/$/, "");
 }
@@ -518,16 +625,12 @@ async function generateCopy(env, body) {
 
 // ---------- 发布 ----------
 
-async function publishOzonProduct(env, store, draft) {
-  // 前端选类目后,descriptionCategoryId / typeId 已经是干净的数字,
-  // 直接用它们;categoryId 可能是 "type-xxx"/"L1|日化" 等展示用字符串,不可 Number。
+async function loadOzonAttributeDefinitions(store, draft) {
   const descriptionCategoryId = Number(draft.descriptionCategoryId) || 0;
   const typeId = Number(draft.typeId) || 0;
-  const images = (draft.images || []).filter(Boolean);
-
-  // 新版 Ozon:/v3/category/attribute 需要 description_category_id + type_id
   let requiredAttrs = [];
-  if (descriptionCategoryId && typeId) {
+  const templateAttrs = Array.isArray(draft.attrDefinitions) ? draft.attrDefinitions.map(normalizeTemplateAttribute).filter((a) => a.id) : [];
+  if (!templateAttrs.length && descriptionCategoryId && typeId) {
     try {
       const attrResp = await fetch("https://api-seller.ozon.ru/v3/category/attribute", {
         method: "POST",
@@ -543,36 +646,86 @@ async function publishOzonProduct(env, store, draft) {
       // 属性拉取失败不阻塞发布,用户可在后台补全必填属性
     }
   }
-
-  const attributes = requiredAttrs.slice(0, 20).map((attr) => ({
-    complex_id: 0,
+  const fallbackAttrs = requiredAttrs.map((attr) => ({
     id: Number(attr.id),
-    values: [{ dictionary_value_id: "", value: String(draft.attrValues?.[attr.id] || "") }],
+    name: String(attr.name || ""),
+    description: String(attr.description || ""),
+    isRequired: Boolean(attr.is_required),
+    type: String(attr.type || "String"),
+    complexId: 0,
+    values: Array.isArray(attr.values) ? attr.values.map((v) => ({ id: Number(v.id || 0), value: String(v.value || "") })) : [],
   }));
+  return templateAttrs.length ? templateAttrs : fallbackAttrs;
+}
 
-  const body = {
-    items: [{
-      name: String(draft.title || "").slice(0, 500),
-      offer_id: String(draft.offerId || draft.code || `SKU-${Date.now()}`),
-      sku: 0,
-      // 新版 API 用 description_category_id + type_id 取代旧 category_id
-      description_category_id: descriptionCategoryId,
-      type_id: typeId,
-      price: { price: String(draft.price || "0"), old_price: String(draft.oldPrice || ""), premium_price: "" },
-      vat: "0",
-      weight_g: Math.round(amount(draft.weight) || 0),
-      weight_unit: "g",
-      dimensions: {
-        length: String(draft.length || 0),
-        width: String(draft.width || 0),
-        height: String(draft.height || 0),
-        unit: "mm",
-      },
-      primary_image: images[0] || "",
-      images: images.slice(1, 15),
-      attributes,
-    }],
+function buildOzonImportItem(draft, definitions) {
+  const images = (draft.images || []).filter(Boolean);
+  return {
+    name: String(draft.title || "").slice(0, 500),
+    offer_id: String(draft.offerId || draft.code || `SKU-${Date.now()}`),
+    sku: 0,
+    description_category_id: Number(draft.descriptionCategoryId) || 0,
+    type_id: Number(draft.typeId) || 0,
+    price: { price: String(draft.price || "0"), old_price: String(draft.oldPrice || ""), premium_price: "" },
+    vat: "0",
+    weight_g: Math.round(amount(draft.weight) || 0),
+    weight_unit: "g",
+    dimensions: {
+      length: String(draft.length || 0),
+      width: String(draft.width || 0),
+      height: String(draft.height || 0),
+      unit: "mm",
+    },
+    primary_image: images[0] || "",
+    images: images.slice(1, 15),
+    attributes: buildOzonAttributePayload(draft, definitions),
   };
+}
+
+function preflightOzonItem(item, definitions) {
+  const attrIds = new Set((item.attributes || []).map((attr) => Number(attr.id)));
+  const requiredMissing = (definitions || [])
+    .filter((attr) => attr.isRequired && !attrIds.has(Number(attr.id)))
+    .map((attr) => attr.name || String(attr.id));
+  const hasRich = (item.attributes || []).some((attr) => (attr.values || []).some((v) => /blocks|rich|content/i.test(String(v.value || ""))));
+  const checks = [
+    { key: "title", label: "标题", ok: Boolean(item.name), detail: item.name ? `${item.name.length} chars` : "missing" },
+    { key: "category", label: "类目", ok: Boolean(item.description_category_id && item.type_id), detail: `category=${item.description_category_id || "-"}, type=${item.type_id || "-"}` },
+    { key: "price", label: "售价", ok: amount(item.price?.price) > 0, detail: item.price?.price || "0" },
+    { key: "images", label: "图片", ok: Boolean(item.primary_image), detail: `${1 + (item.images || []).length} image(s)` },
+    { key: "weight", label: "重量", ok: Number(item.weight_g) > 0, detail: `${item.weight_g || 0}g` },
+    { key: "dimensions", label: "尺寸", ok: ["length", "width", "height"].every((k) => amount(item.dimensions?.[k]) > 0), detail: `${item.dimensions.length}x${item.dimensions.width}x${item.dimensions.height}mm` },
+    { key: "attributes", label: "属性", ok: item.attributes.length > 0 && !requiredMissing.length, detail: requiredMissing.length ? `missing: ${requiredMissing.join(", ")}` : `${item.attributes.length} filled` },
+    { key: "rich", label: "Rich Content", ok: hasRich, detail: hasRich ? "mapped" : "template has no rich/content field or value is empty" },
+  ];
+  return { ok: checks.filter((check) => check.key !== "rich").every((check) => check.ok), checks, requiredMissing, attributeCount: item.attributes.length };
+}
+
+async function buildOzonImportPayload(store, draft) {
+  const definitions = await loadOzonAttributeDefinitions(store, draft);
+  const item = buildOzonImportItem(draft, definitions);
+  return { body: { items: [item] }, item, definitions };
+}
+
+async function preflight(env, body, headers = {}) {
+  const platform = String(body?.platform || "Ozon").toLowerCase();
+  const storeIndex = Number(body?.storeIndex || "0");
+  const draft = body?.draft || {};
+  if (platform !== "ozon") return { ok: true, platform, checks: [{ key: "platform", label: "平台", ok: true, detail: "WB uses card upload" }] };
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  const { item, definitions } = await buildOzonImportPayload(store, draft);
+  const result = preflightOzonItem(item, definitions);
+  return { ...result, offerId: item.offer_id, itemPreview: { ...item, primary_image: Boolean(item.primary_image), images: item.images.length } };
+}
+
+async function publishOzonProduct(env, store, draft) {
+  const { body, item, definitions } = await buildOzonImportPayload(store, draft);
+  const gate = preflightOzonItem(item, definitions);
+  if (!gate.ok) {
+    const failed = gate.checks.filter((check) => !check.ok).map((check) => `${check.label}:${check.detail}`).join("; ");
+    return { ok: false, error: `上传前自检未通过: ${failed}`, preflight: gate };
+  }
 
   const response = await fetch("https://api-seller.ozon.ru/v3/product/import", {
     method: "POST",
@@ -588,7 +741,8 @@ async function publishOzonProduct(env, store, draft) {
     ok: Boolean(result.task_id),
     taskId: result.task_id || null,
     productId: result.product_id || null,
-    offerId: body.items[0].offer_id,
+    offerId: item.offer_id,
+    preflight: gate,
     raw: result,
   };
 }
@@ -700,6 +854,115 @@ async function checkPublishStatus(env, searchParams, headers = {}) {
   }
 }
 
+async function fetchOzonProductAttributes(store, offerId, productId) {
+  const filter = {};
+  if (offerId) filter.offer_id = [offerId];
+  if (productId) filter.product_id = [Number(productId)];
+  const response = await fetch("https://api-seller.ozon.ru/v4/product/info/attributes", {
+    method: "POST",
+    headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+    body: JSON.stringify({ filter, limit: 100, sort_dir: "ASC" }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = JSON.parse(text); } catch { payload = null; }
+  if (!response.ok) throw new Error(payload?.message || payload?.error?.message || text.slice(0, 300));
+  return payload?.result?.[0] || payload?.result?.items?.[0] || null;
+}
+
+async function auditOzonProduct(env, body, headers = {}) {
+  const platform = String(body?.platform || "Ozon").toLowerCase();
+  const storeIndex = Number(body?.storeIndex || "0");
+  if (platform !== "ozon") return { ok: false, error: "完整性检查目前仅支持 Ozon" };
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  const offerId = String(body?.offerId || body?.code || "").trim();
+  const productId = Number(body?.productId || 0);
+  if (!offerId && !productId) return { ok: false, error: "缺少 offerId 或 productId" };
+  try {
+    const item = await fetchOzonProductAttributes(store, offerId, productId);
+    if (!item) return { ok: true, status: "pending", note: "商品属性暂未返回,稍后再查" };
+    const attributes = Array.isArray(item.attributes) ? item.attributes : [];
+    const attrIds = new Set(attributes.map((attr) => Number(attr.id)));
+    const expected = Array.isArray(body?.expectedAttributes) ? body.expectedAttributes.map(Number).filter(Boolean) : [];
+    const missing = expected.filter((id) => !attrIds.has(id));
+    const richWritten = attributes.some((attr) => (attr.values || []).some((v) => /blocks|rich|content/i.test(String(v.value || ""))));
+    return {
+      ok: true,
+      status: missing.length ? "incomplete" : "complete",
+      offerId: item.offer_id || offerId,
+      productId: item.id || item.product_id || productId || 0,
+      attributeCount: attributes.length,
+      expectedCount: expected.length,
+      missing,
+      richWritten,
+      rawName: item.name || "",
+    };
+  } catch (e) {
+    return { ok: false, error: "完整性检查失败:" + (e.message || String(e)) };
+  }
+}
+
+async function listOzonWarehouses(env, searchParams, headers = {}) {
+  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
+  const storeIndex = Number(searchParams.get("storeIndex") || "0");
+  if (platform !== "ozon") return { ok: false, error: "仓库列表目前仅支持 Ozon" };
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  try {
+    const response = await fetch("https://api-seller.ozon.ru/v1/warehouse/list", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+      body: JSON.stringify({}),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300) };
+    const warehouses = (payload?.result || []).map((w) => ({
+      id: Number(w.warehouse_id || w.id || 0),
+      name: String(w.name || w.warehouse_name || ""),
+      isRfbs: Boolean(w.is_rfbs),
+      status: w.status || "",
+    })).filter((w) => w.id);
+    return { ok: true, warehouses };
+  } catch (e) {
+    return { ok: false, error: "查询仓库失败:" + (e.message || String(e)) };
+  }
+}
+
+async function setOzonStocks(env, body, headers = {}) {
+  const platform = String(body?.platform || "Ozon").toLowerCase();
+  const storeIndex = Number(body?.storeIndex || "0");
+  if (platform !== "ozon") return { ok: false, error: "库存设置目前仅支持 Ozon" };
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  const offerId = String(body?.offerId || body?.code || "").trim();
+  const productId = Number(body?.productId || 0);
+  const stocks = Array.isArray(body?.stocks) ? body.stocks : [];
+  const normalized = stocks.map((row) => ({
+    offer_id: offerId || undefined,
+    product_id: productId || undefined,
+    warehouse_id: Number(row.warehouseId || row.warehouse_id || 0),
+    stock: Math.max(0, Math.round(Number(row.stock || 0))),
+  })).filter((row) => row.warehouse_id && (row.offer_id || row.product_id));
+  if (!normalized.length) return { ok: false, error: "缺少仓库或库存数量" };
+  try {
+    const response = await fetch("https://api-seller.ozon.ru/v2/products/stocks", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+      body: JSON.stringify({ stocks: normalized }),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300), raw: payload };
+    return { ok: true, result: payload?.result || payload, stocks: normalized };
+  } catch (e) {
+    return { ok: false, error: "设置库存失败:" + (e.message || String(e)) };
+  }
+}
+
 // 查询类目的必填属性(Ozon /v3/category/attribute),带 KV 缓存。
 // 不同类目有不同的必填参数(颜色/材质/电池容量等),前端据此动态生成表单。
 async function getCategoryAttributes(env, searchParams, headers = {}) {
@@ -753,6 +1016,47 @@ async function getCategoryAttributes(env, searchParams, headers = {}) {
   }
 }
 
+async function saveTemplateCache(env, body) {
+  const raw = body?.template || {};
+  const template = {
+    name: String(raw.name || ""),
+    categoryId: Number(raw.categoryId || 0),
+    typeId: Number(raw.typeId || 0),
+    platform: raw.platform || "Ozon",
+    importedAt: raw.importedAt || new Date().toISOString(),
+    fileName: String(raw.fileName || ""),
+    complexGroups: raw.complexGroups || {},
+    attributes: Array.isArray(raw.attributes) ? raw.attributes.map(normalizeTemplateAttribute).filter((a) => a.id && a.name) : [],
+  };
+  if (!template.name || !template.attributes.length) return { ok: false, error: "模板缺少名称或字段" };
+  if (!env.LISTING_CACHE) return { ok: false, error: "未绑定 LISTING_CACHE KV", template };
+  const keys = templateKvKeys(template);
+  try {
+    await Promise.all(keys.map((key) => env.LISTING_CACHE.put(key, JSON.stringify(template), { expirationTtl: 60 * 60 * 24 * 365 * 5 })));
+    return { ok: true, keys, template: { name: template.name, attributeCount: template.attributes.length, requiredCount: template.attributes.filter((a) => a.isRequired).length } };
+  } catch (e) {
+    return { ok: false, error: "写入模板缓存失败:" + (e.message || String(e)) };
+  }
+}
+
+async function getTemplateCache(env, searchParams) {
+  if (!env.LISTING_CACHE) return { ok: false, error: "未绑定 LISTING_CACHE KV" };
+  const name = String(searchParams.get("name") || "").trim();
+  const categoryId = Number(searchParams.get("categoryId") || 0);
+  const typeId = Number(searchParams.get("typeId") || 0);
+  const keys = [];
+  if (categoryId && typeId) keys.push(`template:cat:${categoryId}:${typeId}`);
+  if (name) keys.push(`template:name:${name}`);
+  if (!keys.length) return { ok: false, error: "缺少 name 或 categoryId/typeId" };
+  for (const key of keys) {
+    try {
+      const template = await env.LISTING_CACHE.get(key, "json");
+      if (template?.attributes?.length) return { ok: true, source: "kv", key, template };
+    } catch {}
+  }
+  return { ok: false, error: "模板缓存不存在" };
+}
+
 // ---------- 入口 ----------
 
 export async function onRequest(context) {
@@ -775,6 +1079,11 @@ export async function onRequest(context) {
     }
     if (path === "categories") return json(await getCategories(env, url.searchParams, request.headers));
     if (path === "category-attributes") return json(await getCategoryAttributes(env, url.searchParams, request.headers));
+    if (path === "template-cache") {
+      if (request.method === "GET") return json(await getTemplateCache(env, url.searchParams));
+      const body = await request.json().catch(() => ({}));
+      return json(await saveTemplateCache(env, body));
+    }
     if (path === "refresh-cache") {
       // 清除指定平台+店铺的云端 KV 类目缓存(配合前端「刷新类目」按钮)
       const platform = String(url.searchParams.get("platform") || "Ozon").toLowerCase();
@@ -793,12 +1102,25 @@ export async function onRequest(context) {
       const body = await request.json().catch(() => ({}));
       return json(await generateCopy(env, body));
     }
+    if (path === "preflight") {
+      const body = await request.json().catch(() => ({}));
+      return json(await preflight(env, body, request.headers));
+    }
     if (path === "publish") {
       const body = await request.json().catch(() => ({}));
       return json(await publish(env, body, request.headers));
     }
     if (path === "publish-status") {
       return json(await checkPublishStatus(env, url.searchParams, request.headers));
+    }
+    if (path === "audit-product") {
+      const body = await request.json().catch(() => ({}));
+      return json(await auditOzonProduct(env, body, request.headers));
+    }
+    if (path === "warehouses") return json(await listOzonWarehouses(env, url.searchParams, request.headers));
+    if (path === "set-stock") {
+      const body = await request.json().catch(() => ({}));
+      return json(await setOzonStocks(env, body, request.headers));
     }
     return json({ error: "Not found", path }, 404);
   } catch (error) {

@@ -5,7 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
   <link rel="stylesheet" href="styles/main.css" />
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
+  <script>
+    if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
+    if (!window.XLSX && typeof exports !== "undefined" && exports.version) window.XLSX = exports;
+    document.documentElement.dataset.xlsxReady = window.XLSX ? "1" : "0";
+  </script>
 </head>
 <body>
   <div class="app">

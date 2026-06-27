@@ -88,6 +88,15 @@ const initialProducts = [
       }
     });
     const $ = (id) => document.getElementById(id);
+    async function readJsonResponse(response) {
+      const text = await response.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : {}; } catch {
+        throw new Error(`接口返回非 JSON:${response.status} ${text.slice(0, 120)}`);
+      }
+      if (!response.ok) throw new Error(data.error || data.message || `API 请求失败:${response.status}`);
+      return data;
+    }
     const rmb = (v) => `¥${Number(v || 0).toFixed(2)}`;
     const rub = (v) => `₽${Number(v || 0).toFixed(2)}`;
     const escapeHtml = (v) => String(v ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
@@ -359,7 +368,7 @@ const initialProducts = [
     async function loadStoresFromCloud() {
       try {
         const res = await fetch("/api/stores");
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         if (data.ok && Array.isArray(data.stores) && data.stores.length) {
           // KV 有数据:合并(以 id 为准,KV 覆盖本地,本地独有的保留)
           const cloudIds = new Set(data.stores.map((s) => s.id));
@@ -391,7 +400,7 @@ const initialProducts = [
       if (!backendEnabled) return false;
       try {
         const res = await fetch("/api/ads-cache");
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         if (data.ok && data.cache && typeof data.cache === "object") {
           const cloudKeys = Object.keys(data.cache);
           for (const k of cloudKeys) {
@@ -418,7 +427,7 @@ const initialProducts = [
         ...options
       });
       if (!response.ok) throw new Error(`API 请求失败：${response.status}`);
-      return response.json();
+      return readJsonResponse(response);
     }
 
     const cacheDayKey = () => todayIso();
@@ -3552,7 +3561,7 @@ const initialProducts = [
         if (needClean) localStorage.setItem(cleanVerKey, "v2");
         const url = needClean ? "/api/precache?clean=1" : "/api/precache";
         const res = await fetch(url);
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         if (data.ok) console.log("[precache] 订单预热完成:", data.results, needClean ? "(已清旧缓存)" : "");
       } catch (e) {
         console.warn("[precache] 预热失败:", e.message);
