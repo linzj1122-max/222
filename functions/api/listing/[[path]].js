@@ -227,7 +227,7 @@ function wbStores(env) {
 function storeList(env) {
   return [
     ...ozonStores(env).map((s, i) => ({ index: i, platform: "Ozon", name: s.name })),
-    ...wbStores(env).map((s, i) => ({ index: i + 100, platform: "WB", name: s.name })),
+    ...wbStores(env).map((s, i) => ({ index: i, platform: "WB", name: s.name })),
   ];
 }
 

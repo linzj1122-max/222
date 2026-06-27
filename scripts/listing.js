@@ -24,6 +24,7 @@
   const TAB_LABEL = "🚀 商品上架";
 
   const API = (sub) => `/api/listing/${sub}`;
+  let listingStores = [];
 
   // 读取「店铺设置」里手动添加的店铺(localStorage),结构与 main.js 一致
   function readLocalStores() {
@@ -32,17 +33,19 @@
   }
   // 当前选中的店铺对象(含凭证),供请求后端时塞进 header
   function currentStoreCreds() {
-    const platform = draft.platform;
-    const idx = Number(draft.storeIndex || 0);
-    const list = readLocalStores().filter((s) => normalizePlatform(s.platform) === platform);
-    const store = list[idx] || list[0] || null;
-    if (!store) return null;
+    const selected = listingStores[Number(draft.storeIndex || 0)] || null;
+    if (!selected || selected.source !== "local") return null;
+    const store = selected.raw || {};
     return {
       name: store.name || "",
-      platform,
+      platform: selected.platform || draft.platform,
       clientId: store.clientId || "",
       secret: store.secret || store.apiKey || store.token || "",
     };
+  }
+  function currentApiStoreIndex(uiIndex = draft.storeIndex) {
+    const selected = listingStores[Number(uiIndex || 0)] || null;
+    return Number(selected?.apiIndex ?? 0);
   }
   const normalizePlatform = (v) => (String(v || "").toLowerCase() === "wb" ? "WB" : "Ozon");
   // 构造带店铺凭证的请求头(localStorage 店铺走 header;环境变量店铺走 storeIndex)
@@ -178,6 +181,7 @@
     step: 1,
     platform: "Ozon",
     storeIndex: 0,
+    apiStoreIndex: 0,
     categoryId: "",
     categoryName: "",
     categoryNameZh: "",
@@ -492,17 +496,44 @@
     try { return JSON.parse(localStorage.getItem("ozon_wb_sourcing_v1") || "[]") || []; } catch { return []; }
   }
 
-  // ---- 渲染:平台/店铺下拉(从「店铺设置」localStorage 读取) ----
-  function refreshStores() {
+  // ---- 渲染:平台/店铺下拉(后端环境变量 + 本地「店铺设置」) ----
+  async function refreshStores() {
     const platform = draft.platform;
-    const all = readLocalStores().filter((s) => normalizePlatform(s.platform) === platform);
-    const options = all.length
-      ? all.map((s, i) => `<option value="${i}">${escapeHtml(s.name || `${platform} 店铺 ${i + 1}`)}</option>`).join("")
+    const localStores = readLocalStores()
+      .filter((s) => normalizePlatform(s.platform) === platform)
+      .map((store, index) => ({
+        source: "local",
+        apiIndex: index,
+        platform,
+        name: store.name || `${platform} 本地店铺 ${index + 1}`,
+        raw: store,
+      }));
+    let envStores = [];
+    try {
+      const res = await fetch(API("stores"));
+      const data = await readJsonResponse(res);
+      envStores = (data.stores || [])
+        .filter((store) => normalizePlatform(store.platform) === platform)
+        .map((store) => ({
+          source: "env",
+          apiIndex: Number(store.index || 0),
+          platform: normalizePlatform(store.platform),
+          name: store.name || `${platform} 环境变量店铺`,
+          raw: store,
+        }));
+    } catch (e) {
+      console.warn("[listing] 后端店铺加载失败", e);
+    }
+    listingStores = [...envStores, ...localStores];
+    const options = listingStores.length
+      ? listingStores.map((s, i) => `<option value="${i}">${escapeHtml(s.name)}${s.source === "env" ? "（云端）" : "（本地）"}</option>`).join("")
       : `<option value="0">(未添加${platform}店铺,请到「店铺设置」添加)</option>`;
     const sel = $("lst_storeIndex");
     const pubSel = $("lst_pubStore");
-    if (sel) { sel.innerHTML = options; sel.value = String(Math.min(draft.storeIndex || 0, Math.max(all.length - 1, 0))); }
-    if (pubSel) { pubSel.innerHTML = options; }
+    const selectedIndex = Math.min(Number(draft.storeIndex || 0), Math.max(listingStores.length - 1, 0));
+    draft.storeIndex = selectedIndex;
+    if (sel) { sel.innerHTML = options; sel.value = String(selectedIndex); }
+    if (pubSel) { pubSel.innerHTML = options; pubSel.value = String(selectedIndex); }
     // 店铺变化后,触发类目自动抓取(如果该平台类目未缓存)
     autoLoadCategories();
   }
@@ -524,8 +555,9 @@
     try { localStorage.setItem(CAT_CACHE_KEY, JSON.stringify(obj)); } catch (e) { console.warn(e); }
   }
   function currentStoreKey() {
-    const c = currentStoreCreds();
-    return c ? `${c.platform}|${c.clientId}` : draft.platform;
+    const selected = listingStores[Number(draft.storeIndex || 0)] || null;
+    if (selected) return `${selected.platform}|${selected.source}|${selected.apiIndex}|${selected.raw?.clientId || selected.name || ""}`;
+    return draft.platform;
   }
 
   // 用后端返回的 parentId(真实 ID)重建层级树。
@@ -604,7 +636,7 @@
   async function fetchCategories() {
     const status = $("lst_catStatus");
     const platform = draft.platform;
-    const storeIndex = Number(draft.storeIndex || 0);
+    const storeIndex = currentApiStoreIndex();
     if (status) status.textContent = `正在从 ${platform} 抓取类目并翻译为中文…`;
     catLoading = true;
     try {
@@ -916,7 +948,7 @@
     }
     if (status) status.textContent = "正在加载该类目的属性…";
     try {
-      const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${draft.storeIndex || 0}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}`), {
+      const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${currentApiStoreIndex()}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}`), {
         headers: storeHeaders(),
       });
       const data = await readJsonResponse(res);
@@ -1310,7 +1342,10 @@
   function publishPayload() {
     readStep2Form();
     const offerId = $("lst_pubOfferId")?.value || draft.code;
-    const storeIndex = Number($("lst_pubStore")?.value || draft.storeIndex || 0);
+    const uiStoreIndex = Number($("lst_pubStore")?.value || draft.storeIndex || 0);
+    const storeIndex = currentApiStoreIndex(uiStoreIndex);
+    draft.storeIndex = uiStoreIndex;
+    draft.apiStoreIndex = storeIndex;
     const attrDefinitions = currentAttributes.length ? currentAttributes : (draft.attrDefinitions || []);
     draft.attrDefinitions = attrDefinitions;
     return {
@@ -1437,7 +1472,8 @@
     const btn = document.querySelector(`[data-draft-check-status="${CSS.escape(draftId)}"]`);
     if (btn) { btn.disabled = true; btn.textContent = "检测中…"; }
     try {
-      const res = await fetch(API(`publish-status?taskId=${encodeURIComponent(d.publishTaskId || "")}&offerId=${encodeURIComponent(d.offerId || d.code || "")}&storeIndex=${d.storeIndex || 0}&platform=${encodeURIComponent(d.platform || "Ozon")}`), {
+      const apiStoreIndex = Number(d.apiStoreIndex ?? currentApiStoreIndex(d.storeIndex || 0));
+      const res = await fetch(API(`publish-status?taskId=${encodeURIComponent(d.publishTaskId || "")}&offerId=${encodeURIComponent(d.offerId || d.code || "")}&storeIndex=${apiStoreIndex}&platform=${encodeURIComponent(d.platform || "Ozon")}`), {
         headers: storeHeaders(),
       });
       const data = await readJsonResponse(res);
@@ -1661,7 +1697,7 @@
       const btn = $("lst_refreshCat");
       if (btn) btn.disabled = true;
       try {
-        await fetch(API(`refresh-cache?platform=${encodeURIComponent(draft.platform)}&storeIndex=${draft.storeIndex || 0}`), {
+        await fetch(API(`refresh-cache?platform=${encodeURIComponent(draft.platform)}&storeIndex=${currentApiStoreIndex()}`), {
           headers: storeHeaders(),
         });
       } catch { /* 云端清除失败不阻塞本地重抓 */ }
