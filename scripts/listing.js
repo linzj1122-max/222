@@ -19,46 +19,24 @@
   const STORAGE_KEY = "ozon_wb_listing_drafts_v1";
   const CAT_CACHE_KEY = "ozon_wb_listing_cat_cache_v1";
   const TEMPLATE_CACHE_KEY = "ozon_wb_listing_template_cache_v1";
-  const STORE_KEY = "ozon_wb_api_configs_v1";
   const TAB_ID = "listing";
   const TAB_LABEL = "🚀 商品上架";
 
   const API = (sub) => `/api/listing/${sub}`;
   let listingStores = [];
 
-  // 读取「店铺设置」里手动添加的店铺(localStorage),结构与 main.js 一致
-  function readLocalStores() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]") || []; }
-    catch { return []; }
-  }
-  // 当前选中的店铺对象(含凭证),供请求后端时塞进 header
+  // 当前选中的店铺不再暴露凭证,后端按 storeIndex 从环境变量读取。
   function currentStoreCreds() {
-    const selected = listingStores[Number(draft.storeIndex || 0)] || null;
-    if (!selected || selected.source !== "local") return null;
-    const store = selected.raw || {};
-    return {
-      name: store.name || "",
-      platform: selected.platform || draft.platform,
-      clientId: store.clientId || "",
-      secret: store.secret || store.apiKey || store.token || "",
-    };
+    return null;
   }
   function currentApiStoreIndex(uiIndex = draft.storeIndex) {
     const selected = listingStores[Number(uiIndex || 0)] || null;
     return Number(selected?.apiIndex ?? 0);
   }
   const normalizePlatform = (v) => (String(v || "").toLowerCase() === "wb" ? "WB" : "Ozon");
-  // 构造带店铺凭证的请求头(localStorage 店铺走 header;环境变量店铺走 storeIndex)
+  // 构造请求头:不携带店铺密钥。
   function storeHeaders(extra = {}) {
-    const creds = currentStoreCreds();
-    const h = { "content-type": "application/json", ...extra };
-    if (creds && creds.clientId && creds.secret) {
-      h["x-store-platform"] = creds.platform;
-      h["x-store-name"] = creds.name;
-      h["x-store-client-id"] = creds.clientId;
-      h["x-store-secret"] = creds.secret;
-    }
-    return h;
+    return { "content-type": "application/json", ...extra };
   }
 
   // ---- 局部工具（避免污染全局） ----
@@ -205,10 +183,20 @@
     width: "",
     height: "",
     params: "",
+    paramRows: [
+      { name: "材质", value: "" },
+      { name: "规格/容量", value: "" },
+      { name: "适用场景", value: "" },
+      { name: "包装清单", value: "" },
+    ],
     sellingPoints: "",
     images: [],   // dataURL 数组（参考图/单图）
     attrValues: {},   // 类目必填属性的值 { attrId: value }
     attrDefinitions: [],
+    attrCategoryKey: "",
+    variantsEnabled: false,
+    variantDimensions: "",
+    variants: [],
     // 第三步产出
     generatedImages: [],
     title: "",
@@ -323,6 +311,23 @@
           </div>
         </div>
 
+        <div id="lst_attrsWrap" class="listing-attrs-wrap listing-attrs-primary">
+          <div class="toolbar">
+            <div>
+              <h3>Ozon 类目属性</h3>
+              <p class="section-note" id="lst_attrsCategory">这里才是真正的 Ozon 类目属性，会按第一步选择的末级类目从 KV 缓存读取。</p>
+              <div class="table-status" id="lst_attrsStatus">选择末级类目后进入本步，会显示该类目的属性。</div>
+            </div>
+            <button class="primary" type="button" id="lst_autoFillAttrs">自动生成属性</button>
+            <button class="secondary" type="button" id="lst_refreshAttrs">刷新该类目属性</button>
+            <button class="secondary" type="button" id="lst_importTemplate">导入 Ozon 模板表格</button>
+            <input id="lst_templateFile" type="file" accept=".xlsx,.xls" hidden />
+          </div>
+          <div id="lst_attrsList"></div>
+        </div>
+
+        <hr class="listing-divider" />
+
         <div data-source-pane="single">
           <div class="cols-3">
             <label>货号<input id="lst_code" type="text" placeholder="例如 HS" /></label>
@@ -352,9 +357,19 @@
             <label>高 mm<input id="lst_height" type="number" step="0.1" min="0" placeholder="144" /></label>
           </div>
           <div class="cols-2">
-            <label>产品参数<textarea id="lst_params" rows="3" placeholder="材质、容量、适用场景、包装清单等"></textarea></label>
+            <label>通用参数备注<textarea id="lst_params" rows="3" placeholder="补充说明,如特殊规格、认证、注意事项等"></textarea></label>
             <label>核心卖点<textarea id="lst_sellingPoints" rows="3" placeholder="每行一个卖点,用于生成俄文文案和电商图"></textarea></label>
           </div>
+          <section class="listing-param-box">
+            <div class="toolbar">
+              <div>
+                <h3>结构化产品参数</h3>
+                <p class="section-note">这里是商品基础参数,用于生成文案和自动补属性；下面的 Ozon 类目属性会按所选类目从 KV 缓存读取。</p>
+              </div>
+              <button class="secondary" type="button" id="lst_addParamRow">添加参数</button>
+            </div>
+            <div id="lst_paramRows" class="listing-param-rows"></div>
+          </section>
         </div>
 
         <div data-source-pane="tray" hidden>
@@ -368,19 +383,26 @@
         </div>
 
         <hr class="listing-divider" />
+        <section class="listing-variant-box">
+          <div class="toolbar">
+            <div>
+              <h3>变体矩阵</h3>
+              <p class="section-note">按颜色、尺码等维度生成多个 SKU。维度名会自动匹配 Ozon 对应属性。</p>
+            </div>
+            <label class="inline-check"><input id="lst_variantsEnabled" type="checkbox" /> 启用变体</label>
+          </div>
+          <label>变体维度<textarea id="lst_variantDimensions" rows="3" placeholder="每行一个维度,格式: 颜色: 黑色,白色&#10;尺码: S,M,L"></textarea></label>
+          <div class="actions">
+            <button class="secondary" type="button" id="lst_generateVariants">生成变体 SKU</button>
+            <button class="secondary" type="button" id="lst_clearVariants">清空变体</button>
+          </div>
+          <div id="lst_variantTable" class="listing-variant-table"></div>
+        </section>
+
+        <hr class="listing-divider" />
 
         <label>商品图片(至少 1 张,建议 3:4 竖图,最多 15 张,第一张为首图)<input id="lst_images" type="file" accept="image/*" multiple /></label>
         <div class="listing-thumb-row" id="lst_thumbRow"></div>
-
-        <hr class="listing-divider" />
-        <div id="lst_attrsWrap" class="listing-attrs-wrap">
-          <div class="toolbar">
-            <div class="table-status" id="lst_attrsStatus">选择末级类目后,将自动加载该类目的必填属性。</div>
-            <button class="secondary" type="button" id="lst_importTemplate">导入 Ozon 模板表格</button>
-            <input id="lst_templateFile" type="file" accept=".xlsx,.xls" hidden />
-          </div>
-          <div id="lst_attrsList"></div>
-        </div>
 
         <label>产品标题(俄文)<textarea id="lst_title" rows="2" placeholder="Ozon 标题,建议 60~110 字符"></textarea></label>
         <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
@@ -439,6 +461,9 @@
           <span class="status">本地保存,可继续编辑或删除。</span>
           <div class="listing-draft-tools" id="lst_draftTools" hidden>
             <label class="inline-check"><input type="checkbox" id="lst_draftSelectAll" /> 全选</label>
+            <button class="secondary" type="button" id="lst_batchImport">批量导入</button>
+            <input id="lst_batchFile" type="file" accept=".xlsx,.xls,.csv" hidden />
+            <button class="primary" type="button" id="lst_batchPublish">批量发布选中</button>
             <button class="danger" type="button" id="lst_draftDelSelected">删除选中</button>
             <button class="secondary" type="button" id="lst_draftClearSel">取消选择</button>
           </div>
@@ -473,7 +498,10 @@
     document.querySelectorAll("[data-listing-pane]").forEach((el) => {
       el.classList.toggle("active", Number(el.dataset.listingPane) === draft.step);
     });
-    if (draft.step === 2) renderTrayRows();
+    if (draft.step === 2) {
+      renderTrayRows();
+      loadCategoryAttributes();
+    }
     if (draft.step === 3) {
       $("lst_pubStore") && ($("lst_pubStore").value = String(draft.storeIndex));
       $("lst_pubOfferId") && ($("lst_pubOfferId").value = draft.code || draft.offerId || "");
@@ -496,18 +524,9 @@
     try { return JSON.parse(localStorage.getItem("ozon_wb_sourcing_v1") || "[]") || []; } catch { return []; }
   }
 
-  // ---- 渲染:平台/店铺下拉(后端环境变量 + 本地「店铺设置」) ----
+  // ---- 渲染:平台/店铺下拉(只显示 Cloudflare 环境变量/Secrets 中的店铺) ----
   async function refreshStores() {
     const platform = draft.platform;
-    const localStores = readLocalStores()
-      .filter((s) => normalizePlatform(s.platform) === platform)
-      .map((store, index) => ({
-        source: "local",
-        apiIndex: index,
-        platform,
-        name: store.name || `${platform} 本地店铺 ${index + 1}`,
-        raw: store,
-      }));
     let envStores = [];
     try {
       const res = await fetch(API("stores"));
@@ -524,10 +543,10 @@
     } catch (e) {
       console.warn("[listing] 后端店铺加载失败", e);
     }
-    listingStores = [...envStores, ...localStores];
+    listingStores = envStores;
     const options = listingStores.length
-      ? listingStores.map((s, i) => `<option value="${i}">${escapeHtml(s.name)}${s.source === "env" ? "（云端）" : "（本地）"}</option>`).join("")
-      : `<option value="0">(未添加${platform}店铺,请到「店铺设置」添加)</option>`;
+      ? listingStores.map((s, i) => `<option value="${i}">${escapeHtml(s.name)}（云端）</option>`).join("")
+      : `<option value="0">(未配置${platform}云端店铺,请到 Cloudflare 环境变量添加)</option>`;
     const sel = $("lst_storeIndex");
     const pubSel = $("lst_pubStore");
     const selectedIndex = Math.min(Number(draft.storeIndex || 0), Math.max(listingStores.length - 1, 0));
@@ -764,15 +783,20 @@
     if (!hasChild) {
       // 末级 → 确认为最终上架类目,保留 Ozon 发布所需的完整路径与 id
       const leaf = node.leaf || {};
+      const oldKey = attrCategoryKey();
       draft.categoryId = leaf.origId || node.id;
       draft.categoryName = node.name;
       draft.categoryNameZh = node.name;
       draft.categoryFullPath = leaf.fullPath || node.name;   // Ozon 可接受的完整类目名,如 日化/空气清新剂/空气清新剂
       draft.typeId = leaf.typeId || 0;
       draft.descriptionCategoryId = leaf.categoryId || 0;
+      if (oldKey !== attrCategoryKey()) resetAttrsForCurrentCategory();
     } else {
       draft.categoryId = "";   // 中间节点不能上架,清空
       draft.categoryFullPath = "";
+      draft.typeId = 0;
+      draft.descriptionCategoryId = 0;
+      resetAttrsForCurrentCategory();
     }
     persistDraft();
     renderCascade();
@@ -812,18 +836,44 @@
       return false;
     }
     // 同步回 draft,确保发布数据准确
+    const oldKey = attrCategoryKey();
     draft.categoryId = leaf.origId || node.id;
     draft.categoryName = node.name;
     draft.categoryNameZh = node.name;
     draft.categoryFullPath = leaf.fullPath;
     draft.typeId = leaf.typeId || 0;
     draft.descriptionCategoryId = leaf.categoryId || 0;
+    if (oldKey !== attrCategoryKey()) resetAttrsForCurrentCategory();
     return true;
   }
 
   // 加载类目的必填属性并渲染表单(进入第二步时触发)
   let currentAttributes = [];   // 当前类目的属性列表
   let attrValues = {};          // 用户填的属性值 { attrId: value }
+  function attrCategoryKey(categoryId = draft.descriptionCategoryId, typeId = draft.typeId) {
+    return categoryId && typeId ? `${categoryId}:${typeId}` : "";
+  }
+  function applyCategoryAttributes(attributes, sourceLabel) {
+    const previousKey = draft.attrCategoryKey || "";
+    const key = attrCategoryKey();
+    currentAttributes = Array.isArray(attributes) ? attributes : [];
+    draft.attrDefinitions = currentAttributes;
+    draft.attrCategoryKey = key;
+    attrValues = previousKey === key ? { ...(draft.attrValues || {}) } : {};
+    draft.attrValues = attrValues;
+    renderAttrForm();
+    const reqCount = currentAttributes.filter((a) => a.isRequired).length;
+    const status = $("lst_attrsStatus");
+    if (status) status.textContent = `${sourceLabel}:该类目共 ${currentAttributes.length} 个属性(其中 ${reqCount} 个必填)。`;
+    autoFillAttributes({ silent: true, onlyEmpty: true });
+  }
+  function resetAttrsForCurrentCategory() {
+    currentAttributes = [];
+    attrValues = {};
+    draft.attrValues = {};
+    draft.attrDefinitions = [];
+    draft.attrCategoryKey = attrCategoryKey();
+  }
   function loadTemplateCache() {
     try { return JSON.parse(localStorage.getItem(TEMPLATE_CACHE_KEY) || "{}") || {}; }
     catch { return {}; }
@@ -847,12 +897,6 @@
     const cache = loadTemplateCache();
     const exactKey = draft.descriptionCategoryId && draft.typeId ? `cat:${draft.descriptionCategoryId}:${draft.typeId}` : "";
     if (exactKey && cache[exactKey]) return cache[exactKey];
-    const names = [draft.categoryNameZh, draft.categoryName, draft.categoryFullPath]
-      .map((v) => String(v || "").split("/").pop().trim())
-      .filter(Boolean);
-    for (const name of names) {
-      if (cache[`name:${name}`]) return cache[`name:${name}`];
-    }
     return null;
   }
   function decodeBase64Utf8(value) {
@@ -925,15 +969,17 @@
   function applyTemplateAttributes(template, source = "模板") {
     currentAttributes = Array.isArray(template?.attributes) ? template.attributes : [];
     draft.attrDefinitions = currentAttributes;
+    draft.attrCategoryKey = attrCategoryKey(template?.categoryId || draft.descriptionCategoryId, template?.typeId || draft.typeId);
     attrValues = { ...(draft.attrValues || {}) };
     renderAttrForm();
     const reqCount = currentAttributes.filter((a) => a.isRequired).length;
     const status = $("lst_attrsStatus");
     if (status) status.textContent = `${source}:「${template.name || "未命名模板"}」共 ${currentAttributes.length} 个字段(其中 ${reqCount} 个必填)。`;
   }
-  async function loadCategoryAttributes() {
+  async function loadCategoryAttributes(force = false) {
     const box = $("lst_attrsList");
     const status = $("lst_attrsStatus");
+    const key = attrCategoryKey();
     if (!draft.descriptionCategoryId || !draft.typeId) {
       const cachedTemplate = findCachedTemplateForDraft();
       if (cachedTemplate) {
@@ -942,23 +988,25 @@
       }
       currentAttributes = [];
       attrValues = {};
-      if (box) box.innerHTML = "";
-      if (status) status.textContent = "选择末级类目后,将自动加载该类目的必填属性。";
+      draft.attrDefinitions = [];
+      draft.attrValues = {};
+      draft.attrCategoryKey = "";
+      if (box) box.innerHTML = `<div class="table-status">还没有选择 Ozon 末级类目。请回第一步选择带「可上架」标签的末级类目，进入第二步后这里会直接加载可填写属性。</div>`;
+      if (status) status.textContent = "未选择末级类目。";
       return;
     }
-    if (status) status.textContent = "正在加载该类目的属性…";
+    if (draft.attrCategoryKey && draft.attrCategoryKey !== key) {
+      resetAttrsForCurrentCategory();
+    }
+    if (status) status.textContent = force ? "正在刷新云端 KV 属性缓存…" : "正在读取云端 KV 属性缓存…";
     try {
-      const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${currentApiStoreIndex()}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}`), {
+      const res = await fetch(API(`category-attributes?platform=${encodeURIComponent(draft.platform)}&storeIndex=${currentApiStoreIndex()}&categoryId=${draft.descriptionCategoryId}&typeId=${draft.typeId}${force ? "&force=1" : ""}`), {
         headers: storeHeaders(),
       });
       const data = await readJsonResponse(res);
       if (!data.ok) throw new Error(data.error || "加载属性失败");
-      currentAttributes = data.attributes || [];
-      draft.attrDefinitions = currentAttributes;
-      attrValues = { ...(draft.attrValues || {}) };   // 恢复已填的值
-      renderAttrForm();
-      const reqCount = currentAttributes.filter((a) => a.isRequired).length;
-      if (status) status.textContent = `该类目共 ${currentAttributes.length} 个属性(其中 ${reqCount} 个必填)。来源:${data.source === "cache" ? "缓存" : "实时"}。`;
+      const label = data.source === "kv-cache" ? "云端 KV 缓存" : (data.source === "fresh" ? "首次获取并写入 KV" : "属性缓存");
+      applyCategoryAttributes(data.attributes || [], label);
     } catch (e) {
       const cachedTemplate = findCachedTemplateForDraft();
       if (cachedTemplate) {
@@ -974,6 +1022,12 @@
   function renderAttrForm() {
     const box = $("lst_attrsList");
     if (!box) return;
+    const cat = $("lst_attrsCategory");
+    if (cat) {
+      cat.textContent = draft.categoryFullPath
+        ? `当前类目:${draft.categoryFullPath}。这里才是真正的 Ozon 类目属性，会从 KV 缓存读取。`
+        : "这里才是真正的 Ozon 类目属性，会按第一步选择的末级类目从 KV 缓存读取。";
+    }
     if (!currentAttributes.length) { box.innerHTML = `<div class="table-status">该类目暂无必填属性。</div>`; return; }
     // 必填在前,可选在后
     const sorted = [...currentAttributes].sort((a, b) => Number(b.isRequired) - Number(a.isRequired));
@@ -984,10 +1038,14 @@
       const star = a.isRequired ? `<span style="color:#dc2626">*</span>` : "";
       const isDict = a.dictionary || (a.values && a.values.length);
       const type = String(a.type || "").toLowerCase();
+      const values = a.values || [];
+      const filter = isDict && values.length > 12
+        ? `<input class="listing-attr-filter" type="search" data-attr-filter="${a.id}" placeholder="搜索选项" />`
+        : "";
       const field = isDict
-        ? `<select data-attr-id="${a.id}" ${a.isCollection ? `multiple size="${Math.min(Math.max((a.values || []).length, 3), 6)}"` : ""}>
+        ? `${filter}<select data-attr-id="${a.id}" ${a.isCollection ? `multiple size="${Math.min(Math.max(values.length, 3), 6)}"` : ""}>
             ${a.isCollection ? "" : `<option value="">请选择</option>`}
-            ${(a.values || []).map((v) => {
+            ${values.map((v) => {
               const selected = vals.includes(String(v.value)) || vals.includes(String(v.id));
               return `<option value="${escapeAttr(v.value)}" ${selected ? "selected" : ""}>${escapeHtml(v.value)}</option>`;
             }).join("")}
@@ -1019,6 +1077,18 @@
         persistDraft();
       });
     });
+    box.querySelectorAll("[data-attr-filter]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const id = input.getAttribute("data-attr-filter");
+        const select = box.querySelector(`select[data-attr-id="${CSS.escape(id)}"]`);
+        const attr = currentAttributes.find((item) => String(item.id) === String(id));
+        if (!select || !attr) return;
+        const selected = new Set([...select.selectedOptions].map((o) => o.value));
+        const kw = input.value.trim().toLowerCase();
+        const values = (attr.values || []).filter((v) => !kw || String(v.value).toLowerCase().includes(kw)).slice(0, 200);
+        select.innerHTML = `${attr.isCollection ? "" : `<option value="">请选择</option>`}${values.map((v) => `<option value="${escapeAttr(v.value)}" ${selected.has(String(v.value)) ? "selected" : ""}>${escapeHtml(v.value)}</option>`).join("")}`;
+      });
+    });
   }
 
   // 校验必填属性是否都填了
@@ -1033,6 +1103,193 @@
       return false;
     }
     return true;
+  }
+
+  function normalizeAttrText(value) {
+    return String(value || "").toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
+  }
+
+  function productFactMap() {
+    readStep2Form();
+    const facts = new Map();
+    const put = (keys, value) => {
+      if (!String(value || "").trim()) return;
+      keys.forEach((key) => facts.set(normalizeAttrText(key), String(value).trim()));
+    };
+    put(["бренд", "brand", "品牌"], draft.brand);
+    put(["модель", "model", "型号", "型号名称"], draft.model || draft.code);
+    put(["артикул", "sku", "offer", "货号"], draft.code);
+    put(["название", "title", "名称", "标题"], draft.title || draft.model);
+    put(["вес", "weight", "重量"], draft.weight);
+    put(["длина", "length", "长"], draft.length);
+    put(["ширина", "width", "宽"], draft.width);
+    put(["высота", "height", "高"], draft.height);
+    normalizedParamRows().forEach((row) => put([row.name], row.value));
+    parseVariantDimensions(draft.variantDimensions).forEach((dim) => put([dim.name], dim.values.join(";")));
+    String(draft.params || "").split(/\n+/).forEach((line) => {
+      const parts = line.split(/[:：]/);
+      if (parts.length >= 2) put([parts.shift()], parts.join(":"));
+    });
+    return facts;
+  }
+
+  function inferAttrRawValue(attr, facts) {
+    const name = normalizeAttrText(`${attr.name || ""} ${attr.description || ""}`);
+    const direct = [...facts.entries()].find(([key]) => key && name.includes(key));
+    if (direct) return direct[1];
+    const aliases = [
+      [["бренд", "brand"], draft.brand],
+      [["модель", "model"], draft.model || draft.code],
+      [["артикул", "sku", "offer"], draft.code],
+      [["назван", "title", "name"], draft.title || draft.model],
+      [["материал", "material", "材质"], facts.get("材质") || facts.get("material")],
+      [["цвет", "color", "颜色"], facts.get("颜色") || facts.get("color") || facts.get("цвет")],
+      [["размер", "size", "尺码"], facts.get("尺码") || facts.get("size") || facts.get("размер")],
+      [["комплектац", "package", "包装"], facts.get("包装清单") || facts.get("包装") || facts.get("package")],
+      [["назначение", "scenario", "适用"], facts.get("适用场景") || facts.get("场景")],
+      [["вес", "weight", "重量"], draft.weight],
+      [["длина", "length"], draft.length],
+      [["ширина", "width"], draft.width],
+      [["высота", "height"], draft.height],
+    ];
+    const hit = aliases.find(([keys, value]) => value && keys.some((key) => name.includes(normalizeAttrText(key))));
+    return hit ? hit[1] : "";
+  }
+
+  function chooseDictionaryValue(attr, raw) {
+    const values = attr.values || [];
+    if (!values.length || !String(raw || "").trim()) return raw;
+    const wanted = normalizeAttrText(raw);
+    const exact = values.find((v) => normalizeAttrText(v.value) === wanted);
+    if (exact) return exact.value;
+    const contains = values.find((v) => {
+      const val = normalizeAttrText(v.value);
+      return val.includes(wanted) || wanted.includes(val);
+    });
+    return contains ? contains.value : "";
+  }
+
+  function autoFillAttributes(options = {}) {
+    const { silent = false, onlyEmpty = false } = options;
+    if (!currentAttributes.length) {
+      if (!silent) alert("当前类目属性还没有加载出来。请先选择末级类目，或点击「刷新该类目属性」。");
+      return;
+    }
+    const facts = productFactMap();
+    let count = 0;
+    currentAttributes.forEach((attr) => {
+      if (!attr?.id) return;
+      const oldValue = attrValues[attr.id];
+      const hasOldValue = Array.isArray(oldValue) ? oldValue.length > 0 : String(oldValue || "").trim() !== "";
+      if (onlyEmpty && hasOldValue) return;
+      const raw = inferAttrRawValue(attr, facts);
+      const value = (attr.dictionary || attr.values?.length) ? chooseDictionaryValue(attr, raw) : raw;
+      if (!String(value || "").trim()) return;
+      attrValues[attr.id] = attr.isCollection ? String(value).split(";").map((v) => v.trim()).filter(Boolean) : String(value).trim();
+      count += 1;
+    });
+    draft.attrValues = attrValues;
+    renderAttrForm();
+    persistDraft();
+    const status = $("lst_attrsStatus");
+    if (status && (!silent || count > 0)) status.textContent = `已自动生成 ${count} 个属性，可继续手动修改。`;
+  }
+
+  function parseVariantDimensions(text) {
+    return String(text || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(/[:：]/);
+        const name = (parts.shift() || "").trim();
+        const values = parts.join(":").split(/[,，;；/|]+/).map((v) => v.trim()).filter(Boolean);
+        return { name, values };
+      })
+      .filter((item) => item.name && item.values.length);
+  }
+
+  function cartesianDimensions(dimensions) {
+    return dimensions.reduce((rows, dim) => rows.flatMap((row) => dim.values.map((value) => ({ ...row, [dim.name]: value }))), [{}]);
+  }
+
+  function variantSuffix(values) {
+    return Object.values(values || {})
+      .map((value) => String(value || "").replace(/\s+/g, "-").replace(/[^\w\u0400-\u04ff\u4e00-\u9fff-]+/g, "").toUpperCase())
+      .filter(Boolean)
+      .join("-");
+  }
+
+  function generateVariantsFromDimensions() {
+    readStep2Form();
+    const dims = parseVariantDimensions(draft.variantDimensions);
+    if (!dims.length) { alert("请先填写变体维度,例如: 颜色: 黑色,白色"); return; }
+    const combos = cartesianDimensions(dims).slice(0, 100);
+    const base = draft.code || "SKU";
+    const oldByOffer = new Map((draft.variants || []).map((v) => [String(v.offerId || ""), v]));
+    draft.variantsEnabled = true;
+    draft.variants = combos.map((values, index) => {
+      const offerId = `${base}-${variantSuffix(values) || index + 1}`;
+      const old = oldByOffer.get(offerId) || {};
+      return {
+        offerId,
+        barcode: old.barcode || "",
+        price: old.price || draft.price || "",
+        oldPrice: old.oldPrice || draft.oldPrice || "",
+        stock: old.stock || draft.stockQty || "20",
+        values,
+        attrValues: old.attrValues || {},
+      };
+    });
+    fillStep2Form();
+    persistDraft();
+  }
+
+  function renderVariantTable() {
+    const box = $("lst_variantTable");
+    if (!box) return;
+    const enabled = $("lst_variantsEnabled");
+    const dims = $("lst_variantDimensions");
+    if (enabled) enabled.checked = Boolean(draft.variantsEnabled);
+    if (dims) dims.value = draft.variantDimensions || "";
+    if (!draft.variantsEnabled) {
+      box.innerHTML = `<div class="table-status">未启用变体,发布时只创建 1 个 SKU。</div>`;
+      return;
+    }
+    const variants = Array.isArray(draft.variants) ? draft.variants : [];
+    if (!variants.length) {
+      box.innerHTML = `<div class="table-status">启用后请先生成变体 SKU。</div>`;
+      return;
+    }
+    const dimNames = [...new Set(variants.flatMap((variant) => Object.keys(variant.values || {})))];
+    box.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>${dimNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}<th>SKU</th><th>条码</th><th>售价 RUB</th><th>折扣前</th><th>库存</th><th>操作</th></tr></thead>
+          <tbody>
+            ${variants.map((variant, index) => `
+              <tr data-variant-row="${index}">
+                ${dimNames.map((name) => `<td>${escapeHtml(variant.values?.[name] || "")}</td>`).join("")}
+                <td><input data-variant-field="offerId" value="${escapeAttr(variant.offerId || "")}" /></td>
+                <td><input data-variant-field="barcode" value="${escapeAttr(variant.barcode || "")}" /></td>
+                <td><input data-variant-field="price" type="number" min="0" step="0.01" value="${escapeAttr(variant.price || "")}" /></td>
+                <td><input data-variant-field="oldPrice" type="number" min="0" step="0.01" value="${escapeAttr(variant.oldPrice || "")}" /></td>
+                <td><input data-variant-field="stock" type="number" min="0" step="1" value="${escapeAttr(variant.stock || "")}" /></td>
+                <td><button class="danger" type="button" data-variant-delete="${index}">删除</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function updateVariantFromInput(input) {
+    const row = input.closest("[data-variant-row]");
+    if (!row) return;
+    const index = Number(row.getAttribute("data-variant-row"));
+    const field = input.getAttribute("data-variant-field");
+    if (!draft.variants?.[index] || !field) return;
+    draft.variants[index][field] = input.value;
+    persistDraft();
   }
 
   // 收集树的所有节点(带路径),用于搜索
@@ -1098,12 +1355,14 @@
     if (isLeaf) {
       // 末级:直接确认上架
       const leaf = node.leaf || {};
+      const oldKey = attrCategoryKey();
       draft.categoryId = leaf.origId || node.id;
       draft.categoryName = node.name;
       draft.categoryNameZh = node.name;
       draft.categoryFullPath = leaf.fullPath || node.name;
       draft.typeId = leaf.typeId || 0;
       draft.descriptionCategoryId = leaf.categoryId || 0;
+      if (oldKey !== attrCategoryKey()) resetAttrsForCurrentCategory();
       persistDraft();
     }
     // 跳转级联(末级也跳转,让用户看到选中状态)
@@ -1171,13 +1430,49 @@
       model: draft.model,
       categoryZh: draft.categoryNameZh,
       category: draft.categoryFullPath || draft.categoryName,
-      params: draft.params,
+      params: combinedParamsText(),
       sellingPoints: draft.sellingPoints,
       price: draft.price,
       oldPrice: draft.oldPrice,
       weight: draft.weight,
       size: [draft.length, draft.width, draft.height].filter(Boolean).join(" x "),
     };
+  }
+
+  function normalizedParamRows() {
+    const rows = Array.isArray(draft.paramRows) ? draft.paramRows : [];
+    return rows
+      .map((row) => ({ name: String(row?.name || "").trim(), value: String(row?.value || "").trim() }))
+      .filter((row) => row.name || row.value);
+  }
+
+  function combinedParamsText() {
+    const structured = normalizedParamRows()
+      .filter((row) => row.name && row.value)
+      .map((row) => `${row.name}:${row.value}`);
+    const note = String(draft.params || "").trim();
+    return [...structured, note].filter(Boolean).join("\n");
+  }
+
+  function readParamRows() {
+    const box = $("lst_paramRows");
+    if (!box) return;
+    draft.paramRows = [...box.querySelectorAll("[data-param-row]")].map((row) => ({
+      name: row.querySelector("[data-param-name]")?.value || "",
+      value: row.querySelector("[data-param-value]")?.value || "",
+    }));
+  }
+
+  function renderParamRows() {
+    const box = $("lst_paramRows");
+    if (!box) return;
+    const rows = Array.isArray(draft.paramRows) && draft.paramRows.length ? draft.paramRows : [{ name: "", value: "" }];
+    box.innerHTML = rows.map((row, index) => `
+      <div class="listing-param-row" data-param-row="${index}">
+        <input data-param-name value="${escapeAttr(row.name || "")}" placeholder="参数名,如材质" />
+        <input data-param-value value="${escapeAttr(row.value || "")}" placeholder="参数值" />
+        <button class="danger" type="button" data-param-remove="${index}">删除</button>
+      </div>`).join("");
   }
 
   function normalizeTags(value) {
@@ -1286,6 +1581,11 @@
     if (titleEl) draft.title = titleEl.value;
     if (descEl) draft.description = descEl.value;
     if (tagsEl) draft.tags = tagsEl.value;
+    readParamRows();
+    const variantsEnabled = $("lst_variantsEnabled");
+    const variantDimensions = $("lst_variantDimensions");
+    if (variantsEnabled) draft.variantsEnabled = variantsEnabled.checked;
+    if (variantDimensions) draft.variantDimensions = variantDimensions.value;
   }
 
   function fillStep2Form() {
@@ -1303,6 +1603,8 @@
     renderThumbs();
     renderGeneratedImages();
     renderPricingResult();
+    renderVariantTable();
+    renderParamRows();
   }
 
   function renderPricingResult() {
@@ -1346,7 +1648,8 @@
     const storeIndex = currentApiStoreIndex(uiStoreIndex);
     draft.storeIndex = uiStoreIndex;
     draft.apiStoreIndex = storeIndex;
-    const attrDefinitions = currentAttributes.length ? currentAttributes : (draft.attrDefinitions || []);
+    const sameAttrCategory = draft.attrCategoryKey === attrCategoryKey();
+    const attrDefinitions = currentAttributes.length ? currentAttributes : (sameAttrCategory ? (draft.attrDefinitions || []) : []);
     draft.attrDefinitions = attrDefinitions;
     return {
       platform: draft.platform,
@@ -1368,12 +1671,24 @@
         length: draft.length,
         width: draft.width,
         height: draft.height,
-        params: draft.params,
+        params: combinedParamsText(),
         sellingPoints: draft.sellingPoints,
         tags: draft.tags,
         images: (draft.images || []).filter(Boolean),
-        attrValues: draft.attrValues || {},
+        attrValues: sameAttrCategory ? (draft.attrValues || {}) : {},
         attrDefinitions,
+        variantsEnabled: Boolean(draft.variantsEnabled),
+        variantDimensions: draft.variantDimensions || "",
+        variants: (draft.variants || []).map((variant) => ({
+          offerId: variant.offerId || "",
+          barcode: variant.barcode || "",
+          price: variant.price || draft.price,
+          oldPrice: variant.oldPrice || draft.oldPrice,
+          stock: variant.stock || draft.stockQty || "20",
+          values: variant.values || {},
+          attrValues: variant.attrValues || {},
+          images: variant.images || [],
+        })).filter((variant) => variant.offerId),
       },
     };
   }
@@ -1612,6 +1927,225 @@
     }
   }
 
+  function storeHeadersFor(uiStoreIndex = 0, platform = draft.platform, extra = {}) {
+    return { "content-type": "application/json", ...extra };
+  }
+
+  function payloadForDraft(d) {
+    const categoryKey = d.descriptionCategoryId && d.typeId ? `${d.descriptionCategoryId}:${d.typeId}` : "";
+    const sameAttrCategory = d.attrCategoryKey === categoryKey;
+    const attrDefinitions = sameAttrCategory ? (d.attrDefinitions || []) : [];
+    const uiStoreIndex = Number(d.storeIndex || 0);
+    return {
+      platform: d.platform || "Ozon",
+      storeIndex: Number(d.apiStoreIndex ?? currentApiStoreIndex(uiStoreIndex)),
+      draft: {
+        title: d.title,
+        description: d.description,
+        offerId: d.offerId || d.code,
+        code: d.code,
+        brand: d.brand,
+        model: d.model,
+        categoryId: d.categoryId,
+        categoryFullPath: d.categoryFullPath,
+        typeId: d.typeId || 0,
+        descriptionCategoryId: d.descriptionCategoryId || 0,
+        price: d.price,
+        oldPrice: d.oldPrice,
+        weight: d.weight,
+        length: d.length,
+        width: d.width,
+        height: d.height,
+        params: [
+          ...((Array.isArray(d.paramRows) ? d.paramRows : []).filter((row) => row?.name && row?.value).map((row) => `${row.name}:${row.value}`)),
+          d.params || "",
+        ].filter(Boolean).join("\n"),
+        sellingPoints: d.sellingPoints,
+        tags: d.tags,
+        images: (d.images || []).filter(Boolean),
+        attrValues: sameAttrCategory ? (d.attrValues || {}) : {},
+        attrDefinitions,
+        variantsEnabled: Boolean(d.variantsEnabled),
+        variantDimensions: d.variantDimensions || "",
+        variants: (d.variants || []).filter((variant) => variant.offerId),
+      },
+    };
+  }
+
+  function rowValue(row, names) {
+    for (const name of names) {
+      const key = Object.keys(row).find((k) => String(k).trim().toLowerCase() === String(name).trim().toLowerCase());
+      if (key && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") return row[key];
+    }
+    return "";
+  }
+
+  function splitImageList(value) {
+    return String(value || "")
+      .split(/[\n,，;；]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 15);
+  }
+
+  function rowVariantValues(row) {
+    const values = {};
+    Object.entries(row).forEach(([key, value]) => {
+      const k = String(key || "").trim();
+      if (/^(变体|variant)[:：]/i.test(k)) {
+        const name = k.replace(/^(变体|variant)[:：]/i, "").trim();
+        if (name && String(value || "").trim()) values[name] = String(value).trim();
+      }
+    });
+    ["颜色", "color", "цвет", "尺码", "size", "размер"].forEach((name) => {
+      const value = rowValue(row, [name]);
+      if (value) values[name] = String(value).trim();
+    });
+    return values;
+  }
+
+  function draftFromRow(row) {
+    const d = emptyDraft();
+    Object.assign(d, {
+      platform: draft.platform || "Ozon",
+      storeIndex: draft.storeIndex || 0,
+      apiStoreIndex: currentApiStoreIndex(),
+      categoryId: draft.categoryId,
+      categoryName: draft.categoryName,
+      categoryNameZh: draft.categoryNameZh,
+      categoryFullPath: draft.categoryFullPath,
+      typeId: draft.typeId || 0,
+      descriptionCategoryId: draft.descriptionCategoryId || 0,
+      attrDefinitions: currentAttributes.length ? currentAttributes : (draft.attrDefinitions || []),
+      attrCategoryKey: attrCategoryKey(),
+      attrValues: { ...(draft.attrValues || {}) },
+      code: String(rowValue(row, ["货号", "SKU", "sku", "offer_id", "offerId", "code", "Артикул"]) || "").trim(),
+      brand: String(rowValue(row, ["品牌", "brand", "Бренд"]) || draft.brand || "").trim(),
+      model: String(rowValue(row, ["型号", "型号名称", "model", "name", "品名"]) || "").trim(),
+      title: String(rowValue(row, ["标题", "title", "Название"]) || "").trim(),
+      description: String(rowValue(row, ["描述", "description", "Описание"]) || "").trim(),
+      price: String(rowValue(row, ["售价", "价格", "price", "Цена"]) || "").trim(),
+      oldPrice: String(rowValue(row, ["折扣前价格", "old_price", "oldPrice"]) || "").trim(),
+      weight: String(rowValue(row, ["重量g", "重量", "weight", "weight_g"]) || "").trim(),
+      length: String(rowValue(row, ["长mm", "长", "length"]) || "").trim(),
+      width: String(rowValue(row, ["宽mm", "宽", "width"]) || "").trim(),
+      height: String(rowValue(row, ["高mm", "高", "height"]) || "").trim(),
+      params: String(rowValue(row, ["参数", "params"]) || "").trim(),
+      paramRows: [
+        { name: "材质", value: String(rowValue(row, ["材质", "material", "Материал"]) || "").trim() },
+        { name: "规格/容量", value: String(rowValue(row, ["规格", "容量", "spec", "capacity"]) || "").trim() },
+        { name: "适用场景", value: String(rowValue(row, ["适用场景", "场景", "scenario"]) || "").trim() },
+        { name: "包装清单", value: String(rowValue(row, ["包装清单", "包装", "package"]) || "").trim() },
+      ].filter((item) => item.value),
+      sellingPoints: String(rowValue(row, ["卖点", "sellingPoints", "selling_points"]) || "").trim(),
+      tags: normalizeTags(rowValue(row, ["标签", "tags", "keywords"]) || ""),
+      images: splitImageList(rowValue(row, ["图片", "图片URL", "images", "image", "image_url"])),
+    });
+    if (!d.title) d.title = d.model || d.code;
+    return d;
+  }
+
+  function applyAttributeColumns(d, row) {
+    const values = { ...(d.attrValues || {}) };
+    (d.attrDefinitions || []).forEach((attr) => {
+      const raw = rowValue(row, [`属性:${attr.name}`, `attribute:${attr.name}`, attr.name, String(attr.id)]);
+      if (raw !== "") values[attr.id] = String(raw).trim();
+    });
+    d.attrValues = values;
+  }
+
+  async function importBatchDrafts(file) {
+    if (!window.XLSX) throw new Error("页面未加载 XLSX 解析库");
+    const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = window.XLSX.utils.sheet_to_json(ws, { raw: false, defval: "" });
+    if (!rows.length) throw new Error("表格没有可导入的数据行");
+    const groups = new Map();
+    const singles = [];
+    rows.forEach((row) => {
+      const parent = String(rowValue(row, ["父货号", "parent_sku", "parent", "group"]) || "").trim();
+      if (!parent) {
+        const d = draftFromRow(row);
+        applyAttributeColumns(d, row);
+        singles.push(d);
+        return;
+      }
+      if (!groups.has(parent)) groups.set(parent, { base: draftFromRow({ ...row, 货号: parent, sku: parent }), rows: [] });
+      groups.get(parent).rows.push(row);
+    });
+    const groupedDrafts = [...groups.values()].map((group) => {
+      const d = group.base;
+      applyAttributeColumns(d, group.rows[0] || {});
+      d.variantsEnabled = true;
+      d.variants = group.rows.map((row, index) => ({
+        offerId: String(rowValue(row, ["货号", "SKU", "sku", "offer_id", "offerId", "code"]) || `${d.code}-${index + 1}`).trim(),
+        barcode: String(rowValue(row, ["条码", "barcode"]) || "").trim(),
+        price: String(rowValue(row, ["售价", "价格", "price", "Цена"]) || d.price || "").trim(),
+        oldPrice: String(rowValue(row, ["折扣前价格", "old_price", "oldPrice"]) || d.oldPrice || "").trim(),
+        stock: String(rowValue(row, ["库存", "stock", "qty"]) || d.stockQty || "20").trim(),
+        values: rowVariantValues(row),
+        attrValues: {},
+      }));
+      const dimNames = [...new Set(d.variants.flatMap((v) => Object.keys(v.values || {})))];
+      d.variantDimensions = dimNames.map((name) => `${name}: ${[...new Set(d.variants.map((v) => v.values?.[name]).filter(Boolean))].join(",")}`).join("\n");
+      return d;
+    });
+    const imported = [...groupedDrafts, ...singles].filter((d) => d.code || d.title);
+    drafts = [...imported, ...drafts];
+    saveDraft();
+    renderDraftList();
+    log(`已批量导入 ${imported.length} 个草稿。`);
+    return imported.length;
+  }
+
+  async function publishSelectedDrafts() {
+    if (!selectedDrafts.size) { alert("请先勾选要批量发布的草稿。"); return; }
+    const ids = [...selectedDrafts];
+    const btn = $("lst_batchPublish");
+    if (btn) { btn.disabled = true; btn.textContent = "批量发布中…"; }
+    let okCount = 0;
+    let failCount = 0;
+    for (const id of ids) {
+      const d = drafts.find((item) => item.id === id);
+      if (!d) continue;
+      try {
+        const payload = payloadForDraft(d);
+        const res = await fetch(API("publish"), {
+          method: "POST",
+          headers: storeHeadersFor(d.storeIndex, d.platform),
+          body: JSON.stringify(payload),
+        });
+        const data = await readJsonResponse(res);
+        if (data.ok) {
+          d.publishResult = data;
+          d.publishStatus = "pending";
+          d.publishError = "";
+          d.publishTaskId = data.taskId || "";
+          d.productId = data.productId || d.productId || "";
+          d.offerId = data.offerId || d.offerId || d.code;
+          d.apiStoreIndex = payload.storeIndex;
+          d.publishedAt = nowIso();
+          okCount += 1;
+          log(`批量发布已提交:${d.title || d.code}`);
+        } else {
+          d.publishStatus = "failed";
+          d.publishError = data.error || "未知错误";
+          failCount += 1;
+          log(`批量发布失败:${d.title || d.code} ${d.publishError}`);
+        }
+      } catch (e) {
+        d.publishStatus = "failed";
+        d.publishError = e.message || String(e);
+        failCount += 1;
+        log(`批量发布异常:${d.title || d.code} ${d.publishError}`);
+      }
+      saveDraft();
+      renderDraftList();
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "批量发布选中"; }
+    alert(`批量发布完成:已提交 ${okCount} 个,失败 ${failCount} 个。`);
+  }
+
   // ---- 草稿持久化 ----
   function persistDraft() {
     const idx = drafts.findIndex((d) => d.id === draft.id);
@@ -1626,7 +2160,7 @@
     if (!box) return;
     const tools = $("lst_draftTools");
     if (!drafts.length) {
-      if (tools) tools.hidden = true;
+      if (tools) tools.hidden = false;
       selectedDrafts.clear();
       box.innerHTML = `<div class="listing-draft-row muted-cell">暂无草稿。</div>`;
       return;
@@ -1766,6 +2300,8 @@
     });
 
     $("lst_importTemplate")?.addEventListener("click", () => $("lst_templateFile")?.click());
+    $("lst_autoFillAttrs")?.addEventListener("click", () => autoFillAttributes());
+    $("lst_refreshAttrs")?.addEventListener("click", () => loadCategoryAttributes(true));
     $("lst_templateFile")?.addEventListener("change", async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -1791,6 +2327,46 @@
     $("lst_generateCopy")?.addEventListener("click", generateCopy);
     $("lst_generateImages")?.addEventListener("click", generateImages);
     $("lst_calcPrice")?.addEventListener("click", runGuooPricing);
+    $("lst_addParamRow")?.addEventListener("click", () => {
+      readParamRows();
+      draft.paramRows = [...(draft.paramRows || []), { name: "", value: "" }];
+      renderParamRows();
+      persistDraft();
+    });
+    $("lst_paramRows")?.addEventListener("input", () => {
+      readParamRows();
+      persistDraft();
+    });
+    $("lst_paramRows")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-param-remove]");
+      if (!btn) return;
+      readParamRows();
+      draft.paramRows.splice(Number(btn.getAttribute("data-param-remove")), 1);
+      if (!draft.paramRows.length) draft.paramRows.push({ name: "", value: "" });
+      renderParamRows();
+      persistDraft();
+    });
+    $("lst_variantsEnabled")?.addEventListener("change", (e) => { draft.variantsEnabled = e.target.checked; renderVariantTable(); persistDraft(); });
+    $("lst_variantDimensions")?.addEventListener("input", (e) => { draft.variantDimensions = e.target.value; persistDraft(); });
+    $("lst_generateVariants")?.addEventListener("click", generateVariantsFromDimensions);
+    $("lst_clearVariants")?.addEventListener("click", () => {
+      if (!draft.variants?.length || confirm("确认清空当前变体 SKU?")) {
+        draft.variants = [];
+        renderVariantTable();
+        persistDraft();
+      }
+    });
+    $("lst_variantTable")?.addEventListener("input", (e) => {
+      const input = e.target.closest("[data-variant-field]");
+      if (input) updateVariantFromInput(input);
+    });
+    $("lst_variantTable")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-variant-delete]");
+      if (!btn) return;
+      draft.variants.splice(Number(btn.getAttribute("data-variant-delete")), 1);
+      renderVariantTable();
+      persistDraft();
+    });
     $("lst_applyGenImages")?.addEventListener("click", () => {
       const generated = (draft.generatedImages || []).filter(Boolean);
       if (!generated.length) return;
@@ -1831,6 +2407,7 @@
         if (!draft.code) { alert("请填写货号。"); return; }
         if (!draft.price) { alert("请填写售价。"); return; }
         if (!draft.title) { alert("请填写产品标题。"); return; }
+        if (draft.variantsEnabled && !(draft.variants || []).filter((v) => v.offerId).length) { alert("已启用变体,请先生成或填写至少 1 个变体 SKU。"); return; }
       }
       // 校验必填属性
       if (!validateRequiredAttrs()) return;
@@ -1905,6 +2482,20 @@
       renderDraftList();
       log(`已删除 ${ids.size} 个草稿。`);
     });
+    $("lst_batchImport")?.addEventListener("click", () => $("lst_batchFile")?.click());
+    $("lst_batchFile")?.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const count = await importBatchDrafts(file);
+        alert(`已导入 ${count} 个上架草稿。`);
+      } catch (err) {
+        alert("批量导入失败:" + (err.message || err));
+      } finally {
+        e.target.value = "";
+      }
+    });
+    $("lst_batchPublish")?.addEventListener("click", publishSelectedDrafts);
     // 取消选择
     $("lst_draftClearSel")?.addEventListener("click", () => {
       selectedDrafts.clear();
@@ -1935,10 +2526,6 @@
     bindEvents();
     renderAll();
     refreshStores();
-    // 跨页签实时同步:其他标签页(如「店铺设置」)改动店铺后,本页下拉立即更新
-    window.addEventListener("storage", (e) => {
-      if (e.key === STORE_KEY) refreshStores();
-    });
   }
 
   if (document.readyState === "loading") {

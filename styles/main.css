@@ -1328,6 +1328,7 @@ button:disabled {
   font-weight: 600;
   line-height: 1.5;
   margin: 4px 0 6px;
+  white-space: pre-wrap;
 }
 .api-verify-status.ok {
   background: var(--green-soft);
@@ -2258,12 +2259,73 @@ label.inline-select > select {
 /* 动态属性表单 */
 .listing-divider { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 .listing-attrs-wrap { margin-bottom: 8px; }
+.listing-attrs-primary {
+  border: 1px solid rgba(107, 142, 175, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(107, 142, 175, 0.06);
+  padding: 14px;
+}
+.listing-attrs-primary .toolbar {
+  align-items: flex-start;
+}
 .listing-attr-row {
   display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px;
 }
 .listing-attr-row .listing-attr-name { min-width: 140px; max-width: 200px; color: var(--ink-2); flex-shrink: 0; }
 .listing-attr-row.is-required .listing-attr-name { font-weight: 600; color: var(--ink-1); }
 .listing-attr-row input, .listing-attr-row select { flex: 1; }
+.listing-attr-filter {
+  flex: 0 0 160px;
+  min-width: 120px;
+}
+.listing-param-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.listing-param-rows {
+  display: grid;
+  gap: 8px;
+}
+.listing-param-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.3fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.listing-param-row input {
+  min-width: 0;
+}
+.listing-param-row button {
+  min-height: 34px;
+  padding: 6px 12px;
+}
+.listing-variant-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.listing-variant-box .toolbar { align-items: flex-start; }
+.listing-variant-table .table-wrap { max-height: 420px; }
+.listing-variant-table table { min-width: 920px; }
+.listing-variant-table input {
+  min-width: 96px;
+  height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.listing-variant-table td,
+.listing-variant-table th {
+  white-space: nowrap;
+}
+.listing-draft-tools .primary,
+.listing-draft-tools .secondary,
+.listing-draft-tools .danger {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
 
 /* 全局加载遮罩(转圈圈) */
 .global-loader {

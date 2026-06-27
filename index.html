@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
-  <link rel="stylesheet" href="styles/main.css" />
+  <link rel="stylesheet" href="styles/main.css?v=20260628-listing-attrs" />
   <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
   <script>
     if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
@@ -536,11 +536,11 @@
               <div id="apiVerifyStatus" class="api-verify-status" hidden></div>
               <div class="actions">
                 <button class="secondary" type="button" id="verifyApiBtn">验证可用性</button>
-                <button class="primary" type="submit">保存店铺</button>
+                <button class="primary" type="submit">生成云端配置</button>
               </div>
             </form>
             <div class="notice api-notice">
-              点击「验证可用性」会立即调用平台 API 校验 Client ID 与密钥是否有效，验证通过后即可保存。删除店铺会一并清除该店铺的订单、广告、分析与缓存数据。
+              点击「验证可用性」会立即调用平台 API 校验 Client ID 与密钥是否有效。为保护密钥，页面不会保存 API Key；验证通过后会生成 Cloudflare 环境变量配置，店铺列表只显示云端已配置店铺。
             </div>
           </section>
 
@@ -596,9 +596,9 @@
     <img id="imageModalImg" alt="竞品大图" />
   </div>
 
-  <script src="scripts/main.js"></script>
+  <script src="scripts/main.js?v=20260628-secure-stores"></script>
   <script src="scripts/sourcing.js"></script>
-  <script src="scripts/listing.js"></script>
+  <script src="scripts/listing.js?v=20260628-auto-attrs"></script>
   <script src="scripts/ai-studio.js"></script>
 
   <!-- 全局加载遮罩(选时间段/抓取数据时显示转圈圈) -->

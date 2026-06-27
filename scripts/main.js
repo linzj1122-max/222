@@ -140,7 +140,21 @@ const initialProducts = [
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
     let trendOrders = JSON.parse(localStorage.getItem("ozon_wb_trend_orders_v1") || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
-    let apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
+    function sanitizeApiConfig(item = {}) {
+      return {
+        id: item.id || crypto.randomUUID(),
+        name: item.name || "未命名店铺",
+        platform: normalizePlatform(item.platform || "Ozon"),
+        clientId: item.clientId ? String(item.clientId) : "",
+        createdAt: item.createdAt || "",
+        source: item.source || (String(item.id || "").includes("-env-") ? "env" : "local"),
+      };
+    }
+    function sanitizeApiConfigs(list) {
+      return (Array.isArray(list) ? list : []).map(sanitizeApiConfig);
+    }
+    let apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
+    try { localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs)); } catch {}
     let storeGroups = JSON.parse(localStorage.getItem(storeGroupKey) || "[]");
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
@@ -337,7 +351,7 @@ const initialProducts = [
       localStorage.setItem(orderKey, JSON.stringify(orders));
       localStorage.setItem(trendOrdersKey, JSON.stringify(trendOrders));
       localStorage.setItem(competitorKey, JSON.stringify(competitors));
-      localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
+      localStorage.setItem(apiConfigKey, JSON.stringify(sanitizeApiConfigs(apiConfigs)));
       localStorage.setItem(storeGroupKey, JSON.stringify(storeGroups));
       localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
       localStorage.setItem(adsTaskCacheKey, JSON.stringify(adsTaskCache));
@@ -348,40 +362,7 @@ const initialProducts = [
       try { localStorage.setItem(trendDailyAnalyticsKey, JSON.stringify(trendDailyAnalytics)); } catch {}
       try { localStorage.setItem(summarySnapshotKey, JSON.stringify(summarySnapshot)); } catch {}
       try { localStorage.setItem(platformFeesKey, JSON.stringify(platformFees)); } catch {}
-      // 店铺同步到云端 KV(去敏感字段:secret 完整保留,发布时需要)
-      syncStoresToCloud();
     };
-
-    // 店铺持久化到 KV(跨设备/跨部署共享)
-    let cloudStoresSyncing = false;
-    function syncStoresToCloud() {
-      if (cloudStoresSyncing) return;
-      cloudStoresSyncing = true;
-      fetch("/api/stores", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ stores: apiConfigs }),
-      }).catch((e) => console.warn("[stores] 云端同步失败:", e.message))
-        .finally(() => { cloudStoresSyncing = false; });
-    }
-    // 启动时从 KV 加载店铺,与本地合并(KV 优先,因为可能是其他设备更新)
-    async function loadStoresFromCloud() {
-      try {
-        const res = await fetch("/api/stores");
-        const data = await readJsonResponse(res);
-        if (data.ok && Array.isArray(data.stores) && data.stores.length) {
-          // KV 有数据:合并(以 id 为准,KV 覆盖本地,本地独有的保留)
-          const cloudIds = new Set(data.stores.map((s) => s.id));
-          const localOnly = apiConfigs.filter((s) => !cloudIds.has(s.id));
-          apiConfigs = [...data.stores, ...localOnly];
-          localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
-          return true;
-        }
-      } catch (e) {
-        console.warn("[stores] 云端加载失败:", e.message);
-      }
-      return false;
-    }
 
     // 广告缓存持久化到 KV(跨设备/跨部署共享)。原因:Cloudflare Functions 内存
     // 每次冷启动都清空,必须把已拉到的数据持久化,否则重启后一片空白。
@@ -2541,28 +2522,36 @@ const initialProducts = [
           <td>${escapeHtml(item.clientId || "—")}</td>
           <td>${escapeHtml(formatCreatedAt(item.createdAt))}</td>
           <td class="actions">
-            <button class="secondary" type="button" onclick="editApiConfig('${item.id}')">编辑</button>
-            <button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>
+            <span class="scope-chip">${item.source === "env" ? "Cloudflare 环境变量" : "本地脱敏记录"}</span>
+            ${item.source === "env" ? "" : `<button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>`}
           </td>
         </tr>
       `).join("");
-      $("apiRows").innerHTML = rows || `<tr><td colspan="5" class="status">还没有添加店铺，请在左侧新增。</td></tr>`;
+      $("apiRows").innerHTML = rows || `<tr><td colspan="5" class="status">还没有云端店铺。请把 Ozon 凭证配置到 Cloudflare 环境变量后刷新。</td></tr>`;
     }
 
     window.editApiConfig = (id) => {
       const item = apiConfigs.find((entry) => entry.id === id);
       if (!item) return;
+      if (item.source === "env") {
+        alert("云端店铺来自 Cloudflare 环境变量/Secrets，不能在页面里编辑密钥。请到 Cloudflare Pages 设置中修改。");
+        return;
+      }
       $("editApiId").value = item.id;
       $("apiName").value = item.name || "";
       $("apiPlatform").value = item.platform || "Ozon";
       $("apiClientId").value = item.clientId || "";
-      $("apiSecret").value = item.secret || "";
+      $("apiSecret").value = "";
       $("apiVerifyStatus").hidden = true;
       $("apiForm").scrollIntoView({ behavior: "smooth", block: "center" });
     };
 
     window.deleteApiConfig = async (id) => {
       const item = apiConfigs.find((entry) => entry.id === id);
+      if (item?.source === "env") {
+        alert("云端店铺来自 Cloudflare 环境变量/Secrets，不能在页面里删除。请到 Cloudflare Pages 设置中移除对应变量。");
+        return;
+      }
       const storeName = item?.name || "";
       const hint = storeName
         ? `确认删除店铺「${storeName}」？\n\n这会一并清除该店铺的：\n· 订单与趋势数据\n· 广告数据与缓存\n· 店铺分析数据\n· 所属分组的成员引用\n删除后其他功能不会再显示该店铺的残留数据。`
@@ -3323,6 +3312,17 @@ const initialProducts = [
 
     $("verifyApiBtn").addEventListener("click", verifyApiCredentials);
 
+    function cloudflareEnvSnippet(payload) {
+      const platform = normalizePlatform(payload.platform);
+      const prefixBase = platform === "WB" ? "WB_STORE" : "OZON_STORE";
+      const nextIndex = apiConfigs.filter((item) => normalizePlatform(item.platform) === platform).length + 1;
+      const prefix = `${prefixBase}_${nextIndex}`;
+      if (platform === "WB") {
+        return `${prefix}_NAME=${payload.name}\n${prefix}_API_TOKEN=${payload.secret}`;
+      }
+      return `${prefix}_NAME=${payload.name}\n${prefix}_CLIENT_ID=${payload.clientId}\n${prefix}_API_KEY=${payload.secret}`;
+    }
+
     $("apiForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const editId = $("editApiId").value;
@@ -3338,18 +3338,10 @@ const initialProducts = [
       }
       if (backendEnabled) {
         try {
-          if (editId) {
-            const index = apiConfigs.findIndex((entry) => entry.id === editId);
-            if (index >= 0) {
-              apiConfigs[index] = { ...apiConfigs[index], ...payload };
-            }
-          } else {
-            const created = await apiRequest("/api/integrations", {
-              method: "POST",
-              body: JSON.stringify(payload)
-            });
-            apiConfigs.unshift(created);
-          }
+          const verified = await verifyApiCredentials();
+          if (!verified) return;
+          const snippet = cloudflareEnvSnippet(payload);
+          setApiVerifyStatus(true, `凭证验证成功。为安全起见，页面不会保存 API Key。请把下面变量添加到 Cloudflare Pages 环境变量/Secrets 后重新部署或刷新:\n${snippet}`);
         } catch (error) {
           alert(error.message);
           return;
@@ -3357,18 +3349,15 @@ const initialProducts = [
       } else {
         if (editId) {
           const index = apiConfigs.findIndex((entry) => entry.id === editId);
-          if (index >= 0) apiConfigs[index] = { ...apiConfigs[index], ...payload };
+          if (index >= 0) apiConfigs[index] = sanitizeApiConfig({ ...apiConfigs[index], ...payload });
         } else {
-          apiConfigs.unshift({
+          apiConfigs.unshift(sanitizeApiConfig({
             id: crypto.randomUUID(),
             ...payload,
             createdAt: new Date().toISOString()
-          });
+          }));
         }
       }
-      $("apiForm").reset();
-      $("editApiId").value = "";
-      $("apiVerifyStatus").hidden = true;
       renderAll();
     });
 
@@ -3635,18 +3624,14 @@ const initialProducts = [
           await loadBackendOrders();
           await loadStoreAnalytics();
           competitors = backendCompetitors;
-          apiConfigs = backendIntegrations;
+          apiConfigs = sanitizeApiConfigs(backendIntegrations);
         } catch {
-          apiConfigs = JSON.parse(localStorage.getItem(apiConfigKey) || "[]");
+          apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
         }
       }
       initCostScope();
       resetCostForm();
       renderAll();
-      // 启动时从云端 KV 加载店铺(若 KV 有数据则覆盖本地,解决重新部署/换设备丢失问题)
-      loadStoresFromCloud().then((loaded) => {
-        if (loaded) { renderApiConfigs(); renderAll(); }
-      });
       // 启动时从云端 KV 加载广告缓存,避免后端冷启动后一片空白
       loadAdsCacheFromCloud().then((loaded) => {
         if (loaded) { renderAds(); }

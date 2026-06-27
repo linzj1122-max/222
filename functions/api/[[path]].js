@@ -27,7 +27,7 @@ function json(body, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,x-store-platform,x-store-name,x-store-client-id,x-store-secret,x-store-api-key,x-store-token",
+      "access-control-allow-headers": "content-type",
     },
   });
 }
@@ -334,8 +334,21 @@ function filterRows(rows, params) {
   });
 }
 
+function maskClientId(value) {
+  const text = String(value || "");
+  if (text.length <= 6) return text ? "***" : "";
+  return `${text.slice(0, 3)}***${text.slice(-3)}`;
+}
+
 function integrations(env) {
-  return ozonStores(env).map((store, index) => ({ id: `ozon-env-${index}`, name: store.name, platform: "Ozon", createdAt: "Cloudflare 环境变量" }));
+  return ozonStores(env).map((store, index) => ({
+    id: `ozon-env-${index}`,
+    name: store.name,
+    platform: "Ozon",
+    clientId: maskClientId(store.clientId),
+    source: "env",
+    createdAt: "Cloudflare 环境变量",
+  }));
 }
 
 async function verifyOzonCredentials(clientId, apiKey) {
@@ -1702,7 +1715,14 @@ export async function onRequest(context) {
           const apiKey = String(body.secret || body.apiKey || "").trim();
           return json(await verifyOzonCredentials(clientId, apiKey));
         }
-        return json({ id: crypto.randomUUID(), name: body.name || "未命名店铺", platform: body.platform || "Ozon", createdAt: new Date().toISOString() });
+        return json({
+          ok: false,
+          requiresCloudflareEnv: true,
+          message: "出于安全考虑，接口不会把店铺 API Key 写入 KV 或浏览器。请将凭证配置为 Cloudflare Pages 环境变量/Secrets。",
+          variables: body.platform === "WB"
+            ? ["WB_STORE_<n>_NAME", "WB_STORE_<n>_API_TOKEN"]
+            : ["OZON_STORE_<n>_NAME", "OZON_STORE_<n>_CLIENT_ID", "OZON_STORE_<n>_API_KEY"],
+        });
       }
       return json(integrations(env));
     }
@@ -1710,25 +1730,12 @@ export async function onRequest(context) {
       if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });
       return json({ ok: false, error: "Method not allowed" }, 405);
     }
-    // 店铺持久化到 KV(跨设备/跨部署共享)。POST 保存整个列表,GET 读取。
+    // 安全模式:店铺凭证只允许来自 Cloudflare 环境变量/Secrets,不再写入 KV。
     if (path === "stores") {
-      if (!env.LISTING_CACHE) return json({ ok: false, error: "未绑定 KV,无法持久化店铺" }, 503);
       if (request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
-        const stores = Array.isArray(body.stores) ? body.stores : [];
-        await env.LISTING_CACHE.put("stores:all", JSON.stringify({ stores, ts: Date.now() }));
-        return json({ ok: true, count: stores.length });
+        return json({ ok: false, error: "店铺凭证不能写入 KV。请使用 Cloudflare Pages 环境变量/Secrets。" }, 400);
       }
-      // GET:从 KV 读取
-      try {
-        const raw = await env.LISTING_CACHE.get("stores:all", "json");
-        if (raw && Array.isArray(raw.stores)) {
-          return json({ ok: true, stores: raw.stores, ts: raw.ts });
-        }
-        return json({ ok: true, stores: [], ts: 0 });
-      } catch (e) {
-        return json({ ok: false, error: "读取店铺失败:" + (e.message || String(e)) });
-      }
+      return json({ ok: true, stores: integrations(env), source: "env" });
     }
     if (path === "ads-cache") {
       if (!env.LISTING_CACHE) return json({ ok: false, error: "未绑定 KV,无法持久化广告缓存" }, 503);
