@@ -148,6 +148,35 @@ function templateKvKeys(template) {
   return keys;
 }
 
+function cacheIdPart(value) {
+  return String(value || "default").replace(/[^a-zA-Z0-9._:-]+/g, "_").slice(0, 80);
+}
+
+function storeCacheId(platform, store) {
+  const pf = cacheIdPart(platform || "ozon").toLowerCase();
+  const id = store?.clientId || store?.name || "default";
+  return `${pf}:${cacheIdPart(id)}`;
+}
+
+function flowCacheKey(platform, store, offerId, kind) {
+  return `flow:${storeCacheId(platform, store)}:${cacheIdPart(offerId)}:${cacheIdPart(kind)}`;
+}
+
+async function kvGetJson(env, key) {
+  if (!env.LISTING_CACHE || !key) return null;
+  try { return await env.LISTING_CACHE.get(key, "json"); } catch { return null; }
+}
+
+async function kvPutJson(env, key, value, ttl = 60 * 60 * 24 * 30) {
+  if (!env.LISTING_CACHE || !key) return false;
+  try {
+    await env.LISTING_CACHE.put(key, JSON.stringify({ ...value, cachedAt: new Date().toISOString() }), { expirationTtl: ttl });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openaiBaseUrl(env) {
   return String(env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE).replace(/\/$/, "");
 }
@@ -716,7 +745,9 @@ async function preflight(env, body, headers = {}) {
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
   const { item, definitions } = await buildOzonImportPayload(store, draft);
   const result = preflightOzonItem(item, definitions);
-  return { ...result, offerId: item.offer_id, itemPreview: { ...item, primary_image: Boolean(item.primary_image), images: item.images.length } };
+  const response = { ...result, offerId: item.offer_id, itemPreview: { ...item, primary_image: Boolean(item.primary_image), images: item.images.length } };
+  response.kvSaved = await kvPutJson(env, flowCacheKey(platform, store, item.offer_id, "preflight"), response, 60 * 60 * 24 * 30);
+  return response;
 }
 
 async function publishOzonProduct(env, store, draft) {
@@ -737,7 +768,7 @@ async function publishOzonProduct(env, store, draft) {
   try { payload = JSON.parse(text); } catch { payload = null; }
   if (!response.ok) return { ok: false, status: response.status, error: payload?.error?.message || payload?.message || text.slice(0, 300) };
   const result = payload?.result || {};
-  return {
+  const responseBody = {
     ok: Boolean(result.task_id),
     taskId: result.task_id || null,
     productId: result.product_id || null,
@@ -745,6 +776,8 @@ async function publishOzonProduct(env, store, draft) {
     preflight: gate,
     raw: result,
   };
+  responseBody.kvSaved = await kvPutJson(env, flowCacheKey("ozon", store, item.offer_id, "publish"), responseBody, 60 * 60 * 24 * 90);
+  return responseBody;
 }
 
 async function publishWBProduct(env, store, draft) {
@@ -805,10 +838,22 @@ async function checkPublishStatus(env, searchParams, headers = {}) {
   const offerId = String(searchParams.get("offerId") || "");
   const store = resolveStore(env, headers, platform, storeIndex);
   if (!store) return { ok: false, error: "未配置店铺" };
+  const saveStatus = async (body, resolvedOfferId = offerId) => {
+    const keyOffer = resolvedOfferId || offerId || taskId || "unknown";
+    const kvSaved = await kvPutJson(env, flowCacheKey(platform, store, keyOffer, "status"), body, 60 * 60 * 24 * 90);
+    if (taskId && keyOffer !== taskId) {
+      await kvPutJson(env, flowCacheKey(platform, store, taskId, "status"), body, 60 * 60 * 24 * 90);
+    }
+    return { ...body, kvSaved };
+  };
+  const cachedStatus = async () => {
+    const cached = await kvGetJson(env, flowCacheKey(platform, store, offerId || taskId || "unknown", "status"));
+    return cached ? { ...cached, source: "kv-cache" } : null;
+  };
 
   if (platform === "wb") {
     // WB 同步创建,无任务 id,按货号查商品是否存在即可
-    return { ok: true, status: offerId ? "done" : "pending", note: "WB 暂不支持状态检测" };
+    return await saveStatus({ ok: true, status: offerId ? "done" : "pending", note: "WB 暂不支持状态检测" });
   }
 
   if (!taskId) {
@@ -823,11 +868,11 @@ async function checkPublishStatus(env, searchParams, headers = {}) {
       const info = await resp.json();
       const items = info?.result?.items || [];
       if (items.length) {
-        return { ok: true, status: "done", sku: items[0]?.product_id || 0 };
+        return await saveStatus({ ok: true, status: "done", sku: items[0]?.product_id || 0, productId: items[0]?.product_id || 0 });
       }
-      return { ok: true, status: "pending", note: "商品尚未出现在列表中" };
+      return await saveStatus({ ok: true, status: "pending", note: "商品尚未出现在列表中" });
     } catch (e) {
-      return { ok: false, error: "查询商品失败:" + (e.message || String(e)) };
+      return (await cachedStatus()) || { ok: false, error: "查询商品失败:" + (e.message || String(e)) };
     }
   }
 
@@ -840,17 +885,17 @@ async function checkPublishStatus(env, searchParams, headers = {}) {
     });
     const data = await resp.json();
     const result = data?.result?.items?.[0];
-    if (!result) return { ok: true, status: "pending", note: "任务尚未返回结果" };
+    if (!result) return await saveStatus({ ok: true, status: "pending", note: "任务尚未返回结果" });
     // status: "pending" | "imported" | "failed"
     const st = String(result.status || "").toLowerCase();
-    if (st === "imported") return { ok: true, status: "done", offerId: result.offer_id, productId: result.product_id };
+    if (st === "imported") return await saveStatus({ ok: true, status: "done", offerId: result.offer_id, productId: result.product_id }, result.offer_id);
     if (st === "failed" || st === "error") {
       const errs = (result.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ");
-      return { ok: true, status: "failed", error: errs || "上架被拒" };
+      return await saveStatus({ ok: true, status: "failed", offerId: result.offer_id || offerId, error: errs || "上架被拒" }, result.offer_id);
     }
-    return { ok: true, status: "pending", note: "处理中…" };
+    return await saveStatus({ ok: true, status: "pending", offerId: result.offer_id || offerId, note: "处理中…" }, result.offer_id);
   } catch (e) {
-    return { ok: false, error: "检测失败:" + (e.message || String(e)) };
+    return (await cachedStatus()) || { ok: false, error: "检测失败:" + (e.message || String(e)) };
   }
 }
 
@@ -879,15 +924,20 @@ async function auditOzonProduct(env, body, headers = {}) {
   const offerId = String(body?.offerId || body?.code || "").trim();
   const productId = Number(body?.productId || 0);
   if (!offerId && !productId) return { ok: false, error: "缺少 offerId 或 productId" };
+  const auditKey = flowCacheKey(platform, store, offerId || productId, "audit");
   try {
     const item = await fetchOzonProductAttributes(store, offerId, productId);
-    if (!item) return { ok: true, status: "pending", note: "商品属性暂未返回,稍后再查" };
+    if (!item) {
+      const pending = { ok: true, status: "pending", note: "商品属性暂未返回,稍后再查" };
+      pending.kvSaved = await kvPutJson(env, auditKey, pending, 60 * 60 * 24 * 30);
+      return pending;
+    }
     const attributes = Array.isArray(item.attributes) ? item.attributes : [];
     const attrIds = new Set(attributes.map((attr) => Number(attr.id)));
     const expected = Array.isArray(body?.expectedAttributes) ? body.expectedAttributes.map(Number).filter(Boolean) : [];
     const missing = expected.filter((id) => !attrIds.has(id));
     const richWritten = attributes.some((attr) => (attr.values || []).some((v) => /blocks|rich|content/i.test(String(v.value || ""))));
-    return {
+    const result = {
       ok: true,
       status: missing.length ? "incomplete" : "complete",
       offerId: item.offer_id || offerId,
@@ -898,8 +948,10 @@ async function auditOzonProduct(env, body, headers = {}) {
       richWritten,
       rawName: item.name || "",
     };
+    result.kvSaved = await kvPutJson(env, auditKey, result, 60 * 60 * 24 * 90);
+    return result;
   } catch (e) {
-    return { ok: false, error: "完整性检查失败:" + (e.message || String(e)) };
+    return (await kvGetJson(env, auditKey)) || { ok: false, error: "完整性检查失败:" + (e.message || String(e)) };
   }
 }
 
@@ -909,6 +961,11 @@ async function listOzonWarehouses(env, searchParams, headers = {}) {
   if (platform !== "ozon") return { ok: false, error: "仓库列表目前仅支持 Ozon" };
   const store = resolveStore(env, headers, platform, storeIndex);
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  const cacheKey = `warehouses:${storeCacheId(platform, store)}`;
+  const cached = await kvGetJson(env, cacheKey);
+  if (cached?.warehouses?.length && searchParams.get("force") !== "1") {
+    return { ok: true, warehouses: cached.warehouses, source: "kv-cache", cachedAt: cached.cachedAt };
+  }
   try {
     const response = await fetch("https://api-seller.ozon.ru/v1/warehouse/list", {
       method: "POST",
@@ -918,16 +975,18 @@ async function listOzonWarehouses(env, searchParams, headers = {}) {
     const text = await response.text();
     let payload = null;
     try { payload = JSON.parse(text); } catch { payload = null; }
-    if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300) };
+    if (!response.ok) return cached || { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300) };
     const warehouses = (payload?.result || []).map((w) => ({
       id: Number(w.warehouse_id || w.id || 0),
       name: String(w.name || w.warehouse_name || ""),
       isRfbs: Boolean(w.is_rfbs),
       status: w.status || "",
     })).filter((w) => w.id);
-    return { ok: true, warehouses };
+    const result = { ok: true, warehouses, source: "fresh" };
+    result.kvSaved = await kvPutJson(env, cacheKey, result, 60 * 60 * 6);
+    return result;
   } catch (e) {
-    return { ok: false, error: "查询仓库失败:" + (e.message || String(e)) };
+    return cached || { ok: false, error: "查询仓库失败:" + (e.message || String(e)) };
   }
 }
 
@@ -957,7 +1016,9 @@ async function setOzonStocks(env, body, headers = {}) {
     let payload = null;
     try { payload = JSON.parse(text); } catch { payload = null; }
     if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300), raw: payload };
-    return { ok: true, result: payload?.result || payload, stocks: normalized };
+    const result = { ok: true, result: payload?.result || payload, stocks: normalized };
+    result.kvSaved = await kvPutJson(env, flowCacheKey(platform, store, offerId || productId, "stock"), result, 60 * 60 * 24 * 90);
+    return result;
   } catch (e) {
     return { ok: false, error: "设置库存失败:" + (e.message || String(e)) };
   }
