@@ -85,6 +85,92 @@
     return data;
   }
 
+  const GUOO_RFBS_STANDARD = [
+    { id: "extra-small-standard", name: "Extra Small 超级轻小件", method: "陆空联运", minRub: 1, maxRub: 1500, minKg: 0.001, maxKg: 0.5, maxSumCm: 90, maxSideCm: 60, rate: 36.4, ticket: 3.12, charge: "actual" },
+    { id: "budget-standard", name: "Budget 低客单轻小件", method: "陆空联运", minRub: 1, maxRub: 1500, minKg: 0.501, maxKg: 30, maxSumCm: 150, maxSideCm: 60, rate: 26, ticket: 23.92, charge: "actual" },
+    { id: "small-standard", name: "Small 高客单轻小件", method: "陆空联运", minRub: 1501, maxRub: 7000, minKg: 0.001, maxKg: 2, maxSumCm: 150, maxSideCm: 60, rate: 36.4, ticket: 16.64, charge: "actual" },
+    { id: "big-standard", name: "Big 大件", method: "陆空联运", minRub: 1501, maxRub: 7000, minKg: 2.001, maxKg: 30, maxSumCm: 250, maxSideCm: 150, maxOtherSideCm: 50, rate: 26, ticket: 37.44, charge: "volume" },
+    { id: "premium-small-standard", name: "Premium Small 高客单轻小件", method: "陆空联运", minRub: 7001, maxRub: 250000, minKg: 0.001, maxKg: 5, maxSumCm: 250, maxSideCm: 150, maxOtherSideCm: 80, rate: 36.4, ticket: 22.88, charge: "actual" },
+    { id: "premium-big-standard", name: "Premium Big 高客单大件", method: "陆空联运", minRub: 7001, maxRub: 250000, minKg: 5.001, maxKg: 30, maxSumCm: 310, maxSideCm: 150, maxOtherSideCm: 80, rate: 29.12, ticket: 64.48, charge: "volume" },
+  ];
+
+  function guooDimensions() {
+    const dims = [toNumber(draft.length), toNumber(draft.width), toNumber(draft.height)].map((mm) => mm / 10).filter((cm) => cm > 0);
+    const sorted = [...dims].sort((a, b) => b - a);
+    return { dims, longest: sorted[0] || 0, second: sorted[1] || 0, third: sorted[2] || 0, sum: dims.reduce((a, b) => a + b, 0) };
+  }
+
+  function guooSchemeFitsSize(scheme, kg, dim) {
+    if (kg < scheme.minKg || kg > scheme.maxKg) return false;
+    if (!dim.dims.length) return true;
+    if (dim.sum > scheme.maxSumCm || dim.longest > scheme.maxSideCm) return false;
+    if (scheme.maxOtherSideCm && (dim.second > scheme.maxOtherSideCm || dim.third > scheme.maxOtherSideCm)) return false;
+    return true;
+  }
+
+  function guooFreightRmb(scheme, kg, dim) {
+    const volumeKg = dim.dims.length === 3 ? (dim.dims[0] * dim.dims[1] * dim.dims[2]) / 12000 : kg;
+    const chargeKg = scheme.charge === "volume" ? Math.max(kg, volumeKg) : kg;
+    return { chargeKg, freight: scheme.rate * chargeKg + scheme.ticket };
+  }
+
+  function ozonAgentFeeRmb(priceRmb, exchangeRate) {
+    const priceRub = priceRmb * exchangeRate;
+    const rubFee = Math.min(200, Math.max(15, priceRub * 0.02));
+    return rubFee / exchangeRate;
+  }
+
+  function evaluateGuooPrice(priceRmb, scheme, inputs) {
+    const saleRub = priceRmb * inputs.exchangeRate;
+    const freight = guooFreightRmb(scheme, inputs.kg, inputs.dim);
+    const agentFee = ozonAgentFeeRmb(priceRmb, inputs.exchangeRate);
+    const commission = priceRmb * inputs.commissionRate;
+    const grossProfit = priceRmb - commission - inputs.purchaseCost - freight.freight - agentFee;
+    const grossRate = priceRmb > 0 ? grossProfit / priceRmb : 0;
+    return { saleRub, ...freight, agentFee, commission, grossProfit, grossRate };
+  }
+
+  function solvePriceForScheme(scheme, inputs) {
+    if (!guooSchemeFitsSize(scheme, inputs.kg, inputs.dim)) return null;
+    let low = Math.max(1, scheme.minRub / inputs.exchangeRate);
+    let high = Math.max(low, Math.min(scheme.maxRub / inputs.exchangeRate, 250000 / inputs.exchangeRate));
+    const okAt = (price) => {
+      const e = evaluateGuooPrice(price, scheme, inputs);
+      return e.saleRub >= scheme.minRub && e.saleRub <= scheme.maxRub && e.grossRate >= inputs.targetGrossRate;
+    };
+    if (!okAt(high)) return null;
+    for (let i = 0; i < 48; i += 1) {
+      const mid = (low + high) / 2;
+      if (okAt(mid)) high = mid;
+      else low = mid;
+    }
+    const priceRmb = high;
+    const evalResult = evaluateGuooPrice(priceRmb, scheme, inputs);
+    return { scheme, priceRmb, priceRub: Math.ceil(evalResult.saleRub), ...evalResult };
+  }
+
+  function calculateGuooPricing() {
+    readStep2Form();
+    const inputs = {
+      purchaseCost: toNumber(draft.purchaseCost),
+      targetGrossRate: Math.max(0, toNumber(draft.targetGrossRate || 65) / 100),
+      commissionRate: Math.max(0, toNumber(draft.commissionRate || 12) / 100),
+      exchangeRate: toNumber(draft.exchangeRate || 11.5),
+      kg: toNumber(draft.weight) / 1000,
+      dim: guooDimensions(),
+    };
+    if (!inputs.purchaseCost || !inputs.kg || !inputs.exchangeRate) {
+      return { ok: false, error: "请填写采购成本、重量和汇率。" };
+    }
+    if (inputs.targetGrossRate < 0.65) inputs.targetGrossRate = 0.65;
+    const candidates = GUOO_RFBS_STANDARD.map((scheme) => solvePriceForScheme(scheme, inputs)).filter(Boolean);
+    if (!candidates.length) return { ok: false, error: "未找到满足 GUOO realFBS 限制且毛利率≥65%的方案,请检查价格区间/重量/尺寸。" };
+    candidates.sort((a, b) => a.priceRub - b.priceRub);
+    const best = candidates[0];
+    const finalEval = evaluateGuooPrice(best.priceRub / inputs.exchangeRate, best.scheme, inputs);
+    return { ok: true, ...best, ...finalEval, targetGrossRate: inputs.targetGrossRate, exchangeRate: inputs.exchangeRate, purchaseCost: inputs.purchaseCost, kg: inputs.kg, dim: inputs.dim };
+  }
+
   // ---- 草稿状态 ----
   const emptyDraft = () => ({
     id: uid(),
@@ -103,8 +189,13 @@
     code: "",
     brand: "",
     model: "",
+    purchaseCost: "",
+    targetGrossRate: "65",
+    commissionRate: "12",
+    exchangeRate: "11.5",
     price: "",
     oldPrice: "",
+    pricingResult: null,
     weight: "",   // g
     length: "",   // mm
     width: "",
@@ -233,6 +324,18 @@
             <label>货号<input id="lst_code" type="text" placeholder="例如 HS" /></label>
             <label>品牌<input id="lst_brand" type="text" placeholder="例如 Baseus" /></label>
             <label>型号名称<input id="lst_model" type="text" placeholder="例如 PPALL20000" /></label>
+          </div>
+          <div class="cols-3">
+            <label>采购成本 RMB<input id="lst_purchaseCost" type="number" step="0.01" min="0" placeholder="例如 8" /></label>
+            <label>目标毛利率 %<input id="lst_targetGrossRate" type="number" step="0.1" min="0" max="95" value="65" /></label>
+            <label>平台佣金率 %<input id="lst_commissionRate" type="number" step="0.1" min="0" max="80" value="12" /></label>
+          </div>
+          <div class="cols-3">
+            <label>汇率 RUB/CNY<input id="lst_exchangeRate" type="number" step="0.0001" min="1" value="11.5" /></label>
+            <label style="display:flex;align-items:flex-end;">
+              <button class="secondary" type="button" id="lst_calcPrice">按 GUOO 规则测算定价</button>
+            </label>
+            <div class="listing-pricing-result" id="lst_pricingResult">填写采购成本、重量、尺寸后可测算售价。</div>
           </div>
           <div class="cols-3">
             <label>售价 RUB<input id="lst_price" type="number" step="0.01" min="0" placeholder="例如 1890" /></label>
@@ -1139,7 +1242,7 @@
 
   // ---- 收集第二步表单(产品信息 + 图片 + 文案) ----
   function readStep2Form() {
-    const fields = ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
+    const fields = ["code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"];
     fields.forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) draft[k] = el.value;
@@ -1154,7 +1257,7 @@
   }
 
   function fillStep2Form() {
-    ["code", "brand", "model", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
+    ["code", "brand", "model", "purchaseCost", "targetGrossRate", "commissionRate", "exchangeRate", "price", "oldPrice", "weight", "length", "width", "height", "params", "sellingPoints"].forEach((k) => {
       const el = $(`lst_${k}`);
       if (el) el.value = draft[k] ?? "";
     });
@@ -1167,6 +1270,41 @@
     if (storeSel) storeSel.value = String(draft.storeIndex);
     renderThumbs();
     renderGeneratedImages();
+    renderPricingResult();
+  }
+
+  function renderPricingResult() {
+    const box = $("lst_pricingResult");
+    if (!box) return;
+    const r = draft.pricingResult;
+    if (!r?.ok) {
+      box.textContent = r?.error || "填写采购成本、重量、尺寸后可测算售价。";
+      box.classList.toggle("is-error", Boolean(r?.error));
+      return;
+    }
+    box.classList.remove("is-error");
+    box.innerHTML = `
+      <strong>${escapeHtml(r.scheme?.name || "")}</strong> · ${escapeHtml(r.scheme?.method || "")}
+      <span>建议售价 ${Number(r.priceRub || 0).toFixed(0)}₽</span>
+      <span>毛利率 ${(Number(r.grossRate || 0) * 100).toFixed(1)}%</span>
+      <span>运费 ¥${Number(r.freight || 0).toFixed(2)}</span>
+      <span>计费重 ${Number(r.chargeKg || 0).toFixed(3)}kg</span>`;
+  }
+
+  function runGuooPricing() {
+    const result = calculateGuooPricing();
+    draft.pricingResult = result;
+    if (!result.ok) {
+      renderPricingResult();
+      alert(result.error);
+      persistDraft();
+      return;
+    }
+    draft.price = String(result.priceRub);
+    const oldPrice = Math.ceil((result.priceRub * 1.35) / 10) * 10;
+    if (!toNumber(draft.oldPrice) || toNumber(draft.oldPrice) < result.priceRub) draft.oldPrice = String(oldPrice);
+    fillStep2Form();
+    persistDraft();
   }
 
   function publishPayload() {
@@ -1616,6 +1754,7 @@
 
     $("lst_generateCopy")?.addEventListener("click", generateCopy);
     $("lst_generateImages")?.addEventListener("click", generateImages);
+    $("lst_calcPrice")?.addEventListener("click", runGuooPricing);
     $("lst_applyGenImages")?.addEventListener("click", () => {
       const generated = (draft.generatedImages || []).filter(Boolean);
       if (!generated.length) return;
@@ -1639,6 +1778,7 @@
       draft.code = item.code || draft.code;
       draft.model = item.name || draft.model;
       draft.brand = item.supplier || draft.brand;
+      draft.purchaseCost = item.price || draft.purchaseCost;
       draft.params = item.spec ? `规格:${item.spec}` : draft.params;
       fillStep2Form();
       alert(`已选用货盘「${item.name}」,请补全售价/重量/尺寸/参考图。`);
@@ -1736,13 +1876,17 @@
     });
 
     // 文案和补充信息实时回写
-    ["lst_title", "lst_description", "lst_tags", "lst_params", "lst_sellingPoints"].forEach((id) => {
+    ["lst_title", "lst_description", "lst_tags", "lst_params", "lst_sellingPoints", "lst_purchaseCost", "lst_targetGrossRate", "lst_commissionRate", "lst_exchangeRate"].forEach((id) => {
       $(id)?.addEventListener("input", () => {
         if (id === "lst_title") draft.title = $(id).value;
         if (id === "lst_description") draft.description = $(id).value;
         if (id === "lst_tags") draft.tags = $(id).value;
         if (id === "lst_params") draft.params = $(id).value;
         if (id === "lst_sellingPoints") draft.sellingPoints = $(id).value;
+        if (id === "lst_purchaseCost") draft.purchaseCost = $(id).value;
+        if (id === "lst_targetGrossRate") draft.targetGrossRate = $(id).value;
+        if (id === "lst_commissionRate") draft.commissionRate = $(id).value;
+        if (id === "lst_exchangeRate") draft.exchangeRate = $(id).value;
         persistDraft();
       });
     });
