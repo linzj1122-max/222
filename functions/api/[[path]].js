@@ -639,6 +639,76 @@ async function upsertCloudflareStore(env, body) {
   };
 }
 
+function integrationDeleteTarget(id = "", body = {}) {
+  const explicitPlatform = body.platform ? normalizePlatform(body.platform) : "";
+  const explicitIndex = Number(body.index);
+  const match = String(id || body.id || "").match(/^(ozon|wb)-(?:env|cf)-(\d+)$/i);
+  const platform = explicitPlatform || (match ? normalizePlatform(match[1]) : "");
+  const index = Number.isFinite(explicitIndex) ? explicitIndex : (match ? Number(match[2]) : NaN);
+  if (!platform || !Number.isFinite(index) || index < 0) return null;
+  return { platform, index, number: index + 1, id: String(id || body.id || "") };
+}
+
+function cloudflareStoreDeleteEnvVars(platform, number) {
+  if (platform === "WB") {
+    return [
+      `WB_STORE_${number}_NAME`,
+      `WB_STORE_${number}_API_TOKEN`,
+      `WB_STORE_${number}_TOKEN`,
+    ];
+  }
+  return [
+    `OZON_STORE_${number}_NAME`,
+    `OZON_STORE_${number}_CLIENT_ID`,
+    `OZON_STORE_${number}_API_KEY`,
+    `OZON_ADS_${number}_NAME`,
+    `OZON_ADS_${number}_CLIENT_ID`,
+    `OZON_ADS_${number}_CLIENT_SECRET`,
+  ];
+}
+
+async function deleteCloudflareStore(env, id, body = {}) {
+  const target = integrationDeleteTarget(id, body);
+  if (!target) return { ok: false, error: "无法识别要删除的店铺编号。" };
+  const config = cloudflareManagementConfig(env);
+  const encodedProject = encodeURIComponent(config.projectName);
+  const project = await cloudflarePagesRequest(env, "GET", `/accounts/${config.accountId}/pages/projects/${encodedProject}`);
+  const envVars = project?.deployment_configs?.production?.env_vars || {};
+  const names = cloudflareStoreDeleteEnvVars(target.platform, target.number);
+  const existing = names.filter((name) => Object.prototype.hasOwnProperty.call(envVars, name));
+  if (!existing.length) {
+    return { ok: false, error: `Cloudflare 项目里没有找到 ${target.platform} 店铺 ${target.number} 的环境变量。` };
+  }
+  const deletePatch = Object.fromEntries(existing.map((name) => [name, null]));
+  await cloudflarePagesRequest(env, "PATCH", `/accounts/${config.accountId}/pages/projects/${encodedProject}`, {
+    deployment_configs: {
+      production: { env_vars: deletePatch },
+      preview: { env_vars: deletePatch },
+    },
+  });
+  let redeploy = { ok: false, error: "" };
+  try {
+    redeploy = await triggerCloudflarePagesRedeploy(env, config, encodedProject);
+  } catch (error) {
+    redeploy = { ok: false, error: error.message || String(error) };
+  }
+  if (env.LISTING_CACHE) {
+    try { await env.LISTING_CACHE.delete("config:integrations:cloudflare"); } catch {}
+  }
+  return {
+    ok: true,
+    id: target.id,
+    platform: target.platform,
+    index: target.index,
+    variables: existing,
+    redeploy,
+    requiresRedeploy: !redeploy.ok,
+    message: redeploy.ok
+      ? `已从 Cloudflare Variables and secrets 删除：${existing.join("、")}，并已自动触发重新部署。`
+      : `已从 Cloudflare Variables and secrets 删除：${existing.join("、")}。自动重新部署失败：${redeploy.error || "未知错误"}，请手动重新部署一次。`,
+  };
+}
+
 async function verifyOzonCredentials(clientId, apiKey) {
   if (!clientId || !apiKey) return { ok: false, status: 0, error: "缺少 Client ID 或 API 密钥" };
   if (!/^\d+$/.test(String(clientId).trim())) {
@@ -2013,7 +2083,14 @@ export async function onRequest(context) {
       return json(await integrationsWithCloudflareConfig(env));
     }
     if (path.startsWith("integrations/")) {
-      if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });
+      if (request.method === "DELETE") {
+        const body = await request.json().catch(() => ({}));
+        try {
+          return json(await deleteCloudflareStore(env, decodeURIComponent(path.split("/")[1] || ""), body));
+        } catch (error) {
+          return json({ ok: false, error: error.message || String(error) }, 400);
+        }
+      }
       return json({ ok: false, error: "Method not allowed" }, 405);
     }
     // 安全模式:店铺凭证只允许来自 Cloudflare 环境变量/Secrets,不再写入 KV。

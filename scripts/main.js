@@ -1028,9 +1028,16 @@ const initialProducts = [
       const select = $("chartStoreSelect");
       if (select) {
         const stores = allStoreNames();
-        const nextHtml = [`<option value="all">全部店铺</option>`, ...stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`)].join("");
+        const validValues = new Set(["all", ...stores, ...storeGroups.map((group) => `group:${group.id}`)]);
+        const groupOptions = storeGroups.length
+          ? `<optgroup label="店铺分组">${storeGroups.map((group) => `<option value="group:${escapeHtml(group.id)}">${escapeHtml(group.name)}${group.owner ? `（${escapeHtml(group.owner)}）` : ""}</option>`).join("")}</optgroup>`
+          : "";
+        const storeOptions = stores.length
+          ? `<optgroup label="单店">${stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`).join("")}</optgroup>`
+          : "";
+        const nextHtml = `<option value="all">全部店铺</option>${groupOptions}${storeOptions}`;
         if (select.innerHTML !== nextHtml) select.innerHTML = nextHtml;
-        if (!stores.includes(chartStore) && chartStore !== "all") chartStore = "all";
+        if (!validValues.has(chartStore)) chartStore = "all";
         select.value = chartStore;
       }
       updateChartMenuText();
@@ -1259,8 +1266,15 @@ const initialProducts = [
       if (!select) return;
       const stores = [...new Set(analyticsProductRows.map((r) => r.store).filter(Boolean))].sort();
       const current = analyticsStoreValue;
-      select.innerHTML = `<option value="all">全部店铺</option>` + stores.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-      if (stores.includes(current) || current === "all") select.value = current;
+      const validValues = new Set(["all", ...stores, ...storeGroups.map((group) => `group:${group.id}`)]);
+      const groupOptions = storeGroups.length
+        ? `<optgroup label="店铺分组">${storeGroups.map((group) => `<option value="group:${escapeHtml(group.id)}">${escapeHtml(group.name)}${group.owner ? `（${escapeHtml(group.owner)}）` : ""}</option>`).join("")}</optgroup>`
+        : "";
+      const storeOptions = stores.length
+        ? `<optgroup label="单店">${stores.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}</optgroup>`
+        : "";
+      select.innerHTML = `<option value="all">全部店铺</option>${groupOptions}${storeOptions}`;
+      if (validValues.has(current)) select.value = current;
       else { analyticsStoreValue = "all"; select.value = "all"; }
     }
     function renderAnalytics() {
@@ -1270,7 +1284,12 @@ const initialProducts = [
       if (!body) return;
       const kw = analyticsSkuValue.trim().toLowerCase();
       let rows = analyticsProductRows.slice();
-      if (analyticsStoreValue !== "all") rows = rows.filter((r) => r.store === analyticsStoreValue);
+      if (String(analyticsStoreValue).startsWith("group:")) {
+        const groupStores = storesInGroup(analyticsStoreValue.slice("group:".length));
+        rows = rows.filter((r) => groupStores.includes(r.store));
+      } else if (analyticsStoreValue !== "all") {
+        rows = rows.filter((r) => r.store === analyticsStoreValue);
+      }
       if (kw) rows = rows.filter((r) => String(r.sku || "").toLowerCase().includes(kw) || String(r.name || "").toLowerCase().includes(kw));
       // 汇总卡片(只保留有真实数据的指标)
       const totalRevenue = rows.reduce((s, r) => s + Number(r.revenue || 0), 0);
@@ -1345,6 +1364,10 @@ const initialProducts = [
     function chartScopedOrders() {
       const base = trendOrders.length ? trendOrders : orders;
       if (chartStore === "all") return base;
+      if (String(chartStore).startsWith("group:")) {
+        const groupStores = storesInGroup(chartStore.slice("group:".length));
+        return base.filter((order) => groupStores.includes(order.store));
+      }
       return base.filter((order) => order.store === chartStore);
     }
 
@@ -2799,8 +2822,8 @@ const initialProducts = [
           <td>${escapeHtml(item.clientId || "—")}</td>
           <td>${escapeHtml(formatCreatedAt(item.createdAt))}</td>
           <td class="actions">
-            <span class="scope-chip">${item.source === "env" ? "Cloudflare 环境变量" : "本地脱敏记录"}</span>
-            ${item.source === "env" ? "" : `<button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>`}
+            <span class="scope-chip">${item.source === "local" ? "本地脱敏记录" : "Cloudflare 环境变量"}</span>
+            <button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>
           </td>
         </tr>
       `).join("");
@@ -2828,18 +2851,28 @@ const initialProducts = [
 
     window.deleteApiConfig = async (id) => {
       const item = apiConfigs.find((entry) => entry.id === id);
-      if (item?.source === "env") {
-        alert("云端店铺来自 Cloudflare 环境变量/Secrets，不能在页面里删除。请到 Cloudflare Pages 设置中移除对应变量。");
-        return;
-      }
       const storeName = item?.name || "";
-      const hint = storeName
-        ? `确认删除店铺「${storeName}」？\n\n这会一并清除该店铺的：\n· 订单与趋势数据\n· 广告数据与缓存\n· 店铺分析数据\n· 所属分组的成员引用\n删除后其他功能不会再显示该店铺的残留数据。`
-        : "确认删除这个店铺？这会清除其所有相关数据。";
+      const cloudDelete = item && item.source !== "local";
+      const hint = cloudDelete
+        ? `确认删除云端店铺「${storeName || item.id}」？\n\n这会从 Cloudflare Pages 的 Variables and secrets 删除该店铺变量，并自动触发重新部署。\n\n同时会清理页面本地缓存中的订单、广告、分析数据和分组引用。此操作不可撤销。`
+        : (storeName
+          ? `确认删除店铺「${storeName}」？\n\n这会一并清除该店铺的：\n· 订单与趋势数据\n· 广告数据与缓存\n· 店铺分析数据\n· 所属分组的成员引用\n删除后其他功能不会再显示该店铺的残留数据。`
+          : "确认删除这个店铺？这会清除其所有相关数据。");
       if (!confirm(hint)) return;
-      if (backendEnabled) {
+      if (backendEnabled && cloudDelete) {
         try {
-          await apiRequest(`/api/integrations/${id}`, { method: "DELETE" });
+          const result = await apiRequest(`/api/integrations/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+            body: JSON.stringify({
+              id,
+              platform: item?.platform,
+              index: item?.index,
+              name: item?.name,
+              source: item?.source,
+            }),
+          });
+          if (!result.ok) throw new Error(result.error || "删除店铺失败");
+          setApiVerifyStatus(true, result.message || "已删除 Cloudflare 店铺变量。");
         } catch (error) {
           alert(error.message);
           return;
