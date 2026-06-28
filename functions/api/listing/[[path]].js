@@ -1327,6 +1327,16 @@ function warehouseDebugSample(row = {}) {
   return out;
 }
 
+function displayOzonWarehouseForStore(store, warehouse) {
+  const storeName = String(store?.name || "");
+  const name = String(warehouse?.name || "");
+  if (/子杰3店/i.test(storeName)) {
+    if (/轻小件|GUOO\s*轻/i.test(name)) return { ...warehouse, name: name.startsWith("111") ? name : `111 / ${name}` };
+    if (/small/i.test(name)) return { ...warehouse, name: name.startsWith("222") ? name : `222 / ${name}` };
+  }
+  return warehouse;
+}
+
 async function fetchOzonStockWarehouseProbe(store) {
   const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
   const endpoints = [
@@ -1394,7 +1404,7 @@ async function fetchOzonStockWarehouseProbe(store) {
     }
     if (warehouses.size) break;
   }
-  return { warehouses: [...warehouses.values()], attempts };
+  return { warehouses: [...warehouses.values()].map((warehouse) => displayOzonWarehouseForStore(store, warehouse)), attempts };
 }
 
 async function fetchOzonStockWarehouses(store) {
