@@ -2942,17 +2942,16 @@ const initialProducts = [
       if (!body) return;
       const rows = employeeUsers.map((user) => {
         const role = String(user.role || "").toLowerCase() === "member" ? "员工" : "管理员";
-        const access = String(user.role || "").toLowerCase() === "member"
-          ? "可登录查看，不能新增账号或删除店铺"
-          : "可管理员工和店铺";
+        const index = employeeUsers.indexOf(user);
         return `<tr>
           <td><strong>${escapeHtml(user.username)}</strong></td>
+          <td><code>${escapeHtml(user.password || "—")}</code></td>
           <td>${escapeHtml(user.name || "—")}</td>
           <td><span class="scope-chip">${escapeHtml(role)}</span></td>
-          <td>${escapeHtml(access)}</td>
+          <td><button class="secondary" type="button" data-copy-employee="${index}">复制账号密码</button></td>
         </tr>`;
       }).join("");
-      body.innerHTML = rows || `<tr><td colspan="4" class="status">还没有员工账号。</td></tr>`;
+      body.innerHTML = rows || `<tr><td colspan="5" class="status">还没有员工账号。</td></tr>`;
     }
 
     function setEmployeeStatus(ok, message) {
@@ -2962,6 +2961,34 @@ const initialProducts = [
       box.className = "api-verify-status " + (ok ? "ok" : "fail");
       box.textContent = message || "";
     }
+
+    async function copyText(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+
+    window.copyEmployeeCredential = async (index) => {
+      const user = employeeUsers[Number(index)];
+      if (!user) return;
+      const text = `账号：${user.username}\n密码：${user.password || ""}`;
+      try {
+        await copyText(text);
+        setEmployeeStatus(true, `已复制 ${user.username} 的账号和密码。`);
+      } catch (error) {
+        setEmployeeStatus(false, "复制失败，请手动选中账号密码复制。");
+      }
+    };
 
     async function loadEmployeeUsers() {
       if (!backendEnabled || !canManageUsers()) {
@@ -4236,6 +4263,22 @@ const initialProducts = [
       setAuthSession(null);
       currentUser = null;
       location.reload();
+    });
+
+    document.addEventListener("click", (event) => {
+      const toggle = event.target.closest("[data-password-toggle]");
+      if (toggle) {
+        const input = $(toggle.getAttribute("data-password-toggle"));
+        if (input) {
+          input.type = input.type === "password" ? "text" : "password";
+          toggle.textContent = input.type === "password" ? "显示" : "隐藏";
+        }
+        return;
+      }
+      const copy = event.target.closest("[data-copy-employee]");
+      if (copy) {
+        copyEmployeeCredential(copy.getAttribute("data-copy-employee"));
+      }
     });
 
     async function refreshBaseDataInBackground() {

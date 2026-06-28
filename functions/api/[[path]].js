@@ -186,11 +186,13 @@ function canManageUsers(user) {
 }
 
 function publicManagedUser(user) {
-  return {
+  const out = {
     username: user.username,
     name: user.name || user.username,
     role: normalizeAuthRole(user.role),
   };
+  if (user.password !== undefined) out.password = user.password;
+  return out;
 }
 
 function controlCenterUsers(env) {
@@ -2264,7 +2266,7 @@ export async function onRequest(context) {
     if (path === "users") {
       if (!canManageUsers(auth.user)) return json({ ok: false, error: "只有管理员可以管理员工账号。" }, 403);
       if (request.method === "GET") {
-        return json({ ok: true, users: authUsers(env).map(publicManagedUser) });
+        return json({ ok: true, users: controlCenterUsers(env).map(publicManagedUser) });
       }
       if (request.method === "POST") {
         const body = await request.json().catch(() => ({}));

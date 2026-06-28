@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
-  <link rel="stylesheet" href="styles/main.css?v=20260629-users" />
+  <link rel="stylesheet" href="styles/main.css?v=20260629-users-password" />
   <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
   <script>
     if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
@@ -18,7 +18,12 @@
       <span class="login-kicker">OZ/WB COMMAND CENTER</span>
       <h2>登录经营中控</h2>
       <label>账号<input id="loginUsername" name="username" autocomplete="username" required /></label>
-      <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" required /></label>
+      <label>密码
+        <span class="password-field">
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+          <button class="password-toggle" type="button" data-password-toggle="loginPassword">显示</button>
+        </span>
+      </label>
       <div id="loginStatus" class="login-status" hidden></div>
       <button type="submit">登录</button>
     </form>
@@ -678,7 +683,12 @@
             <div class="cols-3">
               <label>员工姓名<input id="employeeName" placeholder="例如 小王" autocomplete="off" /></label>
               <label>登录账号<input id="employeeUsername" required placeholder="例如 staff01" autocomplete="off" /></label>
-              <label>登录密码<input id="employeePassword" required type="password" minlength="6" placeholder="至少 6 位" autocomplete="new-password" /></label>
+              <label>登录密码
+                <span class="password-field">
+                  <input id="employeePassword" required type="password" minlength="6" placeholder="at least 6 characters" autocomplete="new-password" />
+                  <button class="password-toggle" type="button" data-password-toggle="employeePassword">显示</button>
+                </span>
+              </label>
             </div>
             <div id="employeeStatus" class="api-verify-status" hidden></div>
             <div class="actions">
@@ -687,7 +697,7 @@
           </form>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>账号</th><th>名称</th><th>角色</th><th>权限</th></tr></thead>
+              <thead><tr><th>账号</th><th>密码</th><th>名称</th><th>角色</th><th>操作</th></tr></thead>
               <tbody id="employeeRows"></tbody>
             </table>
           </div>
@@ -701,7 +711,7 @@
     <img id="imageModalImg" alt="竞品大图" />
   </div>
 
-  <script src="scripts/main.js?v=20260629-users"></script>
+  <script src="scripts/main.js?v=20260629-users-password"></script>
   <script src="scripts/sourcing.js"></script>
   <script src="scripts/listing.js?v=20260628-store-sync"></script>
   <script src="scripts/ai-studio.js"></script>

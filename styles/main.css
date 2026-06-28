@@ -1907,6 +1907,15 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
   height: 42px;
   padding: 0 18px;
 }
+.user-admin-panel code {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  color: var(--ink-1);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
 
 /* ---- 订单筛选：日期 + 店铺 + 刷新按钮高度统一 ---- */
 .order-filters {
@@ -3050,6 +3059,31 @@ body.auth-locked .app {
 
 .login-card input {
   width: 100%;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.password-field input {
+  min-width: 0;
+}
+
+.password-toggle {
+  min-width: 58px;
+  padding: 0 12px;
+  background: var(--bg-3);
+  color: var(--ink-2);
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+}
+
+.password-toggle:hover {
+  background: var(--bg-4);
+  color: var(--ink-1);
 }
 
 .login-card button {
