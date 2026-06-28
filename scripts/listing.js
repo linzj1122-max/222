@@ -186,6 +186,13 @@
     sourceUrl1688: "",
     purchasePrice1688: "",
     purchaseShipping1688: "",
+    browserFlow: {
+      ozonKeyword: "",
+      ozonProducts: [],
+      supplierProducts: [],
+      generatedImageSources: [],
+      notes: "",
+    },
     targetGrossRate: "65",
     commissionRate: "12",
     exchangeRate: "11.5",
@@ -292,7 +299,6 @@
       <section class="panel listing-step-pane active" data-listing-pane="1">
         <div class="toolbar">
           <h3>第一步 · 选择平台与类目</h3>
-          <button class="secondary" type="button" id="lst_refreshCat" title="清空缓存并重新抓取">↻ 刷新类目</button>
         </div>
         <div class="cols-2">
           <label class="inline-select">平台
@@ -319,10 +325,6 @@
       <section class="panel listing-step-pane" data-listing-pane="2">
         <div class="toolbar">
           <h3>第二步 · 产品信息、图片与文案</h3>
-          <div class="segmented small" id="lst_sourceToggle">
-            <button class="active" type="button" data-source="single">单个添加</button>
-            <button type="button" data-source="tray">从货盘选</button>
-          </div>
         </div>
 
         <div id="lst_attrsWrap" class="listing-attrs-wrap listing-attrs-primary">
@@ -332,10 +334,6 @@
               <p class="section-note" id="lst_attrsCategory">这里才是真正的 Ozon 类目属性，会按第一步选择的末级类目从 KV 缓存读取。</p>
               <div class="table-status" id="lst_attrsStatus">选择末级类目后进入本步，会显示该类目的属性。</div>
             </div>
-            <button class="primary" type="button" id="lst_autoFillAttrs">自动生成属性</button>
-            <button class="secondary" type="button" id="lst_refreshAttrs">刷新该类目属性</button>
-            <button class="secondary" type="button" id="lst_importTemplate">导入 Ozon 模板表格</button>
-            <input id="lst_templateFile" type="file" accept=".xlsx,.xls" hidden />
           </div>
           <div id="lst_attrsList"></div>
         </div>
@@ -436,12 +434,7 @@
         <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
         <label>搜索标签(<strong>每行一个</strong>,每个标签 ≤ 30 字符,最多 20 个)<textarea id="lst_tags" rows="4" placeholder="每行输入一个标签,例如:&#10;массажер&#10;для шеи"></textarea></label>
         <div id="lst_tagHint" class="table-status">提示:Ozon 要求每个标签单独一行,单个标签不超过 30 个字符(含 #)。</div>
-        <div class="actions">
-          <button class="secondary" type="button" id="lst_generateCopy">AI 生成俄文文案</button>
-          <button class="secondary" type="button" id="lst_generateImages">AI 生成 9 张商品图</button>
-          <button class="secondary" type="button" id="lst_applyGenImages" hidden>将生成图加入商品图片</button>
-        </div>
-        <div id="lst_aiStatus" class="table-status">可先上传参考图,再生成俄文文案或商品图。</div>
+        <div id="lst_aiStatus" class="table-status">GPT Image2 图片由浏览器流程生成后导入这里；发布前会生成预览并等待确认。</div>
         <div class="listing-gen-grid" id="lst_genGrid"></div>
 
         <div class="actions">
@@ -459,21 +452,11 @@
           <label>目标店铺<select id="lst_pubStore"></select></label>
           <label>货号 / SKU<input id="lst_pubOfferId" type="text" /></label>
           <label style="display:flex;align-items:flex-end;">
-            <button class="primary" type="button" id="lst_publish">立即发布</button>
+            <button class="primary" type="button" id="lst_publish">预览并确认发布</button>
           </label>
         </div>
         <div class="actions">
           <button class="secondary" type="button" id="lst_preflight">上传前自检</button>
-          <button class="secondary" type="button" id="lst_pollStatus">轮询上架状态</button>
-          <button class="secondary" type="button" id="lst_auditProduct">完整性检查</button>
-          <button class="secondary" type="button" id="lst_loadWarehouses">加载仓库</button>
-        </div>
-        <div class="cols-3">
-          <label>库存仓库<select id="lst_stockWarehouse"><option value="">先加载仓库</option></select></label>
-          <label>库存数量<input id="lst_stockQty" type="number" min="0" step="1" value="20" /></label>
-          <label style="display:flex;align-items:flex-end;">
-            <button class="secondary" type="button" id="lst_setStock">设置库存</button>
-          </label>
         </div>
         <div class="listing-flow-checks" id="lst_flowChecks"></div>
         <div class="listing-log" id="lst_log">就绪。</div>
@@ -488,12 +471,6 @@
           <h3>上架草稿</h3>
           <span class="status">本地保存,可继续编辑或删除。</span>
           <div class="listing-draft-tools" id="lst_draftTools" hidden>
-            <label class="inline-check"><input type="checkbox" id="lst_draftSelectAll" /> 全选</label>
-            <button class="secondary" type="button" id="lst_batchImport">批量导入</button>
-            <input id="lst_batchFile" type="file" accept=".xlsx,.xls,.csv" hidden />
-            <button class="primary" type="button" id="lst_batchPublish">批量发布选中</button>
-            <button class="danger" type="button" id="lst_draftDelSelected">删除选中</button>
-            <button class="secondary" type="button" id="lst_draftClearSel">取消选择</button>
           </div>
         </div>
         <div id="lst_draftList"></div>
@@ -1928,11 +1905,38 @@
     }
   }
 
+  function publishConfirmText(payload, preflight) {
+    const store = listingStores[Number(draft.storeIndex || 0)]?.name || `店铺 ${Number(draft.storeIndex || 0) + 1}`;
+    const failed = (preflight?.checks || []).filter((check) => !check.ok).map((check) => `${check.label}:${check.detail || ""}`);
+    const requiredMissing = preflight?.requiredMissing?.length ? preflight.requiredMissing.join("、") : "";
+    return [
+      "发布前预览",
+      "",
+      `平台: ${payload.platform}`,
+      `店铺: ${store}`,
+      `SKU: ${payload.draft.offerId || payload.draft.code || ""}`,
+      `标题: ${payload.draft.title || ""}`,
+      `售价 RMB: ${payload.draft.price || "0"}`,
+      `图片: ${(payload.draft.images || []).length} 张`,
+      `重量/尺寸: ${payload.draft.weight || 0}g, ${payload.draft.length || 0} x ${payload.draft.width || 0} x ${payload.draft.height || 0}mm`,
+      `Ozon 属性: ${Object.keys(payload.draft.attrValues || {}).length} 个`,
+      preflight?.itemCount ? `变体/商品数: ${preflight.itemCount}` : "",
+      failed.length ? `未通过项: ${failed.join("; ")}` : "自检: 通过",
+      requiredMissing ? `缺少必填属性: ${requiredMissing}` : "",
+      "",
+      "确认后才会通过中控接口提交到店铺。是否继续发布？",
+    ].filter(Boolean).join("\n");
+  }
+
   // ---- 第三步:发布 ----
   async function runPublish() {
     const preflight = await runPreflight();
-    if (!preflight.ok && !confirm("上传前自检未通过,仍然尝试发布?")) return;
     const payload = publishPayload();
+    if (!confirm(publishConfirmText(payload, preflight))) {
+      log("用户取消发布。");
+      return;
+    }
+    if (!preflight.ok && !confirm("自检未通过。确认仍然提交到中控发布接口？")) return;
     const offerId = payload.draft.offerId;
     const images = (draft.images || []).filter(Boolean);
     if (!draft.title) { alert("缺少标题"); return; }
@@ -2357,16 +2361,13 @@
     if (!box) return;
     const tools = $("lst_draftTools");
     if (!drafts.length) {
-      if (tools) tools.hidden = false;
+      if (tools) tools.hidden = true;
       selectedDrafts.clear();
       box.innerHTML = `<div class="listing-draft-row muted-cell">暂无草稿。</div>`;
       return;
     }
-    if (tools) tools.hidden = false;
-    // 清理已不存在草稿的选中状态
-    selectedDrafts = new Set([...selectedDrafts].filter((id) => drafts.some((d) => d.id === id)));
-    const allSel = $("lst_draftSelectAll");
-    if (allSel) allSel.checked = selectedDrafts.size === drafts.length;
+    if (tools) tools.hidden = true;
+    selectedDrafts.clear();
 
     const statusBadge = (d) => {
       const st = d.publishStatus || "draft";
@@ -2377,9 +2378,7 @@
     };
 
     box.innerHTML = drafts.map((d) => {
-      const checked = selectedDrafts.has(d.id) ? "checked" : "";
-      return `<div class="listing-draft-row ${checked ? "is-selected" : ""}">
-        <label class="inline-check"><input type="checkbox" data-draft-check="${escapeAttr(d.id)}" ${checked} /></label>
+      return `<div class="listing-draft-row">
         <span class="listing-draft-info">
           <strong>${escapeHtml(d.platform)}</strong> ·
           ${escapeHtml(d.title || d.model || d.code || "未命名草稿")}
