@@ -859,16 +859,8 @@ async function loadOzonAttributeDefinitions(store, draft) {
   const templateAttrs = Array.isArray(draft.attrDefinitions) ? draft.attrDefinitions.map(normalizeTemplateAttribute).filter((a) => a.id) : [];
   if (!templateAttrs.length && descriptionCategoryId && typeId) {
     try {
-      const attrResp = await fetch("https://api-seller.ozon.ru/v3/category/attribute", {
-        method: "POST",
-        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-        body: JSON.stringify({ description_category_id: [descriptionCategoryId], type_id: [typeId], language: "ZH_HANS" }),
-      });
-      if (attrResp.ok) {
-        const info = await attrResp.json();
-        const all = info?.result || [];
-        requiredAttrs = Array.isArray(all[0]?.attributes) ? all[0].attributes.filter((a) => a.is_required) : [];
-      }
+      const fetched = await fetchOzonAttributeDefinitions(store, descriptionCategoryId, typeId);
+      requiredAttrs = fetched.attributes.filter((a) => a.isRequired);
     } catch {
       // 属性拉取失败不阻塞发布,用户可在后台补全必填属性
     }
@@ -877,9 +869,13 @@ async function loadOzonAttributeDefinitions(store, draft) {
     id: Number(attr.id),
     name: String(attr.name || ""),
     description: String(attr.description || ""),
-    isRequired: Boolean(attr.is_required),
+    isRequired: Boolean(attr.isRequired || attr.is_required),
     type: String(attr.type || "String"),
-    complexId: 0,
+    isCollection: Boolean(attr.isCollection || attr.is_collection),
+    maxValueCount: Number(attr.maxValueCount || attr.max_value_count || 0),
+    dictionary: Number(attr.dictionary || attr.dictionary_id || 0),
+    complexId: Number(attr.complexId || attr.complex_id || 0),
+    complexName: String(attr.complexName || attr.complex_name || ""),
     values: Array.isArray(attr.values) ? attr.values.map((v) => ({ id: Number(v.id || 0), value: String(v.value || "") })) : [],
   }));
   return templateAttrs.length ? templateAttrs : fallbackAttrs;
@@ -1257,9 +1253,69 @@ async function setOzonStocks(env, body, headers = {}) {
 function attrKvKeys(platform, categoryId, typeId) {
   const pf = String(platform || "ozon").toLowerCase();
   return [
-    `attrs:v2:${pf}:${categoryId}:${typeId}`,
-    `attrs:v2:any:${categoryId}:${typeId}`,
+    `attrs:v3:${pf}:${categoryId}:${typeId}`,
+    `attrs:v3:any:${categoryId}:${typeId}`,
   ];
+}
+
+function normalizeOzonApiAttribute(a) {
+  const values = Array.isArray(a.values)
+    ? a.values.slice(0, 300).map((v) => ({ id: Number(v.id || v.value_id || 0), value: String(v.value || v.name || "") })).filter((v) => v.value)
+    : [];
+  return {
+    id: Number(a.id || 0),
+    name: String(a.name || ""),
+    description: String(a.description || ""),
+    isRequired: Boolean(a.is_required ?? a.isRequired),
+    type: String(a.type || "string"),
+    dictionary: Number(a.dictionary_id || a.dictionary || 0),
+    isCollection: Boolean(a.is_collection ?? a.isCollection),
+    maxValueCount: Number(a.max_value_count || a.maxValueCount || 0),
+    complexId: Number(a.complex_id || a.attribute_complex_id || a.complexId || 0),
+    complexName: String(a.complex_name || a.group_name || a.complexName || ""),
+    values,
+  };
+}
+
+async function fetchOzonAttributeDefinitions(store, categoryId, typeId) {
+  const requests = [
+    {
+      endpoint: "https://api-seller.ozon.ru/v1/description-category/attribute",
+      body: { description_category_id: Number(categoryId), type_id: Number(typeId), language: "ZH_HANS" },
+      source: "description-category-v1",
+    },
+    {
+      endpoint: "https://api-seller.ozon.ru/v3/category/attribute",
+      body: { description_category_id: [Number(categoryId)], type_id: [Number(typeId)], language: "ZH_HANS" },
+      source: "category-v3",
+    },
+  ];
+  let lastError = "";
+  for (const req of requests) {
+    try {
+      const resp = await fetch(req.endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+        body: JSON.stringify(req.body),
+      });
+      const text = await resp.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+      if (!resp.ok) {
+        lastError = data?.message || data?.error || text.slice(0, 200);
+        continue;
+      }
+      const result = data?.result;
+      const rawAttrs = Array.isArray(result)
+        ? (Array.isArray(result[0]?.attributes) ? result[0].attributes : result)
+        : (Array.isArray(result?.attributes) ? result.attributes : []);
+      const attributes = rawAttrs.map(normalizeOzonApiAttribute).filter((a) => a.id && a.name);
+      if (attributes.length) return { attributes, source: req.source };
+    } catch (e) {
+      lastError = e.message || String(e);
+    }
+  }
+  throw new Error(lastError || "Ozon attribute API returned no attributes");
 }
 
 // 查询类目的必填属性(Ozon /v3/category/attribute),带 KV 缓存。
@@ -1290,28 +1346,8 @@ async function getCategoryAttributes(env, searchParams, headers = {}) {
   if (!store) return { ok: false, error: "未配置店铺" };
 
   try {
-    const resp = await fetch("https://api-seller.ozon.ru/v3/category/attribute", {
-      method: "POST",
-      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-      body: JSON.stringify({ description_category_id: [categoryId], type_id: [typeId], language: "ZH_HANS" }),
-    });
-    const data = await resp.json();
-    const all = data?.result || [];
-    const rawAttrs = Array.isArray(all[0]?.attributes) ? all[0].attributes : [];
-    // 提取关键字段,精简后返回给前端
-    let attributes = rawAttrs.map((a) => ({
-      id: Number(a.id),
-      name: String(a.name || ""),
-      description: String(a.description || ""),
-      isRequired: Boolean(a.is_required),
-      type: String(a.type || "string"),   // string/integer/decimal/dictionary 等
-      dictionary: Number(a.dictionary_id || 0),
-      isCollection: Boolean(a.is_collection),
-      maxValueCount: Number(a.max_value_count || 0),
-      complexId: Number(a.complex_id || 0),
-      complexName: String(a.complex_name || ""),
-      values: Array.isArray(a.values) ? a.values.slice(0, 200).map((v) => ({ id: v.id, value: v.value })) : [],
-    }));
+    const fetched = await fetchOzonAttributeDefinitions(store, categoryId, typeId);
+    let attributes = fetched.attributes;
     attributes = await enrichOzonAttributeValues(store, categoryId, typeId, attributes);
     // 缓存到 KV(5 年,实际永久——类目属性极少变化)
     if (env.LISTING_CACHE) {
@@ -1320,7 +1356,7 @@ async function getCategoryAttributes(env, searchParams, headers = {}) {
         await Promise.all(cacheKeys.map((key) => env.LISTING_CACHE.put(key, payload, { expirationTtl: 60 * 60 * 24 * 365 * 5 })));
       } catch {}
     }
-    return { ok: true, attributes, source: "fresh", categoryId, typeId, total: attributes.length, required: attributes.filter((a) => a.isRequired).length };
+    return { ok: true, attributes, source: "fresh", apiSource: fetched.source, categoryId, typeId, total: attributes.length, required: attributes.filter((a) => a.isRequired).length };
   } catch (e) {
     return { ok: false, error: "查询属性失败:" + (e.message || String(e)) };
   }
@@ -1331,6 +1367,7 @@ async function fetchOzonAttributeValues(store, categoryId, typeId, attr, languag
   const dictionaryId = Number(attr.dictionary || attr.dictionary_id || 0);
   if (!attributeId || !dictionaryId) return [];
   const endpoints = [
+    "https://api-seller.ozon.ru/v1/description-category/attribute/values",
     "https://api-seller.ozon.ru/v3/category/attribute/values",
     "https://api-seller.ozon.ru/v2/category/attribute/values",
   ];
@@ -1344,8 +1381,9 @@ async function fetchOzonAttributeValues(store, categoryId, typeId, attr, languag
         attribute_id: attributeId,
         language,
         limit: 1000,
-        last_value_id: lastValueId,
       };
+      if (endpoint.includes("/v1/description-category/")) body.last_value_id = lastValueId;
+      else body.last_value_id = lastValueId;
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
@@ -1365,7 +1403,7 @@ async function fetchOzonAttributeValues(store, categoryId, typeId, attr, languag
         const value = String(row.value || row.name || "");
         if (value) values.push({ id, value });
       });
-      lastValueId = Number(result.last_value_id || rows[rows.length - 1]?.id || 0);
+      lastValueId = Number(result.last_value_id || result.last_value_id_next || rows[rows.length - 1]?.id || 0);
       if (!rows.length || !result.has_next || !lastValueId || values.length >= 2000) break;
     }
     if (values.length) {
