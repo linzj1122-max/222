@@ -3213,7 +3213,13 @@ const initialProducts = [
     });
     $("resetCostForm").addEventListener("click", resetCostForm);
     $("costSearch").addEventListener("input", renderCosts);
-    $("inventoryStore")?.addEventListener("change", loadInventoryStoreData);
+    $("inventoryStore")?.addEventListener("change", () => {
+      const search = $("inventorySearch");
+      const warehouse = $("inventoryWarehouse");
+      if (search) search.value = "";
+      if (warehouse) warehouse.value = "all";
+      loadInventoryStoreData();
+    });
     $("refreshInventory")?.addEventListener("click", loadInventoryStoreData);
     $("inventoryWarehouse")?.addEventListener("change", renderInventoryRows);
     $("inventorySearch")?.addEventListener("input", renderInventoryRows);
