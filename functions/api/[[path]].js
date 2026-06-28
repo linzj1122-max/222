@@ -353,6 +353,13 @@ function integrations(env) {
 
 async function verifyOzonCredentials(clientId, apiKey) {
   if (!clientId || !apiKey) return { ok: false, status: 0, error: "缺少 Client ID 或 API 密钥" };
+  if (!/^\d+$/.test(String(clientId).trim())) {
+    return {
+      ok: false,
+      status: 0,
+      error: "Ozon 店铺 Client ID 必须是纯数字。你填写的值看起来像广告/Performance API 的 Client ID 或登录账号，不能用于商品上架/店铺 API。请到 Ozon Seller 后台 API Key 页面复制数字 Client ID。",
+    };
+  }
   const endpoints = [
     "https://api-seller.ozon.ru/v3/product/info/list",
     "https://api-seller.ozon.ru/v2/product/list",
