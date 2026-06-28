@@ -277,7 +277,7 @@
       <section class="dashboard-brief">
         <div>
           <h2>商品上架</h2>
-          <p>Ozon / WB 三步上架:① 选平台与类目 → ② 录产品信息 + 上传图片 + 填文案 → ③ 调店铺 API 发布。</p>
+          <p>Ozon / WB 三步上架:① 选平台与类目 → ② 确认 Ozon 类目属性 → ③ 预览并调用店铺 API 发布。</p>
         </div>
         <span class="live-chip"><span></span>上架流水线</span>
       </section>
@@ -288,7 +288,7 @@
             <span class="num">1</span><span class="label">平台 & 类目<small>选择并搜索</small></span>
           </div>
           <div class="listing-step" data-listing-step="2">
-            <span class="num">2</span><span class="label">产品信息 & 图文<small>图片 / 标题 / 描述</small></span>
+            <span class="num">2</span><span class="label">Ozon 属性<small>KV 缓存属性</small></span>
           </div>
           <div class="listing-step" data-listing-step="3">
             <span class="num">3</span><span class="label">发布上架<small>店铺 API</small></span>
@@ -318,13 +318,13 @@
         </div>
         <div class="listing-cat-list" id="lst_catList"></div>
         <div class="actions">
-          <button class="primary" type="button" id="lst_toStep2">下一步:产品信息 →</button>
+          <button class="primary" type="button" id="lst_toStep2">下一步:确认属性 →</button>
         </div>
       </section>
 
       <section class="panel listing-step-pane" data-listing-pane="2">
         <div class="toolbar">
-          <h3>第二步 · 产品信息、图片与文案</h3>
+          <h3>第二步 · 确认 Ozon 类目属性</h3>
         </div>
 
         <div id="lst_attrsWrap" class="listing-attrs-wrap listing-attrs-primary">
@@ -340,102 +340,36 @@
 
         <hr class="listing-divider" />
 
-        <div data-source-pane="single">
-          <section class="listing-import-box">
-            <div class="toolbar">
-              <div>
-                <h3>1688 链接导入</h3>
-                <p class="section-note">粘贴 1688 商品详情链接后，会自动填入基础信息、采购成本、图片，并只写入当前 Ozon 类目支持的属性。</p>
-              </div>
-              <button class="primary" type="button" id="lst_import1688">导入并匹配属性</button>
+        <section class="listing-price-summary">
+          <div class="toolbar">
+            <div>
+              <h3>自动定价</h3>
+              <p class="section-note">Ozon 发布需要两个价格:「您的价格」写入 price,「折扣前价格」写入 old_price。自动测算的建议售价就是您的价格,折扣前价格 = 您的价格 × 2。</p>
             </div>
-            <div class="cols-2">
-              <label>1688 商品链接<input id="lst_sourceUrl1688" type="url" placeholder="https://detail.1688.com/offer/xxxx.html" /></label>
-              <div class="listing-import-cost" id="lst_1688Cost">商品价/运费会自动读取。</div>
-            </div>
-            <div class="table-status" id="lst_1688Status">先选择 Ozon 末级类目，再导入 1688 链接，属性匹配会更准确。</div>
-          </section>
-          <div class="cols-3">
-            <label>货号<input id="lst_code" type="text" placeholder="例如 HS" /></label>
-            <label>品牌<input id="lst_brand" type="text" placeholder="例如 Baseus" /></label>
-            <label>型号名称<input id="lst_model" type="text" placeholder="例如 PPALL20000" /></label>
-          </div>
-          <div class="cols-3">
-            <label>采购成本 RMB<input id="lst_purchaseCost" type="number" step="0.01" min="0" placeholder="例如 8" /></label>
-            <label>目标毛利率 %<input id="lst_targetGrossRate" type="number" step="0.1" min="0" max="95" value="65" /></label>
-            <label>平台佣金率 %<input id="lst_commissionRate" type="number" step="0.1" min="0" max="80" value="12" /></label>
-          </div>
-          <div class="cols-3">
-            <label>汇率 RUB/CNY<input id="lst_exchangeRate" type="number" step="0.0001" min="1" value="11.5" /></label>
-            <label style="display:flex;align-items:flex-end;">
-              <button class="secondary" type="button" id="lst_calcPrice">按 GUOO 规则测算 RMB 定价</button>
-            </label>
-            <div class="listing-pricing-result" id="lst_pricingResult">填写采购成本、重量、尺寸后可测算售价。</div>
-          </div>
-          <div class="cols-3">
-            <label>售价 RMB<input id="lst_price" type="number" step="0.01" min="0" placeholder="例如 39.90" /></label>
-            <label>折扣前价格 RMB<input id="lst_oldPrice" type="number" step="0.01" min="0" placeholder="例如 59.90" /></label>
-            <label>重量 g<input id="lst_weight" type="number" step="1" min="0" placeholder="例如 210" /></label>
-          </div>
-          <div class="cols-3">
-            <label>长 mm<input id="lst_length" type="number" step="0.1" min="0" placeholder="68.5" /></label>
-            <label>宽 mm<input id="lst_width" type="number" step="0.1" min="0" placeholder="68.5" /></label>
-            <label>高 mm<input id="lst_height" type="number" step="0.1" min="0" placeholder="144" /></label>
           </div>
           <div class="cols-2">
-            <label>通用参数备注<textarea id="lst_params" rows="3" placeholder="补充说明,如特殊规格、认证、注意事项等"></textarea></label>
-            <label>核心卖点<textarea id="lst_sellingPoints" rows="3" placeholder="每行一个卖点,用于生成俄文文案和电商图"></textarea></label>
+            <label>货号 / SKU<input id="lst_code" type="text" placeholder="请输入客户自己的货号" /></label>
           </div>
-          <section class="listing-param-box">
-            <div class="toolbar">
-              <div>
-                <h3>结构化产品参数</h3>
-                <p class="section-note">这里是商品基础参数,用于生成文案和自动补属性；下面的 Ozon 类目属性会按所选类目从 KV 缓存读取。</p>
-              </div>
-              <button class="secondary" type="button" id="lst_addParamRow">添加参数</button>
-            </div>
-            <div id="lst_paramRows" class="listing-param-rows"></div>
-          </section>
-        </div>
-
-        <div data-source-pane="tray" hidden>
-          <div class="notice">从货盘管理中选择一个产品,会自动带出品名/货号/采购价(售价需自行填写)。如未维护货盘,请先用「货盘管理」录入。</div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>选择</th><th>品名/货号</th><th>供应商</th><th>规格</th><th>采购价</th><th>供货量</th></tr></thead>
-              <tbody id="lst_trayRows"></tbody>
-            </table>
-          </div>
-        </div>
+          <div class="listing-pricing-result" id="lst_pricingResult">自动流程完成成本、重量、尺寸后会生成您的价格和折扣前价格。</div>
+        </section>
 
         <hr class="listing-divider" />
+
         <section class="listing-variant-box">
           <div class="toolbar">
             <div>
               <h3>变体矩阵</h3>
-              <p class="section-note">按颜色、尺码等维度生成多个 SKU。维度名会自动匹配 Ozon 对应属性。</p>
+              <p class="section-note">变体由用户手动填写。生成后可分别调整 SKU、条码、您的价格、折扣前价格和库存；发布时会作为多个 Ozon 商品项提交。</p>
             </div>
             <label class="inline-check"><input id="lst_variantsEnabled" type="checkbox" /> 启用变体</label>
           </div>
-          <label>变体维度<textarea id="lst_variantDimensions" rows="3" placeholder="每行一个维度,格式: 颜色: 黑色,白色&#10;尺码: S,M,L"></textarea></label>
+          <label>变体维度<textarea id="lst_variantDimensions" rows="3" placeholder="每行一个维度,格式: 颜色: 黑色,白色&#10;容量: 30ml,60ml"></textarea></label>
           <div class="actions">
             <button class="secondary" type="button" id="lst_generateVariants">生成变体 SKU</button>
             <button class="secondary" type="button" id="lst_clearVariants">清空变体</button>
           </div>
           <div id="lst_variantTable" class="listing-variant-table"></div>
         </section>
-
-        <hr class="listing-divider" />
-
-        <label>商品图片(至少 1 张,建议 3:4 竖图,最多 15 张,第一张为首图)<input id="lst_images" type="file" accept="image/*" multiple /></label>
-        <div class="listing-thumb-row" id="lst_thumbRow"></div>
-
-        <label>产品标题(俄文)<textarea id="lst_title" rows="2" placeholder="Ozon 标题,建议 60~110 字符"></textarea></label>
-        <label>产品描述(俄文)<textarea id="lst_description" rows="6" placeholder="产品描述,卖点分点列出"></textarea></label>
-        <label>搜索标签(<strong>每行一个</strong>,每个标签 ≤ 30 字符,最多 20 个)<textarea id="lst_tags" rows="4" placeholder="每行输入一个标签,例如:&#10;массажер&#10;для шеи"></textarea></label>
-        <div id="lst_tagHint" class="table-status">提示:Ozon 要求每个标签单独一行,单个标签不超过 30 个字符(含 #)。</div>
-        <div id="lst_aiStatus" class="table-status">GPT Image2 图片由浏览器流程生成后导入这里；发布前会生成预览并等待确认。</div>
-        <div class="listing-gen-grid" id="lst_genGrid"></div>
 
         <div class="actions">
           <button class="secondary" type="button" id="lst_backTo1">← 上一步</button>
@@ -447,16 +381,12 @@
         <div class="toolbar">
           <h3>第三步 · 调店铺 API 发布</h3>
         </div>
-        <div class="notice">将调用店铺 API(Ozon /v3/product/import 或 WB /content/v2/cards/upload)上传商品。请确认标题、描述、图片、价格无误后再发布。</div>
-        <div class="cols-3">
+        <div class="notice">将调用店铺 API(Ozon /v3/product/import 或 WB /content/v2/cards/upload)上传自动流程生成的商品数据。发布前会展示预览并等待确认。</div>
+        <div class="cols-2">
           <label>目标店铺<select id="lst_pubStore"></select></label>
-          <label>货号 / SKU<input id="lst_pubOfferId" type="text" /></label>
           <label style="display:flex;align-items:flex-end;">
             <button class="primary" type="button" id="lst_publish">预览并确认发布</button>
           </label>
-        </div>
-        <div class="actions">
-          <button class="secondary" type="button" id="lst_preflight">上传前自检</button>
         </div>
         <div class="listing-flow-checks" id="lst_flowChecks"></div>
         <div class="listing-log" id="lst_log">就绪。</div>
@@ -505,6 +435,7 @@
     });
     if (draft.step === 2) {
       renderTrayRows();
+      updateAutomaticPricing(true);
       loadCategoryAttributes();
     }
     if (draft.step === 3) {
@@ -1428,7 +1359,7 @@
     box.innerHTML = `
       <div class="table-wrap">
         <table>
-          <thead><tr>${dimNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}<th>SKU</th><th>条码</th><th>售价 RMB</th><th>折扣前</th><th>库存</th><th>操作</th></tr></thead>
+          <thead><tr>${dimNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}<th>SKU</th><th>条码</th><th>您的价格 RMB</th><th>折扣前价格</th><th>库存</th><th>操作</th></tr></thead>
           <tbody>
             ${variants.map((variant, index) => `
               <tr data-variant-row="${index}">
@@ -1785,42 +1716,50 @@
     if (!box) return;
     const r = draft.pricingResult;
     if (!r?.ok) {
-      box.textContent = r?.error || "填写采购成本、重量、尺寸后可测算售价。";
+      box.textContent = r?.error || "自动流程完成成本、重量、尺寸后会生成您的价格和折扣前价格。";
       box.classList.toggle("is-error", Boolean(r?.error));
       return;
     }
     box.classList.remove("is-error");
     const minimumPrice = Number(r.minimumPriceRmb || r.priceRmb || 0);
     const recommendedPrice = Number(r.recommendedPriceRmb || minimumPrice * 2 || 0);
+    const oldPrice = Number(draft.oldPrice || recommendedPrice * 2 || 0);
     box.innerHTML = `
       <strong>${escapeHtml(r.scheme?.name || "")}</strong> · ${escapeHtml(r.scheme?.method || "")}
       <span>最低售价 ¥${minimumPrice.toFixed(2)}</span>
-      <span>建议售价 ¥${recommendedPrice.toFixed(2)}</span>
+      <span>您的价格 ¥${recommendedPrice.toFixed(2)}</span>
+      <span>折扣前价格 ¥${oldPrice.toFixed(2)}</span>
       <span>毛利率 ${(Number(r.grossRate || 0) * 100).toFixed(1)}%</span>
       <span>运费 ¥${Number(r.freight || 0).toFixed(2)}</span>
       <span>计费重 ${Number(r.chargeKg || 0).toFixed(3)}kg</span>`;
   }
 
-  function runGuooPricing() {
+  function updateAutomaticPricing(silent = true) {
     const result = calculateGuooPricing();
     draft.pricingResult = result;
     if (!result.ok) {
       renderPricingResult();
-      alert(result.error);
+      if (!silent) alert(result.error);
       persistDraft();
-      return;
+      return false;
     }
     const minimumPrice = Number(result.minimumPriceRmb || result.priceRmb || 0);
     const recommendedPrice = Number(result.recommendedPriceRmb || minimumPrice * 2 || 0);
     draft.price = recommendedPrice.toFixed(2);
-    const oldPrice = Math.ceil(recommendedPrice * 1.35 * 100) / 100;
-    if (!toNumber(draft.oldPrice) || toNumber(draft.oldPrice) < recommendedPrice) draft.oldPrice = oldPrice.toFixed(2);
+    const oldPrice = Math.ceil(recommendedPrice * 2 * 100) / 100;
+    draft.oldPrice = oldPrice.toFixed(2);
     fillStep2Form();
     persistDraft();
+    return true;
+  }
+
+  function runGuooPricing() {
+    updateAutomaticPricing(false);
   }
 
   function publishPayload() {
     readStep2Form();
+    updateAutomaticPricing(true);
     const offerId = $("lst_pubOfferId")?.value || draft.code;
     const uiStoreIndex = Number($("lst_pubStore")?.value || draft.storeIndex || 0);
     const storeIndex = currentApiStoreIndex(uiStoreIndex);
@@ -1920,7 +1859,8 @@
       `店铺: ${store}`,
       `SKU: ${payload.draft.offerId || payload.draft.code || ""}`,
       `标题: ${payload.draft.title || ""}`,
-      `售价 RMB: ${payload.draft.price || "0"}`,
+      `您的价格 RMB: ${payload.draft.price || "0"}`,
+      `折扣前价格 RMB: ${payload.draft.oldPrice || "0"}`,
       `图片: ${(payload.draft.images || []).length} 张`,
       `重量/尺寸: ${payload.draft.weight || 0}g, ${payload.draft.length || 0} x ${payload.draft.width || 0} x ${payload.draft.height || 0}mm`,
       `Ozon 属性: ${Object.keys(payload.draft.attrValues || {}).length} 个`,
@@ -2604,13 +2544,10 @@
     // 第二步 → 第三步(发布):校验必填项
     $("lst_toStep3")?.addEventListener("click", () => {
       readStep2Form();
-      if (draft.source === "single") {
-        if (!draft.images.length) { alert("请至少上传 1 张商品图片。"); return; }
-        if (!draft.code) { alert("请填写货号。"); return; }
-        if (!draft.price) { alert("请填写售价。"); return; }
-        if (!draft.title) { alert("请填写产品标题。"); return; }
-        if (draft.variantsEnabled && !(draft.variants || []).filter((v) => v.offerId).length) { alert("已启用变体,请先生成或填写至少 1 个变体 SKU。"); return; }
-      }
+      updateAutomaticPricing(true);
+      if (!draft.code) { alert("请填写货号 / SKU。"); return; }
+      if (!draft.pricingResult?.ok || !draft.price || !draft.oldPrice) { alert("自动定价还未完成。请先完成自动抓品/成本/重量/尺寸流程。"); return; }
+      if (draft.variantsEnabled && !(draft.variants || []).filter((v) => v.offerId).length) { alert("已启用变体,请先生成或填写至少 1 个变体 SKU。"); return; }
       // 校验必填属性
       if (!validateRequiredAttrs()) return;
       draft.attrValues = attrValues;
