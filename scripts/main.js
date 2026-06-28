@@ -4155,6 +4155,41 @@ const initialProducts = [
       location.reload();
     });
 
+    async function refreshBaseDataInBackground() {
+      try {
+        const [backendProducts, backendCompetitors] = await Promise.all([
+          apiRequest("/api/products"),
+          apiRequest("/api/competitors")
+        ]);
+        if (Array.isArray(backendProducts) && backendProducts.length) {
+          products = backendProducts.map((p) => ensureProductScope(p));
+        }
+        if (Array.isArray(backendCompetitors)) competitors = backendCompetitors;
+        renderAll();
+      } catch (error) {
+        console.warn("[startup] 基础数据后台加载失败:", error.message || error);
+      }
+    }
+
+    async function refreshDashboardDataInBackground() {
+      const from = orderDateFrom;
+      const to = orderDateTo;
+      if ($("orderRangeStatus")) {
+        $("orderRangeStatus").textContent = `正在后台加载 ${from} 至 ${to} 的订单和店铺分析，页面可先使用。`;
+      }
+      const results = await Promise.allSettled([
+        loadBackendOrders(),
+        loadStoreAnalytics()
+      ]);
+      const failed = results.find((item) => item.status === "rejected");
+      if (failed) console.warn("[startup] 经营数据后台加载失败:", failed.reason?.message || failed.reason);
+      if (orderDateFrom === from && orderDateTo === to) {
+        updateOrderDateButton();
+        renderCalendar();
+        renderAll();
+      }
+    }
+
     async function bootstrap() {
       if (appBootstrapped) return;
       if (!(await ensureAuthenticated())) return;
@@ -4163,32 +4198,19 @@ const initialProducts = [
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();
       renderCalendar();
-      showGlobalLoader("正在加载店铺数据…");
       if (backendEnabled) {
         try {
           apiConfigs = sanitizeApiConfigs(await apiRequest("/api/integrations"));
         } catch {
           apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
         }
-        try {
-          const [backendProducts, backendCompetitors] = await Promise.all([
-            apiRequest("/api/products"),
-            apiRequest("/api/competitors")
-          ]);
-          if (backendProducts.length) products = backendProducts.map((p) => ensureProductScope(p));
-          competitors = backendCompetitors;
-        } catch {}
-        try {
-          await loadBackendOrders();
-        } catch {}
-        try {
-          await loadStoreAnalytics();
-        } catch {}
-        }
+      }
       initCostScope();
       resetCostForm();
       renderAll();
       loadInventoryStores();
+      if (backendEnabled) refreshBaseDataInBackground();
+      if (backendEnabled) refreshDashboardDataInBackground();
       // 启动时从云端 KV 加载广告缓存,避免后端冷启动后一片空白
       loadAdsCacheFromCloud().then((loaded) => {
         if (loaded) { renderAds(); }
