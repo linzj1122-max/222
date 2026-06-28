@@ -466,10 +466,12 @@ async function fetchOzonCategoryTree(store, language = "ZH_HANS") {
   const roots = Array.isArray(payload?.result) ? payload.result : [];
   const flat = [];
   // parentKey: 当前层级的父节点 id(用于正确串层级),namePath: 类目名路径(用于 fullName)
-  const walk = (node, parentKey, namePath, depth) => {
+  const walk = (node, parentKey, namePath, depth, inheritedCategoryId = 0, inheritedCategoryName = "") => {
     if (!node || typeof node !== "object") return;
     const catId = node.description_category_id;
     const catName = node.category_name;
+    const effectiveCategoryId = Number(catId || inheritedCategoryId || 0);
+    const effectiveCategoryName = String(catName || inheritedCategoryName || "");
     const children = Array.isArray(node.children) ? node.children : [];
     let myKey = parentKey;
     if (catId !== undefined && catName) {
@@ -487,13 +489,16 @@ async function fetchOzonCategoryTree(store, language = "ZH_HANS") {
       });
     }
     if (node.type_id !== undefined && node.type_name) {
-      const typeKey = `type-${node.type_id}`;
+      const typeKey = `type-${effectiveCategoryId || "unknown"}-${node.type_id}`;
+      const fullPath = catName
+        ? [...namePath, catName, String(node.type_name)]
+        : [...namePath, String(node.type_name)];
       flat.push({
         id: typeKey,
-        categoryId: Number(catId || 0),
+        categoryId: effectiveCategoryId,
         typeId: Number(node.type_id),
         name: String(node.type_name),
-        fullName: [...namePath, String(node.type_name)].join(" / "),
+        fullName: fullPath.join(" / "),
         parentId: myKey,
         childrenCount: 0,
         isLeaf: true,
@@ -501,9 +506,9 @@ async function fetchOzonCategoryTree(store, language = "ZH_HANS") {
         depth,
       });
     }
-    children.forEach((child) => walk(child, myKey, catName ? [...namePath, catName] : namePath, depth + 1));
+    children.forEach((child) => walk(child, myKey, catName ? [...namePath, catName] : namePath, depth + 1, effectiveCategoryId, effectiveCategoryName));
   };
-  roots.forEach((root) => walk(root, "0", [], 0));
+  roots.forEach((root) => walk(root, "0", [], 0, 0, ""));
   return flat;
 }
 

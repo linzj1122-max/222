@@ -630,7 +630,7 @@
   }
 
   // 类目缓存版本:数据结构变更后递增,旧缓存自动失效重抓
-  const CAT_CACHE_VERSION = 5;
+  const CAT_CACHE_VERSION = 6;
 
   // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
   async function autoLoadCategories() {
@@ -714,8 +714,9 @@
     const renderItem = (n, level, selectedId) => {
       const isSel = n.id === selectedId;
       const hasChild = n.children && n.children.length;
-      const isTerminal = !hasChild;   // 无子节点 = 末级(可选定上架)
-      const leaf = isTerminal ? `<span class="leaf-tag">可上架</span>` : "";
+      const isTerminal = !hasChild;
+      const canPublish = isTerminal && Number(n.leaf?.categoryId || 0) > 0 && Number(n.leaf?.typeId || 0) > 0;
+      const leaf = canPublish ? `<span class="leaf-tag">可上架</span>` : "";
       const arrow = hasChild ? `<span class="arrow">▸</span>` : "";
       return `<div class="listing-cascade-item ${isSel ? "selected" : ""} ${hasChild ? "has-child" : ""}" data-cascade-level="${level}" data-cascade-id="${escapeAttr(n.id)}">
         <span class="name">${escapeHtml(n.name)}</span>
@@ -785,7 +786,8 @@
     else if (level === 3) { cascadeState.l3 = id; cascadeState.l4 = ""; }
     else { cascadeState.l4 = id; }
 
-    if (!hasChild) {
+    const canPublish = !hasChild && Number(node.leaf?.categoryId || 0) > 0 && Number(node.leaf?.typeId || 0) > 0;
+    if (canPublish) {
       // 末级 → 确认为最终上架类目,保留 Ozon 发布所需的完整路径与 id
       const leaf = node.leaf || {};
       const oldKey = attrCategoryKey();
@@ -829,15 +831,15 @@
       alert("选中的类目无效,请重新选择。");
       return false;
     }
-    // 必须是叶子(无子节点)才能上架
+    // 必须是带 description_category_id + type_id 的叶子才能上架
     if (node.children && node.children.length) {
       alert(`当前选的是「${node.name}」,它还有下级类目。\n请继续点击展开,选到带「可上架」标签的最末级再进下一步。`);
       return false;
     }
     // 叶子必须有完整的发布信息
     const leaf = node.leaf || {};
-    if (!leaf.fullPath) {
-      alert("该类目缺少完整路径信息,请重新选择。");
+    if (!leaf.fullPath || !Number(leaf.categoryId || 0) || !Number(leaf.typeId || 0)) {
+      alert("该节点还不是可上架末级类目。请继续选择带「可上架」标签的类目。");
       return false;
     }
     // 同步回 draft,确保发布数据准确
