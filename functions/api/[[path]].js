@@ -181,6 +181,91 @@ function isStoreDeleteAllowed(user) {
   return normalizeAuthRole(user?.role) === "owner";
 }
 
+function canManageUsers(user) {
+  return normalizeAuthRole(user?.role) === "owner";
+}
+
+function publicManagedUser(user) {
+  return {
+    username: user.username,
+    name: user.name || user.username,
+    role: normalizeAuthRole(user.role),
+  };
+}
+
+function controlCenterUsers(env) {
+  const raw = env.CONTROL_CENTER_USERS || "[]";
+  try {
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === "object"
+        ? Object.entries(parsed).map(([username, value]) => typeof value === "string" ? { username, password: value } : { username, ...(value || {}) })
+        : []);
+    return rows.map((item) => ({
+      username: String(item.username || item.user || "").trim(),
+      password: String(item.password || item.pass || "").trim(),
+      name: String(item.name || item.displayName || item.label || item.username || item.user || "").trim(),
+      role: "member",
+    })).filter((item) => item.username && item.password);
+  } catch {
+    return [];
+  }
+}
+
+async function upsertCloudflareEmployeeUser(env, body = {}) {
+  const username = String(body.username || "").trim();
+  const password = String(body.password || "").trim();
+  const name = String(body.name || username).trim();
+  if (!username || !password) return { ok: false, error: "请填写员工账号和密码。" };
+  if (password.length < 6) return { ok: false, error: "员工密码至少 6 位。" };
+
+  const reserved = authUsers(env).filter((user) => normalizeAuthRole(user.role) === "owner");
+  if (reserved.some((user) => user.username.toLowerCase() === username.toLowerCase())) {
+    return { ok: false, error: "这个账号已经是管理员账号，不能作为员工账号添加。" };
+  }
+
+  const users = controlCenterUsers(env);
+  if (users.some((user) => user.username.toLowerCase() === username.toLowerCase())) {
+    return { ok: false, error: "这个员工账号已经存在。" };
+  }
+  users.push({ username, password, name, role: "member" });
+
+  const config = cloudflareManagementConfig(env);
+  const encodedProject = encodeURIComponent(config.projectName);
+  const value = JSON.stringify(users.map((user) => ({
+    username: user.username,
+    password: user.password,
+    name: user.name || user.username,
+    role: "member",
+  })));
+
+  await cloudflarePagesRequest(env, "PATCH", `/accounts/${config.accountId}/pages/projects/${encodedProject}`, {
+    deployment_configs: {
+      production: { env_vars: { CONTROL_CENTER_USERS: cfEnvPlain(value) } },
+      preview: { env_vars: { CONTROL_CENTER_USERS: cfEnvPlain(value) } },
+    },
+  });
+
+  let redeploy = { ok: false, error: "" };
+  try {
+    redeploy = await triggerCloudflarePagesRedeploy(env, config, encodedProject);
+  } catch (error) {
+    redeploy = { ok: false, error: error.message || String(error) };
+  }
+
+  return {
+    ok: true,
+    user: publicManagedUser({ username, name, role: "member" }),
+    users: users.map(publicManagedUser),
+    redeploy,
+    requiresRedeploy: !redeploy.ok,
+    message: redeploy.ok
+      ? "员工账号已写入 Cloudflare，并已自动触发重新部署。部署完成后员工即可登录。"
+      : `员工账号已写入 Cloudflare，但自动重新部署失败：${redeploy.error || "未知错误"}。请手动重新部署一次。`,
+  };
+}
+
 async function handleAuthRoute(path, request, env) {
   if (path === "auth/login" && request.method === "POST") {
     const body = await request.json().catch(() => ({}));
@@ -2176,6 +2261,21 @@ export async function onRequest(context) {
     const auth = await verifyAuth(request, env);
     if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
     if (path === "debug") return json({ ...debugStatus(env), kvBound: Boolean(env.LISTING_CACHE) });
+    if (path === "users") {
+      if (!canManageUsers(auth.user)) return json({ ok: false, error: "只有管理员可以管理员工账号。" }, 403);
+      if (request.method === "GET") {
+        return json({ ok: true, users: authUsers(env).map(publicManagedUser) });
+      }
+      if (request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        try {
+          return json(await upsertCloudflareEmployeeUser(env, body));
+        } catch (error) {
+          return json({ ok: false, error: error.message || String(error) }, 400);
+        }
+      }
+      return json({ ok: false, error: "Method not allowed" }, 405);
+    }
     if (path === "products") return json(PRODUCTS);
     if (path === "product-images") {
       const skus = String(url.searchParams.get("skus") || "").split(",").filter(Boolean).sort();

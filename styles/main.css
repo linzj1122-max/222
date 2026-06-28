@@ -1845,7 +1845,15 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
 .store-group-panel {
   margin-top: 20px;
 }
+.user-admin-panel {
+  margin-top: 20px;
+}
 .store-group-form {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.employee-form {
   display: grid;
   gap: 14px;
   margin-bottom: 20px;
@@ -1853,8 +1861,12 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
 .store-group-form .cols-3 {
   gap: 12px;
 }
+.employee-form .cols-3 {
+  gap: 12px;
+}
 .store-group-form .cols-3 label,
-.store-group-form > label {
+.store-group-form > label,
+.employee-form .cols-3 label {
   min-width: 0;
 }
 .store-group-form select[multiple] {
@@ -1888,6 +1900,10 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
   margin-top: 4px;
 }
 .store-group-form .actions button {
+  height: 42px;
+  padding: 0 18px;
+}
+.employee-form .actions button {
   height: 42px;
   padding: 0 18px;
 }

@@ -235,6 +235,7 @@ const initialProducts = [
     const authSessionKey = "ozon_wb_auth_session_v1";
     let currentUser = null;
     let appBootstrapped = false;
+    let employeeUsers = [];
     const nativeFetch = window.fetch.bind(window);
 
     function getAuthSession() {
@@ -252,6 +253,10 @@ const initialProducts = [
 
     function canDeleteStores() {
       return ["owner", "creator", "admin"].includes(String(currentUser?.role || "").toLowerCase());
+    }
+
+    function canManageUsers() {
+      return canDeleteStores();
     }
 
     function authRoleLabel(role) {
@@ -1154,6 +1159,7 @@ const initialProducts = [
       renderCompetitors();
       renderCompetitorProfit();
       renderApiConfigs();
+      renderEmployeeUsers();
       renderStoreGroups();
       save();
     }
@@ -2928,6 +2934,50 @@ const initialProducts = [
       $("apiRows").innerHTML = rows || `<tr><td colspan="5" class="status">还没有云端店铺。请把 Ozon 凭证配置到 Cloudflare 环境变量后刷新。</td></tr>`;
     }
 
+    function renderEmployeeUsers() {
+      const panel = $("userAdminPanel");
+      if (panel) panel.hidden = !canManageUsers();
+      if (!canManageUsers()) return;
+      const body = $("employeeRows");
+      if (!body) return;
+      const rows = employeeUsers.map((user) => {
+        const role = String(user.role || "").toLowerCase() === "member" ? "员工" : "管理员";
+        const access = String(user.role || "").toLowerCase() === "member"
+          ? "可登录查看，不能新增账号或删除店铺"
+          : "可管理员工和店铺";
+        return `<tr>
+          <td><strong>${escapeHtml(user.username)}</strong></td>
+          <td>${escapeHtml(user.name || "—")}</td>
+          <td><span class="scope-chip">${escapeHtml(role)}</span></td>
+          <td>${escapeHtml(access)}</td>
+        </tr>`;
+      }).join("");
+      body.innerHTML = rows || `<tr><td colspan="4" class="status">还没有员工账号。</td></tr>`;
+    }
+
+    function setEmployeeStatus(ok, message) {
+      const box = $("employeeStatus");
+      if (!box) return;
+      box.hidden = !message;
+      box.className = "api-verify-status " + (ok ? "ok" : "fail");
+      box.textContent = message || "";
+    }
+
+    async function loadEmployeeUsers() {
+      if (!backendEnabled || !canManageUsers()) {
+        employeeUsers = [];
+        renderEmployeeUsers();
+        return;
+      }
+      try {
+        const data = await apiRequest("/api/users");
+        employeeUsers = Array.isArray(data.users) ? data.users : [];
+      } catch (error) {
+        console.warn("[users] 员工账号列表加载失败:", error.message || error);
+      }
+      renderEmployeeUsers();
+    }
+
     window.editApiConfig = (id) => {
       const item = apiConfigs.find((entry) => entry.id === id);
       if (!item) return;
@@ -3882,6 +3932,39 @@ const initialProducts = [
       syncApiPlatformFields();
     });
 
+    $("employeeForm")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!canManageUsers()) {
+        alert("只有管理员可以新增员工账号。");
+        return;
+      }
+      const payload = {
+        name: $("employeeName")?.value.trim() || "",
+        username: $("employeeUsername")?.value.trim() || "",
+        password: $("employeePassword")?.value || "",
+      };
+      if (!payload.username || !payload.password) {
+        setEmployeeStatus(false, "请填写员工登录账号和密码。");
+        return;
+      }
+      const btn = event.currentTarget.querySelector('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = "新增中..."; }
+      try {
+        const result = await apiRequest("/api/users", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        employeeUsers = Array.isArray(result.users) ? result.users : employeeUsers;
+        setEmployeeStatus(true, result.message || "员工账号已新增。");
+        $("employeeForm").reset();
+        renderEmployeeUsers();
+      } catch (error) {
+        setEmployeeStatus(false, error.message || "新增员工账号失败。");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "新增员工账号"; }
+      }
+    });
+
     $("storeGroupForm").addEventListener("submit", (event) => {
       event.preventDefault();
       const data = readGroupForm();
@@ -4209,6 +4292,7 @@ const initialProducts = [
       resetCostForm();
       renderAll();
       loadInventoryStores();
+      loadEmployeeUsers();
       if (backendEnabled) refreshBaseDataInBackground();
       if (backendEnabled) refreshDashboardDataInBackground();
       // 启动时从云端 KV 加载广告缓存,避免后端冷启动后一片空白
