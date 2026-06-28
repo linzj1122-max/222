@@ -158,6 +158,9 @@ const initialProducts = [
     let storeGroups = JSON.parse(localStorage.getItem(storeGroupKey) || "[]");
     let inventoryStores = [];
     let inventoryWarehouses = [];
+    let inventoryRows = [];
+    let inventorySelected = new Set();
+    let inventoryLoading = false;
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
@@ -2520,6 +2523,16 @@ const initialProducts = [
       if (el) el.textContent = message;
     }
 
+    function setInventoryLoading(loading) {
+      inventoryLoading = loading;
+      const box = $("inventoryLoading");
+      if (box) box.hidden = !loading;
+      const refresh = $("refreshInventory");
+      if (refresh) refresh.disabled = loading;
+      const submit = $("submitInventoryBatch");
+      if (submit) submit.disabled = loading;
+    }
+
     function renderInventoryStores() {
       const select = $("inventoryStore");
       if (!select) return;
@@ -2534,10 +2547,62 @@ const initialProducts = [
       const select = $("inventoryWarehouse");
       if (!select) return;
       const current = select.value;
-      select.innerHTML = inventoryWarehouses.length
-        ? inventoryWarehouses.map((warehouse) => `<option value="${Number(warehouse.id || 0)}">${escapeHtml(warehouse.name || `仓库 ${warehouse.id}`)}</option>`).join("")
-        : `<option value="">请先加载仓库</option>`;
-      if (inventoryWarehouses.some((warehouse) => String(warehouse.id) === current)) select.value = current;
+      const options = [`<option value="all">全部仓库</option>`].concat(
+        inventoryWarehouses.map((warehouse) => `<option value="${escapeHtml(String(warehouse.id || warehouse.name || ""))}">${escapeHtml(warehouse.name || `仓库 ${warehouse.id}`)}</option>`)
+      );
+      select.innerHTML = options.join("");
+      const valid = inventoryWarehouses.some((warehouse) => String(warehouse.id || warehouse.name || "") === current);
+      select.value = current === "all" || valid ? current : "all";
+    }
+
+    function inventoryRowKey(row) {
+      return `${row.productId || row.offerId || row.sku}|${row.warehouseId || row.warehouseName || ""}`;
+    }
+
+    function filteredInventoryRows() {
+      const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
+      const warehouse = $("inventoryWarehouse")?.value || "all";
+      return inventoryRows.filter((row) => {
+        if (warehouse !== "all" && String(row.warehouseId || row.warehouseName || "") !== warehouse) return false;
+        if (!query) return true;
+        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      });
+    }
+
+    function renderInventoryRows() {
+      const body = $("inventoryRows");
+      if (!body) return;
+      const rows = filteredInventoryRows();
+      const selectedVisible = rows.filter((row) => inventorySelected.has(inventoryRowKey(row))).length;
+      const selectableVisible = rows.filter((row) => row.warehouseId).length;
+      const allBox = $("inventorySelectAll");
+      if (allBox) {
+        allBox.checked = selectableVisible > 0 && selectedVisible === selectableVisible;
+        allBox.indeterminate = selectedVisible > 0 && selectedVisible < selectableVisible;
+      }
+      body.innerHTML = rows.length ? rows.map((row) => {
+        const key = inventoryRowKey(row);
+        const disabled = row.warehouseId ? "" : "disabled";
+        const image = row.image
+          ? `<img class="inventory-product-img" src="${escapeHtml(row.image)}" alt="${escapeHtml(row.name || row.offerId || row.sku || "")}" />`
+          : `<span class="inventory-product-placeholder">${escapeHtml(String(row.offerId || row.sku || "?").slice(0, 3))}</span>`;
+        return `<tr>
+          <td><input class="inventory-row-check" type="checkbox" value="${escapeHtml(key)}" ${inventorySelected.has(key) ? "checked" : ""} ${disabled} /></td>
+          <td><div class="inventory-product">${image}<div><strong>${escapeHtml(row.name || row.offerId || "未命名商品")}</strong><div class="sku">${escapeHtml(row.offerId || "")}</div></div></div></td>
+          <td>${escapeHtml(row.productId || "—")}</td>
+          <td>${escapeHtml(row.sku || "—")}</td>
+          <td>${escapeHtml(row.offerId || "—")}</td>
+          <td>${escapeHtml(row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID"))}</td>
+          <td><strong>${Number(row.present || 0)}</strong></td>
+          <td>${Number(row.reserved || 0)}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="8" class="muted-cell">${inventoryLoading ? "库存加载中..." : "没有匹配的库存商品。"}</td></tr>`;
+      const selectedTotal = inventoryRows.filter((row) => inventorySelected.has(inventoryRowKey(row))).length;
+      const suffix = inventoryRows.length ? `已显示 ${rows.length} 行，已选 ${selectedTotal} 行。` : "";
+      if (!inventoryLoading && suffix) setInventoryStatus(suffix);
     }
 
     async function loadInventoryStores() {
@@ -2561,82 +2626,57 @@ const initialProducts = [
       }
       renderInventoryStores();
       if (inventoryStores.length) {
-        await loadInventoryWarehouses();
+        await loadInventoryStoreData();
       } else {
+        inventoryRows = [];
         inventoryWarehouses = [];
         renderInventoryWarehouses();
+        renderInventoryRows();
         setInventoryStatus("未配置 Ozon 店铺，请先在 Cloudflare 环境变量中配置店铺凭证。");
       }
     }
 
-    async function loadInventoryWarehouses() {
+    async function loadInventoryStoreData() {
       const select = $("inventoryStore");
       if (!select || select.value === "") {
+        inventoryRows = [];
         inventoryWarehouses = [];
         renderInventoryWarehouses();
+        renderInventoryRows();
         setInventoryStatus("请先配置 Ozon 店铺。");
         return;
       }
-      const btn = $("loadInventoryWarehouses");
-      if (btn) { btn.disabled = true; btn.textContent = "加载中..."; }
-      setInventoryStatus("正在加载仓库...");
+      inventorySelected = new Set();
+      setInventoryLoading(true);
+      setInventoryStatus("正在加载整店商品库存...");
       try {
         const params = new URLSearchParams({ platform: "Ozon", storeIndex: select.value });
-        const data = await apiRequest(`/api/listing/warehouses?${params.toString()}`);
-        if (!data.ok) throw new Error(data.error || "仓库加载失败");
+        const data = await apiRequest(`/api/listing/inventory?${params.toString()}`);
+        if (!data.ok) throw new Error(data.error || "库存加载失败");
+        inventoryRows = data.rows || [];
         inventoryWarehouses = data.warehouses || [];
         renderInventoryWarehouses();
-        setInventoryStatus(inventoryWarehouses.length ? `已加载 ${inventoryWarehouses.length} 个仓库。` : "当前店铺没有可用仓库。");
+        renderInventoryRows();
+        setInventoryStatus(`已加载 ${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。`);
       } catch (error) {
+        inventoryRows = [];
         inventoryWarehouses = [];
         renderInventoryWarehouses();
-        setInventoryStatus("仓库加载失败：" + (error.message || error));
+        renderInventoryRows();
+        setInventoryStatus("库存加载失败：" + (error.message || error));
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "加载仓库"; }
+        setInventoryLoading(false);
       }
-    }
-
-    function fillInventoryRowsFromScope() {
-      const stock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
-      const rows = scopedCostProducts()
-        .filter((p) => normalizePlatform(p.platform) === "Ozon" && (p.code || p.sku))
-        .map((p) => `${p.code || p.sku},${stock}`);
-      const input = $("inventoryRowsInput");
-      if (input) input.value = rows.join("\n");
-      setInventoryStatus(rows.length ? `已填充 ${rows.length} 个当前筛选产品。` : "当前筛选范围没有可提交的 Ozon 产品。");
-    }
-
-    function inventoryTargetFromToken(value) {
-      const token = String(value || "").trim();
-      const productIdMatch = token.match(/^(?:product_id|productId|id)[:=](\d+)$/i);
-      if (productIdMatch) return { productId: Number(productIdMatch[1]), label: token };
-      const product = productBySku(token);
-      return { offerId: String(product?.code || token).trim(), label: token };
-    }
-
-    function parseInventoryRows() {
-      const defaultStock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
-      const text = $("inventoryRowsInput")?.value || "";
-      const warehouseId = Number($("inventoryWarehouse")?.value || 0);
-      const rows = [];
-      text.split(/\r?\n/).forEach((line) => {
-        const parts = line.trim().split(/[\t,，;； ]+/).filter(Boolean);
-        if (!parts.length) return;
-        const target = inventoryTargetFromToken(parts[0]);
-        const stock = Math.max(0, Math.round(Number(parts[1] ?? defaultStock)));
-        if (!Number.isFinite(stock) || (!target.offerId && !target.productId)) return;
-        rows.push({ ...target, warehouseId, stock });
-      });
-      return rows;
     }
 
     async function submitInventoryBatch() {
       const storeSelect = $("inventoryStore");
-      const warehouseId = Number($("inventoryWarehouse")?.value || 0);
       if (!storeSelect || storeSelect.value === "") { alert("请先选择 Ozon 店铺。"); return; }
-      if (!warehouseId) { alert("请先加载并选择仓库。"); return; }
-      const rows = parseInventoryRows();
-      if (!rows.length) { alert("请先填写要修改库存的商品行。"); return; }
+      const stock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      const rows = inventoryRows
+        .filter((row) => inventorySelected.has(inventoryRowKey(row)) && row.warehouseId)
+        .map((row) => ({ offerId: row.offerId, productId: row.productId, warehouseId: row.warehouseId, stock }));
+      if (!rows.length) { alert("请先勾选至少一个带仓库 ID 的商品库存行。"); return; }
       if (!confirm(`确认提交 ${rows.length} 个商品的库存修改？`)) return;
       const btn = $("submitInventoryBatch");
       if (btn) { btn.disabled = true; btn.textContent = "提交中..."; }
@@ -2651,12 +2691,13 @@ const initialProducts = [
           }),
         });
         if (!data.ok) throw new Error(data.error || "库存提交失败");
-        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 个商品，仓库 ${warehouseId}。`);
+        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 行，目标库存 ${stock}。正在刷新...`);
+        await loadInventoryStoreData();
       } catch (error) {
         setInventoryStatus("库存提交失败：" + (error.message || error));
         alert("库存提交失败：" + (error.message || error));
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "提交库存"; }
+        if (btn) { btn.disabled = false; btn.textContent = "应用到选中商品"; }
       }
     }
 
@@ -3086,9 +3127,27 @@ const initialProducts = [
     });
     $("resetCostForm").addEventListener("click", resetCostForm);
     $("costSearch").addEventListener("input", renderCosts);
-    $("inventoryStore")?.addEventListener("change", loadInventoryWarehouses);
-    $("loadInventoryWarehouses")?.addEventListener("click", loadInventoryWarehouses);
-    $("fillInventoryRows")?.addEventListener("click", fillInventoryRowsFromScope);
+    $("inventoryStore")?.addEventListener("change", loadInventoryStoreData);
+    $("refreshInventory")?.addEventListener("click", loadInventoryStoreData);
+    $("inventoryWarehouse")?.addEventListener("change", renderInventoryRows);
+    $("inventorySearch")?.addEventListener("input", renderInventoryRows);
+    $("inventorySelectAll")?.addEventListener("change", (event) => {
+      const checked = event.target.checked;
+      filteredInventoryRows().forEach((row) => {
+        if (!row.warehouseId) return;
+        const key = inventoryRowKey(row);
+        if (checked) inventorySelected.add(key);
+        else inventorySelected.delete(key);
+      });
+      renderInventoryRows();
+    });
+    $("inventoryRows")?.addEventListener("change", (event) => {
+      const input = event.target.closest(".inventory-row-check");
+      if (!input) return;
+      if (input.checked) inventorySelected.add(input.value);
+      else inventorySelected.delete(input.value);
+      renderInventoryRows();
+    });
     $("submitInventoryBatch")?.addEventListener("click", submitInventoryBatch);
 
     $("costScopePlatform").addEventListener("change", () => {

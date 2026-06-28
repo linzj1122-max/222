@@ -132,6 +132,7 @@ nav {
 .tab-btn[data-tab="dashboard"]   { order: 10; }
 .tab-btn[data-tab="orderProfit"] { order: 20; }
 .tab-btn[data-tab="costs"]       { order: 30; }
+.tab-btn[data-tab="inventory"]   { order: 32; }
 .tab-btn[data-tab="sourcing"]    { order: 35; }
 .tab-btn[data-tab="listing"]     { order: 38; }
 .tab-btn[data-tab="ads"]         { order: 40; }
@@ -893,20 +894,76 @@ form { display: grid; gap: 14px; }
   display: grid;
   gap: 14px;
 }
+.inventory-toolbar {
+  align-items: flex-start;
+}
+.inventory-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
 .inventory-controls {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.2fr) auto minmax(120px, .7fr) auto auto;
+  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1fr) minmax(240px, 1.4fr) minmax(120px, .7fr) auto;
   gap: 12px;
   align-items: end;
 }
 .inventory-controls button {
   height: 42px;
 }
-#inventoryRowsInput {
-  min-height: 150px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  line-height: 1.55;
+.inventory-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+.inventory-loading span {
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: inventory-spin .8s linear infinite;
+}
+@keyframes inventory-spin { to { transform: rotate(360deg); } }
+.inventory-table-wrap {
+  max-height: 620px;
+}
+.inventory-table th:first-child,
+.inventory-table td:first-child {
+  width: 44px;
+  text-align: center;
+}
+.inventory-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+.inventory-product {
+  display: grid;
+  grid-template-columns: 46px minmax(160px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.inventory-product-img,
+.inventory-product-placeholder {
+  width: 46px;
+  height: 46px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  object-fit: cover;
+}
+.inventory-product-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-weight: 800;
+  font-size: 12px;
 }
 @media (max-width: 1180px) {
   .inventory-controls {

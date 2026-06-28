@@ -1221,6 +1221,136 @@ async function listOzonWarehouses(env, searchParams, headers = {}) {
   }
 }
 
+function stockAmount(row) {
+  const candidates = [
+    row?.present,
+    row?.stock,
+    row?.free_to_sell_amount,
+    row?.available_stock_count,
+    row?.valid_stock_count,
+    row?.quantity,
+  ];
+  for (const value of candidates) {
+    const n = amount(value);
+    if (n) return n;
+  }
+  return 0;
+}
+
+function normalizeStockRow(item, stock = {}, detail = {}) {
+  const productId = Number(item.product_id || item.id || detail.product_id || detail.id || 0);
+  const offerId = String(item.offer_id || item.offerId || detail.offer_id || detail.offerId || "");
+  const sku = String(stock.sku || item.sku || detail.sku || "");
+  const warehouseId = Number(stock.warehouse_id || stock.warehouseId || stock.warehouse?.id || stock.source_id || 0);
+  const warehouseName = String(stock.warehouse_name || stock.warehouseName || stock.warehouse?.name || stock.source || stock.type || "");
+  const image = detail.primary_image || detail.primary_image_url || detail.images?.[0] || item.primary_image || item.primary_image_url || item.images?.[0] || "";
+  return {
+    id: `${productId || offerId || sku}:${warehouseId || warehouseName || "stock"}`,
+    productId,
+    offerId,
+    sku,
+    name: String(detail.name || item.name || ""),
+    image,
+    warehouseId,
+    warehouseName,
+    source: String(stock.source || stock.type || ""),
+    present: stockAmount(stock),
+    reserved: amount(stock.reserved),
+    rawStock: stock,
+  };
+}
+
+async function fetchOzonProductDetails(store, items) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const byKey = new Map();
+  const productIds = [...new Set(items.map((item) => Number(item.product_id || item.id || 0)).filter(Boolean))].slice(0, 1000);
+  const offerIds = [...new Set(items.map((item) => String(item.offer_id || item.offerId || "").trim()).filter(Boolean))].slice(0, 1000);
+  const bodies = [];
+  for (let i = 0; i < productIds.length; i += 100) bodies.push({ product_id: productIds.slice(i, i + 100) });
+  for (let i = 0; i < offerIds.length; i += 100) bodies.push({ offer_id: offerIds.slice(i, i + 100) });
+  for (const body of bodies) {
+    try {
+      const response = await fetch("https://api-seller.ozon.ru/v3/product/info/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) continue;
+      const rows = payload?.items || payload?.result?.items || payload?.result || [];
+      if (!Array.isArray(rows)) continue;
+      rows.forEach((row) => {
+        [row.product_id, row.id, row.offer_id, row.sku].map((value) => String(value || "")).filter(Boolean).forEach((key) => byKey.set(key, row));
+      });
+    } catch {
+      // Details are optional; stock rows can still be shown without images.
+    }
+  }
+  return byKey;
+}
+
+async function fetchOzonInventoryStocks(store) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const endpoints = [
+    "https://api-seller.ozon.ru/v4/product/info/stocks",
+    "https://api-seller.ozon.ru/v3/product/info/stocks",
+  ];
+  let lastError = "";
+  for (const endpoint of endpoints) {
+    const items = [];
+    let cursor = "";
+    for (let page = 0; page < 50; page += 1) {
+      const body = {
+        filter: { offer_id: [], product_id: [], visibility: "ALL" },
+        limit: 1000,
+        cursor,
+        last_id: cursor,
+      };
+      const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+      const text = await response.text();
+      let payload = null;
+      try { payload = JSON.parse(text); } catch { payload = null; }
+      if (!response.ok) {
+        lastError = payload?.message || payload?.error?.message || text.slice(0, 300);
+        break;
+      }
+      const batch = payload?.items || payload?.result?.items || payload?.result || [];
+      if (Array.isArray(batch)) items.push(...batch);
+      cursor = payload?.cursor || payload?.last_id || payload?.result?.cursor || payload?.result?.last_id || "";
+      if (!cursor || !Array.isArray(batch) || !batch.length) break;
+    }
+    if (items.length) return { endpoint, items };
+  }
+  throw new Error(lastError || "未拉取到 Ozon 库存数据");
+}
+
+async function getOzonInventory(env, searchParams, headers = {}) {
+  const platform = String(searchParams.get("platform") || "Ozon").toLowerCase();
+  const storeIndex = Number(searchParams.get("storeIndex") || "0");
+  if (platform !== "ozon") return { ok: false, error: "库存管理目前仅支持 Ozon" };
+  const store = resolveStore(env, headers, platform, storeIndex);
+  if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  try {
+    const fetched = await fetchOzonInventoryStocks(store);
+    const details = await fetchOzonProductDetails(store, fetched.items);
+    const rows = [];
+    fetched.items.forEach((item) => {
+      const detail = details.get(String(item.product_id || item.id || "")) || details.get(String(item.offer_id || "")) || details.get(String(item.sku || "")) || {};
+      const stocks = Array.isArray(item.stocks) && item.stocks.length ? item.stocks : [item];
+      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail)));
+    });
+    const warehouses = [...new Map(rows
+      .filter((row) => row.warehouseId || row.warehouseName)
+      .map((row) => [String(row.warehouseId || row.warehouseName), {
+        id: row.warehouseId,
+        name: row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "未命名仓库"),
+      }])).values()];
+    return { ok: true, store: store.name, source: fetched.endpoint, rows, warehouses, count: rows.length, productCount: new Set(rows.map((row) => row.productId || row.offerId || row.sku)).size };
+  } catch (e) {
+    return { ok: false, error: "拉取库存失败:" + (e.message || String(e)) };
+  }
+}
+
 async function setOzonStocks(env, body, headers = {}) {
   const platform = String(body?.platform || "Ozon").toLowerCase();
   const storeIndex = Number(body?.storeIndex || "0");
@@ -1549,6 +1679,7 @@ export async function onRequest(context) {
       const body = await request.json().catch(() => ({}));
       return json(await auditOzonProduct(env, body, request.headers));
     }
+    if (path === "inventory") return json(await getOzonInventory(env, url.searchParams, request.headers));
     if (path === "warehouses") return json(await listOzonWarehouses(env, url.searchParams, request.headers));
     if (path === "set-stock") {
       const body = await request.json().catch(() => ({}));
