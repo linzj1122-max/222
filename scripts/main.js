@@ -2684,6 +2684,9 @@ const initialProducts = [
       $("apiPlatform").value = item.platform || "Ozon";
       $("apiClientId").value = item.clientId || "";
       $("apiSecret").value = "";
+      if ($("apiAdsClientId")) $("apiAdsClientId").value = "";
+      if ($("apiAdsClientSecret")) $("apiAdsClientSecret").value = "";
+      syncApiPlatformFields();
       $("apiVerifyStatus").hidden = true;
       $("apiForm").scrollIntoView({ behavior: "smooth", block: "center" });
     };
@@ -3316,6 +3319,8 @@ const initialProducts = [
     $("imageModal").addEventListener("click", (event) => {
       if (event.target.id === "imageModal") closeImageModal();
     });
+    $("apiPlatform")?.addEventListener("change", syncApiPlatformFields);
+    syncApiPlatformFields();
     $("adStoreSelect").addEventListener("change", renderAds);
     $("storeOverviewView")?.addEventListener("change", (event) => {
       storeOverviewView = event.target.value;
@@ -3432,6 +3437,16 @@ const initialProducts = [
       return `Ozon 店铺 Client ID 必须是纯数字。你现在填写的是「${clientId}」，看起来像广告/Performance API 的 Client ID 或登录账号，不能用于商品上架/店铺 API。请到 Ozon Seller 后台的 API Key 页面复制数字 Client ID。`;
     }
 
+    function syncApiPlatformFields() {
+      const platform = normalizePlatform($("apiPlatform")?.value || "Ozon");
+      const adsFields = $("ozonAdsFields");
+      if (adsFields) adsFields.hidden = platform !== "Ozon";
+      if (platform !== "Ozon") {
+        if ($("apiAdsClientId")) $("apiAdsClientId").value = "";
+        if ($("apiAdsClientSecret")) $("apiAdsClientSecret").value = "";
+      }
+    }
+
     async function verifyApiCredentials() {
       const clientId = $("apiClientId").value.trim();
       const secret = $("apiSecret").value.trim();
@@ -3479,7 +3494,16 @@ const initialProducts = [
       if (platform === "WB") {
         return `${prefix}_NAME=${payload.name}\n${prefix}_API_TOKEN=${payload.secret}`;
       }
-      return `${prefix}_NAME=${payload.name}\n${prefix}_CLIENT_ID=${payload.clientId}\n${prefix}_API_KEY=${payload.secret}`;
+      const lines = [
+        `${prefix}_NAME=${payload.name}`,
+        `${prefix}_CLIENT_ID=${payload.clientId}`,
+        `${prefix}_API_KEY=${payload.secret}`,
+      ];
+      if (payload.adsClientId && payload.adsClientSecret) {
+        lines.push(`OZON_ADS_${nextIndex}_CLIENT_ID=${payload.adsClientId}`);
+        lines.push(`OZON_ADS_${nextIndex}_CLIENT_SECRET=${payload.adsClientSecret}`);
+      }
+      return lines.join("\n");
     }
 
     async function reloadApiConfigs() {
@@ -3496,7 +3520,9 @@ const initialProducts = [
         name: $("apiName").value.trim(),
         platform: $("apiPlatform").value,
         clientId: $("apiClientId").value.trim(),
-        secret: $("apiSecret").value
+        secret: $("apiSecret").value,
+        adsClientId: $("apiAdsClientId")?.value.trim() || "",
+        adsClientSecret: $("apiAdsClientSecret")?.value || ""
       };
       if (!payload.name || !payload.clientId || !payload.secret) {
         alert("请填写店铺名称、Client ID 和 API 密钥。");
@@ -3504,6 +3530,10 @@ const initialProducts = [
       }
       if (normalizePlatform(payload.platform) === "Ozon" && !isOzonSellerClientId(payload.clientId)) {
         setApiVerifyStatus(false, "✗ " + ozonSellerClientIdMessage(payload.clientId));
+        return;
+      }
+      if (normalizePlatform(payload.platform) === "Ozon" && Boolean(payload.adsClientId) !== Boolean(payload.adsClientSecret)) {
+        setApiVerifyStatus(false, "✗ 广告 Client ID 和广告 Client Secret 需要同时填写，或者都留空。");
         return;
       }
       if (backendEnabled) {
@@ -3524,7 +3554,7 @@ const initialProducts = [
           } catch {}
           const note = reloaded
             ? "店铺列表已更新。"
-            : "Cloudflare 已保存变量，但当前运行环境可能要重新部署后才会在店铺列表显示。";
+            : (result.redeploy?.ok ? "已自动触发重新部署，部署成功后刷新页面即可显示新店铺。" : "Cloudflare 已保存变量，但当前运行环境可能要重新部署后才会在店铺列表显示。");
           setApiVerifyStatus(true, "✓ " + (result.message || "已写入 Cloudflare 环境变量。") + "\n" + note);
           $("apiForm").reset();
           $("editApiId").value = "";
@@ -3555,6 +3585,7 @@ const initialProducts = [
       $("apiForm").reset();
       $("editApiId").value = "";
       $("apiVerifyStatus").hidden = true;
+      syncApiPlatformFields();
     });
 
     $("storeGroupForm").addEventListener("submit", (event) => {

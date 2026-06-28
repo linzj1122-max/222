@@ -1770,6 +1770,13 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
   height: 42px;
   padding: 0 18px;
 }
+.optional-api-fields {
+  display: grid;
+  gap: 14px;
+}
+.optional-api-fields[hidden] {
+  display: none;
+}
 .api-verify-status {
   margin: 0;
 }

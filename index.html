@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
-  <link rel="stylesheet" href="styles/main.css?v=20260628-browser-flow" />
+  <link rel="stylesheet" href="styles/main.css?v=20260628-ads-autowrite" />
   <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
   <script>
     if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
@@ -558,6 +558,10 @@
               <label>平台<select id="apiPlatform"><option>Ozon</option><option>WB</option></select></label>
               <label>Client ID<input id="apiClientId" required placeholder="例如 3212572" autocomplete="off" /></label>
               <label>API 密钥<input id="apiSecret" required type="password" placeholder="粘贴 API 密钥" autocomplete="off" /></label>
+              <div id="ozonAdsFields" class="optional-api-fields">
+                <label>广告 Client ID<input id="apiAdsClientId" placeholder="可选：Ozon Performance Client ID" autocomplete="off" /></label>
+                <label>广告 Client Secret<input id="apiAdsClientSecret" type="password" placeholder="可选：Ozon Performance Client Secret" autocomplete="off" /></label>
+              </div>
               <div id="apiVerifyStatus" class="api-verify-status" hidden></div>
               <div class="actions">
                 <button class="secondary" type="button" id="verifyApiBtn">验证可用性</button>
@@ -565,7 +569,7 @@
               </div>
             </form>
             <div class="notice api-notice">
-              点击「验证可用性」会立即调用平台 API 校验 Client ID 与密钥是否有效。点击「写入 Cloudflare」会把店铺凭证保存为 Pages 环境变量/Secrets；页面不保存 API Key，店铺列表只显示云端已配置店铺。
+              点击「验证可用性」会立即调用平台 API 校验 Client ID 与密钥是否有效。点击「写入 Cloudflare」会把店铺凭证与可选广告凭证保存为 Pages 环境变量/Secrets，并自动触发重新部署；页面不保存 API Key，店铺列表只显示云端已配置店铺。
             </div>
           </section>
 
@@ -621,7 +625,7 @@
     <img id="imageModalImg" alt="竞品大图" />
   </div>
 
-  <script src="scripts/main.js?v=20260628-cf-autowrite"></script>
+  <script src="scripts/main.js?v=20260628-ads-autowrite"></script>
   <script src="scripts/sourcing.js"></script>
   <script src="scripts/listing.js?v=20260628-browser-flow"></script>
   <script src="scripts/ai-studio.js"></script>

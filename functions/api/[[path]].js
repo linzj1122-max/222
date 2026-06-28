@@ -401,6 +401,29 @@ async function cloudflarePagesRequest(env, method, path, body) {
   return payload?.result ?? payload;
 }
 
+async function triggerCloudflarePagesRedeploy(env, config, encodedProject) {
+  const deployments = await cloudflarePagesRequest(
+    env,
+    "GET",
+    `/accounts/${config.accountId}/pages/projects/${encodedProject}/deployments`
+  );
+  const list = Array.isArray(deployments)
+    ? deployments
+    : (deployments?.result || deployments?.items || deployments?.deployments || []);
+  const latest = list.find((item) => String(item.environment || "").toLowerCase() === "production") || list[0];
+  if (!latest?.id) throw new Error("Cloudflare 没有返回可重新部署的最新部署记录。");
+  const retried = await cloudflarePagesRequest(
+    env,
+    "POST",
+    `/accounts/${config.accountId}/pages/projects/${encodedProject}/deployments/${latest.id}/retry`
+  );
+  return {
+    ok: true,
+    deploymentId: retried?.id || latest.id,
+    url: retried?.url || retried?.deployment_trigger?.metadata?.branch || "",
+  };
+}
+
 function existingCloudflareEnvNames(project) {
   const configs = project?.deployment_configs || {};
   const names = new Set();
@@ -422,17 +445,54 @@ function nextCloudflareStoreIndex(project, platform) {
   return max + 1;
 }
 
+async function verifyOzonAdsCredentials(clientId, clientSecret) {
+  if (!clientId || !clientSecret) return { ok: false, status: 0, error: "缺少 Ozon 广告 Client ID 或 Client Secret" };
+  try {
+    const response = await fetch("https://api-performance.ozon.ru/api/client/token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "client_credentials",
+      }),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (response.ok && (payload?.access_token || payload?.token_type)) {
+      return { ok: true, status: response.status, message: "广告 API 验证成功" };
+    }
+    return {
+      ok: false,
+      status: response.status,
+      error: payload?.error_description || payload?.error || payload?.message || text.slice(0, 300) || "Ozon 广告 API 验证失败",
+    };
+  } catch (error) {
+    return { ok: false, status: 0, error: error.message || String(error) || "无法连接 Ozon 广告 API" };
+  }
+}
+
 async function upsertCloudflareStore(env, body) {
   const platform = normalizePlatform(body.platform || "Ozon");
   const name = String(body.name || "").trim();
   const clientId = String(body.clientId || "").trim();
   const secret = String(body.secret || body.apiKey || "").trim();
+  const adsClientId = String(body.adsClientId || "").trim();
+  const adsClientSecret = String(body.adsClientSecret || "").trim();
   if (!name || !secret || (platform === "Ozon" && !clientId)) {
     return { ok: false, error: "请填写店铺名称、Client ID 和 API 密钥。" };
   }
   if (platform === "Ozon") {
     const verified = await verifyOzonCredentials(clientId, secret);
     if (!verified.ok) return verified;
+    if ((adsClientId && !adsClientSecret) || (!adsClientId && adsClientSecret)) {
+      return { ok: false, error: "Ozon 广告 API 的 Client ID 和 Client Secret 需要同时填写。" };
+    }
+    if (adsClientId && adsClientSecret) {
+      const adsVerified = await verifyOzonAdsCredentials(adsClientId, adsClientSecret);
+      if (!adsVerified.ok) return { ...adsVerified, error: `广告 API 验证失败：${adsVerified.error}` };
+    }
   }
 
   const config = cloudflareManagementConfig(env);
@@ -440,7 +500,7 @@ async function upsertCloudflareStore(env, body) {
   const project = await cloudflarePagesRequest(env, "GET", `/accounts/${config.accountId}/pages/projects/${encodedProject}`);
   const index = nextCloudflareStoreIndex(project, platform);
   const prefix = platform === "WB" ? `WB_STORE_${index}` : `OZON_STORE_${index}`;
-  const envVars = platform === "WB"
+  let envVars = platform === "WB"
     ? {
         [`${prefix}_NAME`]: cfEnvPlain(name),
         [`${prefix}_API_TOKEN`]: cfEnvSecret(secret),
@@ -450,6 +510,13 @@ async function upsertCloudflareStore(env, body) {
         [`${prefix}_CLIENT_ID`]: cfEnvPlain(clientId),
         [`${prefix}_API_KEY`]: cfEnvSecret(secret),
       };
+  if (platform === "Ozon" && adsClientId && adsClientSecret) {
+    envVars = {
+      ...envVars,
+      [`OZON_ADS_${index}_CLIENT_ID`]: cfEnvSecret(adsClientId),
+      [`OZON_ADS_${index}_CLIENT_SECRET`]: cfEnvSecret(adsClientSecret),
+    };
+  }
 
   await cloudflarePagesRequest(env, "PATCH", `/accounts/${config.accountId}/pages/projects/${encodedProject}`, {
     deployment_configs: {
@@ -457,6 +524,12 @@ async function upsertCloudflareStore(env, body) {
       preview: { env_vars: envVars },
     },
   });
+  let redeploy = { ok: false, error: "" };
+  try {
+    redeploy = await triggerCloudflarePagesRedeploy(env, config, encodedProject);
+  } catch (error) {
+    redeploy = { ok: false, error: error.message || String(error) };
+  }
 
   return {
     ok: true,
@@ -466,8 +539,12 @@ async function upsertCloudflareStore(env, body) {
     source: "cloudflare-api",
     index,
     variables: Object.keys(envVars),
-    requiresRedeploy: true,
-    message: `已写入 Cloudflare 环境变量：${Object.keys(envVars).join("、")}。如果店铺列表还没出现，请重新部署 Pages 后刷新。`,
+    adsConfigured: Boolean(adsClientId && adsClientSecret),
+    redeploy,
+    requiresRedeploy: !redeploy.ok,
+    message: redeploy.ok
+      ? `已写入 Cloudflare 环境变量：${Object.keys(envVars).join("、")}，并已自动触发重新部署。部署成功后刷新页面即可看到新店铺。`
+      : `已写入 Cloudflare 环境变量：${Object.keys(envVars).join("、")}。自动重新部署失败：${redeploy.error || "未知错误"}。请手动重新部署一次。`,
   };
 }
 
