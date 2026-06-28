@@ -2698,7 +2698,8 @@ const initialProducts = [
           warehouseSelect.value = String(inventoryWarehouses[0].id || inventoryWarehouses[0].name || "all");
         }
         renderInventoryRows();
-        setInventoryStatus(`已加载 ${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。`);
+        const warning = data.warning ? ` ${data.warning}` : "";
+        setInventoryStatus(`已加载 ${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。${warning}`);
       } catch (error) {
         inventoryRows = [];
         inventoryWarehouses = [];

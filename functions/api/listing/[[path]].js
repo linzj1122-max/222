@@ -1198,23 +1198,15 @@ async function listOzonWarehouses(env, searchParams, headers = {}) {
     return { ok: true, warehouses: cached.warehouses, source: "kv-cache", cachedAt: cached.cachedAt };
   }
   try {
-    const response = await fetch("https://api-seller.ozon.ru/v1/warehouse/list", {
-      method: "POST",
-      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-      body: JSON.stringify({}),
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = JSON.parse(text); } catch { payload = null; }
-    if (!response.ok) return cached || { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300) };
-    const warehouses = (payload?.result || []).map((w) => ({
-      id: Number(w.warehouse_id || w.id || 0),
-      name: String(w.name || w.warehouse_name || ""),
-      isRfbs: Boolean(w.is_rfbs),
-      status: w.status || "",
-    })).filter((w) => w.id);
-    const result = { ok: true, warehouses, source: "fresh" };
-    result.kvSaved = await kvPutJson(env, cacheKey, result, 60 * 60 * 6);
+    const probe = await fetchOzonStockWarehouseProbe(store);
+    const result = {
+      ok: true,
+      warehouses: probe.warehouses,
+      source: "fresh",
+      attempts: searchParams.get("debug") === "1" ? probe.attempts : undefined,
+      warning: probe.warehouses.length ? "" : "Ozon 没有返回可用于修改库存的 warehouse_id",
+    };
+    if (probe.warehouses.length) result.kvSaved = await kvPutJson(env, cacheKey, result, 60 * 60 * 6);
     return result;
   } catch (e) {
     return cached || { ok: false, error: "查询仓库失败:" + (e.message || String(e)) };
@@ -1279,7 +1271,63 @@ function fallbackStockWarehouses(store) {
   return [];
 }
 
-async function fetchOzonStockWarehouses(store) {
+function ozonWarehouseRows(payload) {
+  const result = payload?.result || payload;
+  if (Array.isArray(result)) return result;
+  const candidates = [
+    result?.delivery_methods,
+    result?.delivery_method,
+    result?.warehouses,
+    result?.warehouse,
+    result?.items,
+    payload?.items,
+  ];
+  return candidates.find((rows) => Array.isArray(rows)) || [];
+}
+
+function normalizeOzonWarehouse(row = {}, source = "") {
+  const warehouse = row.warehouse && typeof row.warehouse === "object" ? row.warehouse : {};
+  const isDeliveryMethod = source.includes("/delivery-method/");
+  const id = Number(
+    row.warehouse_id ||
+    row.stock_warehouse_id ||
+    warehouse.warehouse_id ||
+    warehouse.id ||
+    (!isDeliveryMethod ? row.id : 0) ||
+    0
+  );
+  if (!id) return null;
+  const name = String(
+    row.warehouse_name ||
+    row.stock_warehouse_name ||
+    warehouse.name ||
+    row.name ||
+    row.provider_name ||
+    (typeof row.warehouse === "string" ? row.warehouse : "") ||
+    `仓库 ${id}`
+  );
+  return {
+    id,
+    name,
+    status: row.status || "",
+    deliveryMethodId: isDeliveryMethod ? Number(row.id || 0) : 0,
+    source,
+  };
+}
+
+function warehouseDebugSample(row = {}) {
+  const out = {};
+  Object.entries(row).slice(0, 20).forEach(([key, value]) => {
+    if (value && typeof value === "object") {
+      out[key] = Array.isArray(value) ? value.slice(0, 3) : Object.fromEntries(Object.entries(value).slice(0, 12));
+    } else {
+      out[key] = value;
+    }
+  });
+  return out;
+}
+
+async function fetchOzonStockWarehouseProbe(store) {
   const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
   const endpoints = [
     {
@@ -1295,30 +1343,41 @@ async function fetchOzonStockWarehouses(store) {
     },
   ];
   const warehouses = new Map();
+  const attempts = [];
   for (const endpoint of endpoints) {
     for (const body of endpoint.bodies) {
       try {
         const response = await fetch(endpoint.url, { method: "POST", headers, body: JSON.stringify(body) });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) continue;
-        const result = payload?.result || payload;
-        const rows = Array.isArray(result)
-          ? result
-          : (result?.delivery_methods || result?.warehouses || result?.items || []);
-        if (!Array.isArray(rows)) continue;
+        const text = await response.text();
+        const payload = JSON.parse(text || "{}");
+        const rows = response.ok ? ozonWarehouseRows(payload) : [];
+        attempts.push({
+          url: endpoint.url,
+          status: response.status,
+          ok: response.ok,
+          body,
+          rows: rows.length,
+          error: response.ok ? "" : (payload?.message || payload?.error?.message || text.slice(0, 200)),
+          sample: rows[0] ? Object.keys(rows[0]).slice(0, 12) : [],
+          sampleRows: rows.slice(0, 3).map(warehouseDebugSample),
+        });
+        if (!response.ok || !Array.isArray(rows)) continue;
         rows.forEach((row) => {
-          const id = Number(row.warehouse_id || row.warehouse?.id || row.id || 0);
-          if (!id) return;
-          const name = String(row.warehouse_name || row.warehouse?.name || row.name || row.provider_name || `仓库 ${id}`);
-          warehouses.set(String(id), { id, name, status: row.status || "", source: endpoint.url });
+          const warehouse = normalizeOzonWarehouse(row, endpoint.url);
+          if (warehouse) warehouses.set(String(warehouse.id), warehouse);
         });
       } catch {
-        // Try the next warehouse source.
+        attempts.push({ url: endpoint.url, status: 0, ok: false, body, rows: 0, error: "请求或解析仓库响应失败", sample: [] });
       }
     }
     if (warehouses.size) break;
   }
-  return [...warehouses.values()];
+  return { warehouses: [...warehouses.values()], attempts };
+}
+
+async function fetchOzonStockWarehouses(store) {
+  const probe = await fetchOzonStockWarehouseProbe(store);
+  return probe.warehouses;
 }
 
 function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = null) {
@@ -1424,11 +1483,11 @@ async function getOzonInventory(env, searchParams, headers = {}) {
   const store = resolveStore(env, headers, platform, storeIndex);
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
   try {
-    const [fetched, fetchedWarehouses] = await Promise.all([
+    const [fetched, warehouseProbe] = await Promise.all([
       fetchOzonInventoryStocks(store),
-      fetchOzonStockWarehouses(store),
+      fetchOzonStockWarehouseProbe(store),
     ]);
-    const stockWarehouses = fetchedWarehouses.length ? fetchedWarehouses : fallbackStockWarehouses(store);
+    const stockWarehouses = warehouseProbe.warehouses;
     const details = await fetchOzonProductDetails(store, fetched.items);
     const rows = [];
     const singleWarehouse = stockWarehouses.length === 1 ? stockWarehouses[0] : null;
@@ -1444,7 +1503,17 @@ async function getOzonInventory(env, searchParams, headers = {}) {
         name: row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "未命名仓库"),
       }])).values()];
     const warehouses = stockWarehouses.length ? stockWarehouses : stockTypeWarehouses;
-    return { ok: true, store: store.name, source: fetched.endpoint, rows, warehouses, count: rows.length, productCount: new Set(rows.map((row) => row.productId || row.offerId || row.sku)).size };
+    return {
+      ok: true,
+      store: store.name,
+      source: fetched.endpoint,
+      rows,
+      warehouses,
+      count: rows.length,
+      productCount: new Set(rows.map((row) => row.productId || row.offerId || row.sku)).size,
+      warning: stockWarehouses.length ? "" : "没有从 Ozon API 获取到可提交库存的仓库 ID，后台编号 111/222 不能直接提交。",
+      warehouseAttempts: searchParams.get("debug") === "1" ? warehouseProbe.attempts : undefined,
+    };
   } catch (e) {
     return { ok: false, error: "拉取库存失败:" + (e.message || String(e)) };
   }
