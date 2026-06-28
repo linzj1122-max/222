@@ -1473,8 +1473,23 @@ async function fetchOzonProductDetails(store, items) {
   return byKey;
 }
 
-async function fetchOzonInventoryStocks(store) {
+function searchParamList(searchParams, key) {
+  return [
+    ...searchParams.getAll(key),
+    String(searchParams.get(`${key}[]`) || ""),
+  ]
+    .join(",")
+    .split(/[\s,，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 1000);
+}
+
+async function fetchOzonInventoryStocks(store, filters = {}) {
   const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const offerIds = Array.isArray(filters.offerIds) ? filters.offerIds.map(String).filter(Boolean).slice(0, 1000) : [];
+  const productIds = Array.isArray(filters.productIds) ? filters.productIds.map(Number).filter(Boolean).slice(0, 1000) : [];
+  const filtered = offerIds.length || productIds.length;
   const endpoints = [
     "https://api-seller.ozon.ru/v4/product/info/stocks",
     "https://api-seller.ozon.ru/v3/product/info/stocks",
@@ -1485,8 +1500,8 @@ async function fetchOzonInventoryStocks(store) {
     let cursor = "";
     for (let page = 0; page < 50; page += 1) {
       const body = {
-        filter: { offer_id: [], product_id: [], visibility: "ALL" },
-        limit: 1000,
+        filter: { offer_id: offerIds, product_id: productIds, visibility: "ALL" },
+        limit: filtered ? Math.max(1, Math.min(1000, offerIds.length + productIds.length)) : 1000,
         cursor,
         last_id: cursor,
       };
@@ -1501,7 +1516,7 @@ async function fetchOzonInventoryStocks(store) {
       const batch = payload?.items || payload?.result?.items || payload?.result || [];
       if (Array.isArray(batch)) items.push(...batch);
       cursor = payload?.cursor || payload?.last_id || payload?.result?.cursor || payload?.result?.last_id || "";
-      if (!cursor || !Array.isArray(batch) || !batch.length) break;
+      if (filtered || !cursor || !Array.isArray(batch) || !batch.length) break;
     }
     if (items.length) return { endpoint, items };
   }
@@ -1514,9 +1529,11 @@ async function getOzonInventory(env, searchParams, headers = {}) {
   if (platform !== "ozon") return { ok: false, error: "库存管理目前仅支持 Ozon" };
   const store = resolveStore(env, headers, platform, storeIndex);
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
+  const offerIds = [...new Set([...searchParamList(searchParams, "offerIds"), ...searchParamList(searchParams, "offerId")])];
+  const productIds = [...new Set([...searchParamList(searchParams, "productIds"), ...searchParamList(searchParams, "productId")].map(Number).filter(Boolean))];
   try {
     const [fetched, warehouseProbe] = await Promise.all([
-      fetchOzonInventoryStocks(store),
+      fetchOzonInventoryStocks(store, { offerIds, productIds }),
       fetchOzonStockWarehouseProbe(store),
     ]);
     const stockWarehouses = warehouseProbe.warehouses;

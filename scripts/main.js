@@ -2711,13 +2711,36 @@ const initialProducts = [
       }
     }
 
+    async function refreshSubmittedInventoryRows(storeIndex, submittedRows) {
+      const offerIds = [...new Set(submittedRows.map((row) => row.offerId).filter(Boolean))];
+      const productIds = [...new Set(submittedRows.map((row) => row.productId).filter(Boolean))];
+      if (!offerIds.length && !productIds.length) return 0;
+      const params = new URLSearchParams({ platform: "Ozon", storeIndex: String(storeIndex) });
+      if (offerIds.length) params.set("offerIds", offerIds.join(","));
+      if (productIds.length) params.set("productIds", productIds.join(","));
+      const data = await apiRequest(`/api/listing/inventory?${params.toString()}`);
+      if (!data.ok) throw new Error(data.error || "刷新已修改库存失败");
+      const freshRows = data.rows || [];
+      if (!freshRows.length) return 0;
+      if (Array.isArray(data.warehouses) && data.warehouses.length) {
+        inventoryWarehouses = data.warehouses;
+        renderInventoryWarehouses();
+      }
+      const freshByKey = new Map(freshRows.map((row) => [inventoryRowKey(row), row]));
+      inventoryRows = inventoryRows.map((row) => freshByKey.get(inventoryRowKey(row)) || row);
+      renderInventoryRows();
+      return freshRows.length;
+    }
+
     async function submitInventoryBatch() {
       const storeSelect = $("inventoryStore");
       if (!storeSelect || storeSelect.value === "") { alert("请先选择 Ozon 店铺。"); return; }
       const selectedWarehouseId = selectedInventoryWarehouseId();
-      const rows = inventoryRows
+      const selectedRows = inventoryRows
         .filter((row) => inventorySelected.has(inventoryRowKey(row)) && inventoryRowCanEdit(row))
-        .map((row) => ({ offerId: row.offerId, productId: row.productId, warehouseId: row.warehouseId || selectedWarehouseId, stock: inventoryNextStock(row) }))
+        .map((row) => ({ key: inventoryRowKey(row), row, stock: inventoryNextStock(row) }));
+      const rows = selectedRows
+        .map((entry) => ({ offerId: entry.row.offerId, productId: entry.row.productId, warehouseId: entry.row.warehouseId || selectedWarehouseId, stock: entry.stock }))
         .filter((row) => row.warehouseId);
       if (!rows.length) { alert("请先选择实际仓库，并勾选至少一个 FBS/rFBS 商品。"); return; }
       const value = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
@@ -2742,10 +2765,20 @@ const initialProducts = [
           throw new Error([data.error || "库存提交失败", details].filter(Boolean).join("\n"));
         }
         const updatedCount = Number(data.updatedCount || data.count || rows.length);
-        const successMessage = `库存修改成功：${updatedCount} 个商品已提交到 Ozon，正在刷新库存...`;
-        setInventoryStatus(successMessage);
-        alert(successMessage);
-        await loadInventoryStoreData();
+        const updatedByKey = new Map(selectedRows.map((entry) => [entry.key, entry.stock]));
+        inventoryRows = inventoryRows.map((row) => {
+          const key = inventoryRowKey(row);
+          return updatedByKey.has(key) ? { ...row, present: updatedByKey.get(key) } : row;
+        });
+        inventorySelected = new Set();
+        renderInventoryRows();
+        setInventoryStatus(`库存修改成功：${updatedCount} 个商品已提交到 Ozon，正在只刷新这 ${rows.length} 个商品...`);
+        try {
+          const refreshed = await refreshSubmittedInventoryRows(Number(storeSelect.value || 0), rows);
+          setInventoryStatus(`库存修改成功：${updatedCount} 个商品已提交到 Ozon，已刷新 ${refreshed || rows.length} 行已修改库存。`);
+        } catch (refreshError) {
+          setInventoryStatus(`库存修改成功：${updatedCount} 个商品已提交到 Ozon。已先更新页面，但刷新这几条库存失败：${refreshError.message || refreshError}`);
+        }
       } catch (error) {
         setInventoryStatus("库存提交失败：" + (error.message || error));
         alert("库存提交失败：" + (error.message || error));
