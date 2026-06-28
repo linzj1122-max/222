@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
-  <link rel="stylesheet" href="styles/main.css?v=20260628-ads-autowrite" />
+  <link rel="stylesheet" href="styles/main.css?v=20260629-auth" />
   <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
   <script>
     if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
@@ -12,7 +12,17 @@
     document.documentElement.dataset.xlsxReady = window.XLSX ? "1" : "0";
   </script>
 </head>
-<body>
+<body class="auth-locked">
+  <div id="loginGate" class="login-gate" hidden>
+    <form id="loginForm" class="login-card">
+      <span class="login-kicker">OZ/WB COMMAND CENTER</span>
+      <h2>登录经营中控</h2>
+      <label>账号<input id="loginUsername" name="username" autocomplete="username" required /></label>
+      <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" required /></label>
+      <div id="loginStatus" class="login-status" hidden></div>
+      <button type="submit">登录</button>
+    </form>
+  </div>
   <div class="app">
     <aside>
       <section>
@@ -43,6 +53,11 @@
     <main>
       <header class="topbar">
         <h2 id="pageTitle">首页大屏</h2>
+        <div class="auth-user-box" id="authUserBox" hidden>
+          <span id="authUserName"></span>
+          <span class="scope-chip" id="authUserRole"></span>
+          <button class="secondary" id="logoutBtn" type="button">退出</button>
+        </div>
       </header>
 
       <section class="tab active" id="dashboard">
@@ -660,7 +675,7 @@
     <img id="imageModalImg" alt="竞品大图" />
   </div>
 
-  <script src="scripts/main.js?v=20260629-store-groups-delete"></script>
+  <script src="scripts/main.js?v=20260629-auth"></script>
   <script src="scripts/sourcing.js"></script>
   <script src="scripts/listing.js?v=20260628-store-sync"></script>
   <script src="scripts/ai-studio.js"></script>

@@ -2974,3 +2974,99 @@ label.inline-select > select {
 .ai-history-info small { font-size: 11.5px; color: var(--ink-3); }
 .ai-history-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .ai-history-actions button { padding: 5px 10px; font-size: 12px; min-height: 28px; height: auto; }
+
+body.auth-locked {
+  overflow: hidden;
+}
+
+body.auth-locked .app {
+  filter: blur(2px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(250, 248, 243, 0.88);
+  backdrop-filter: blur(10px);
+}
+
+.login-gate[hidden],
+.auth-user-box[hidden] {
+  display: none !important;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-card h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  color: var(--ink-1);
+}
+
+.login-kicker {
+  color: var(--brand-dark);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.login-card label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-2);
+  font-weight: 700;
+}
+
+.login-card input {
+  width: 100%;
+}
+
+.login-card button {
+  min-height: 42px;
+}
+
+.login-status {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+  color: var(--red);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.login-status.ok {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.auth-user-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.auth-user-box > span:first-child {
+  color: var(--ink-2);
+  font-weight: 700;
+}
+
+.auth-user-box button {
+  height: 34px;
+  padding: 0 12px;
+}

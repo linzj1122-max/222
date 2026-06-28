@@ -94,7 +94,14 @@ const initialProducts = [
       try { data = text ? JSON.parse(text) : {}; } catch {
         throw new Error(`接口返回非 JSON:${response.status} ${text.slice(0, 120)}`);
       }
-      if (!response.ok) throw new Error(data.error || data.message || `API 请求失败:${response.status}`);
+      if (!response.ok) {
+        if (response.status === 401 && !String(response.url || "").includes("/api/auth/login")) {
+          setAuthSession(null);
+          currentUser = null;
+          syncAuthUi();
+        }
+        throw new Error(data.error || data.message || `API 请求失败:${response.status}`);
+      }
       return data;
     }
     const rmb = (v) => `¥${Number(v || 0).toFixed(2)}`;
@@ -225,6 +232,95 @@ const initialProducts = [
     let pickingDateField = "from";
     let pendingOrderDateAnchor = null;
     const backendEnabled = location.protocol !== "file:";
+    const authSessionKey = "ozon_wb_auth_session_v1";
+    let currentUser = null;
+    let appBootstrapped = false;
+    const nativeFetch = window.fetch.bind(window);
+
+    function getAuthSession() {
+      try { return JSON.parse(localStorage.getItem(authSessionKey) || "null") || null; } catch { return null; }
+    }
+
+    function setAuthSession(session) {
+      if (!session?.token) localStorage.removeItem(authSessionKey);
+      else localStorage.setItem(authSessionKey, JSON.stringify(session));
+    }
+
+    function authToken() {
+      return getAuthSession()?.token || "";
+    }
+
+    function canDeleteStores() {
+      return ["owner", "creator", "admin"].includes(String(currentUser?.role || "").toLowerCase());
+    }
+
+    function authRoleLabel(role) {
+      return canDeleteStores() && String(role || "").toLowerCase() !== "member" ? "创作者" : "成员";
+    }
+
+    function syncAuthUi() {
+      const loggedIn = Boolean(currentUser) || !backendEnabled;
+      document.body.classList.toggle("auth-locked", !loggedIn);
+      if ($("loginGate")) $("loginGate").hidden = loggedIn;
+      if ($("authUserBox")) $("authUserBox").hidden = !loggedIn || !backendEnabled;
+      if ($("authUserName")) $("authUserName").textContent = currentUser?.name || currentUser?.username || "";
+      if ($("authUserRole")) $("authUserRole").textContent = authRoleLabel(currentUser?.role);
+    }
+
+    function setLoginStatus(message, ok = false) {
+      const box = $("loginStatus");
+      if (!box) return;
+      box.hidden = !message;
+      box.textContent = message || "";
+      box.classList.toggle("ok", Boolean(ok));
+    }
+
+    window.fetch = (input, init = {}) => {
+      const requestUrl = typeof input === "string" ? input : (input?.url || "");
+      let isApi = false;
+      try {
+        const url = new URL(requestUrl, location.href);
+        isApi = url.origin === location.origin && url.pathname.startsWith("/api/");
+      } catch {
+        isApi = String(requestUrl || "").startsWith("/api/");
+      }
+      if (!isApi) return nativeFetch(input, init);
+      const headers = new Headers(init.headers || (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined));
+      const token = authToken();
+      if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+      return nativeFetch(input, { ...init, headers });
+    };
+
+    async function ensureAuthenticated() {
+      if (!backendEnabled) {
+        currentUser = { username: "local", name: "本地模式", role: "owner" };
+        syncAuthUi();
+        return true;
+      }
+      const session = getAuthSession();
+      if (!session?.token) {
+        currentUser = null;
+        syncAuthUi();
+        return false;
+      }
+      try {
+        const response = await nativeFetch("/api/auth/me", {
+          headers: { authorization: `Bearer ${session.token}` },
+        });
+        const data = await readJsonResponse(response);
+        if (data.authenticated && data.user) {
+          currentUser = data.user;
+          syncAuthUi();
+          return true;
+        }
+      } catch (error) {
+        setAuthSession(null);
+        currentUser = null;
+        setLoginStatus(error.message || "登录已失效，请重新登录。");
+      }
+      syncAuthUi();
+      return false;
+    }
 
     const totalRmb = (p) => Number(p.purchase||0) + Number(p.domestic||0) + Number(p.firstFreight||0) + Number(p.lastMile||0);
     const totalRub = (p) => totalRmb(p) * Number(p.rate || 0);
@@ -2823,7 +2919,9 @@ const initialProducts = [
           <td>${escapeHtml(formatCreatedAt(item.createdAt))}</td>
           <td class="actions">
             <span class="scope-chip">${item.source === "local" ? "本地脱敏记录" : "Cloudflare 环境变量"}</span>
-            <button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>
+            ${canDeleteStores()
+              ? `<button class="danger" type="button" onclick="deleteApiConfig('${item.id}')">删除</button>`
+              : `<span class="muted">仅创作者可删除</span>`}
           </td>
         </tr>
       `).join("");
@@ -2850,6 +2948,10 @@ const initialProducts = [
     };
 
     window.deleteApiConfig = async (id) => {
+      if (!canDeleteStores()) {
+        alert("只有创作者账号可以删除店铺。");
+        return;
+      }
       const item = apiConfigs.find((entry) => entry.id === id);
       const storeName = item?.name || "";
       const cloudDelete = item && item.source !== "local";
@@ -4020,7 +4122,43 @@ const initialProducts = [
       }, 60 * 60 * 1000);
     }
 
+    $("loginForm")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const username = $("loginUsername")?.value.trim() || "";
+      const password = $("loginPassword")?.value || "";
+      const btn = event.currentTarget.querySelector('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = "登录中..."; }
+      setLoginStatus("");
+      try {
+        const response = await nativeFetch("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await readJsonResponse(response);
+        if (!data.ok || !data.token) throw new Error(data.error || "登录失败。");
+        setAuthSession({ token: data.token, user: data.user, savedAt: Date.now() });
+        currentUser = data.user;
+        syncAuthUi();
+        setLoginStatus("登录成功，正在加载数据。", true);
+        await bootstrap();
+      } catch (error) {
+        setLoginStatus(error.message || "登录失败，请重试。");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "登录"; }
+      }
+    });
+
+    $("logoutBtn")?.addEventListener("click", () => {
+      setAuthSession(null);
+      currentUser = null;
+      location.reload();
+    });
+
     async function bootstrap() {
+      if (appBootstrapped) return;
+      if (!(await ensureAuthenticated())) return;
+      appBootstrapped = true;
       if ($("orderDateFrom")) $("orderDateFrom").value = orderDateFrom;
       if ($("orderDateTo")) $("orderDateTo").value = orderDateTo;
       updateOrderDateButton();

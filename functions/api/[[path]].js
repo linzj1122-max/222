@@ -27,9 +27,183 @@ function json(body, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, authorization",
     },
   });
+}
+
+const AUTH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function base64UrlEncodeBytes(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlEncodeText(text) {
+  return base64UrlEncodeBytes(new TextEncoder().encode(text));
+}
+
+function base64UrlDecodeText(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function authSecret(env) {
+  const configured = env.AUTH_SESSION_SECRET || env.CONTROL_CENTER_SESSION_SECRET || env.SESSION_SECRET;
+  if (configured) return String(configured);
+  const users = String(env.CONTROL_CENTER_USERS || env.AUTH_USERS || "");
+  return [users, env.CREATOR_PASSWORD, env.ADMIN_PASSWORD, env.CLOUDFLARE_API_TOKEN].filter(Boolean).join(":") || "local-dev-session-secret";
+}
+
+function normalizeAuthRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (role === "creator" || role === "admin") return "owner";
+  return role || "member";
+}
+
+function addAuthUser(users, raw, fallbackRole = "member") {
+  if (!raw) return;
+  const username = String(raw.username || raw.user || raw.name || "").trim();
+  const password = String(raw.password || raw.pass || "").trim();
+  if (!username || !password) return;
+  users.push({
+    username,
+    password,
+    name: String(raw.displayName || raw.label || raw.name || username),
+    role: normalizeAuthRole(raw.role || fallbackRole),
+  });
+}
+
+function authUsers(env) {
+  const users = [];
+  for (const key of ["CONTROL_CENTER_USERS", "AUTH_USERS"]) {
+    const raw = env[key];
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item) => addAuthUser(users, item));
+      } else if (parsed && typeof parsed === "object") {
+        Object.entries(parsed).forEach(([username, value]) => {
+          if (typeof value === "string") addAuthUser(users, { username, password: value });
+          else addAuthUser(users, { username, ...(value || {}) });
+        });
+      }
+    } catch {
+      // Invalid auth JSON simply means no users are loaded from that variable.
+    }
+  }
+  addAuthUser(users, {
+    username: env.CREATOR_USERNAME || env.OWNER_USERNAME,
+    password: env.CREATOR_PASSWORD || env.OWNER_PASSWORD,
+    name: env.CREATOR_DISPLAY_NAME || env.OWNER_DISPLAY_NAME || "Creator",
+    role: "owner",
+  }, "owner");
+  addAuthUser(users, {
+    username: env.ADMIN_USERNAME,
+    password: env.ADMIN_PASSWORD,
+    name: env.ADMIN_DISPLAY_NAME || "Admin",
+    role: "owner",
+  }, "owner");
+  const seen = new Set();
+  return users.filter((user) => {
+    const key = user.username.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function hmacSha256(secret, data) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return base64UrlEncodeBytes(new Uint8Array(signature));
+}
+
+async function issueAuthToken(env, user) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncodeText(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = base64UrlEncodeText(JSON.stringify({
+    sub: user.username,
+    name: user.name,
+    role: user.role,
+    iat: now,
+    exp: now + AUTH_TOKEN_TTL_SECONDS,
+  }));
+  const signingInput = `${header}.${payload}`;
+  const signature = await hmacSha256(authSecret(env), signingInput);
+  return `${signingInput}.${signature}`;
+}
+
+function authTokenFromRequest(request) {
+  const header = request.headers.get("authorization") || "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  const cookie = request.headers.get("cookie") || "";
+  const cookieMatch = cookie.match(/(?:^|;\s*)cc_session=([^;]+)/);
+  return cookieMatch ? decodeURIComponent(cookieMatch[1]) : "";
+}
+
+async function verifyAuth(request, env) {
+  const token = authTokenFromRequest(request);
+  if (!token) return { ok: false, status: 401, error: "请先登录。" };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false, status: 401, error: "登录已失效，请重新登录。" };
+  const signingInput = `${parts[0]}.${parts[1]}`;
+  const expected = await hmacSha256(authSecret(env), signingInput);
+  if (expected !== parts[2]) return { ok: false, status: 401, error: "登录已失效，请重新登录。" };
+  let payload = null;
+  try { payload = JSON.parse(base64UrlDecodeText(parts[1])); } catch { payload = null; }
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload?.sub || Number(payload.exp || 0) <= now) {
+    return { ok: false, status: 401, error: "登录已过期，请重新登录。" };
+  }
+  const user = authUsers(env).find((item) => item.username === payload.sub);
+  if (!user) return { ok: false, status: 401, error: "账号已被停用，请重新登录。" };
+  return { ok: true, user: { username: user.username, name: user.name, role: user.role } };
+}
+
+function publicAuthUser(user) {
+  return user ? { username: user.username, name: user.name, role: user.role } : null;
+}
+
+function isStoreDeleteAllowed(user) {
+  return normalizeAuthRole(user?.role) === "owner";
+}
+
+async function handleAuthRoute(path, request, env) {
+  if (path === "auth/login" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "");
+    const users = authUsers(env);
+    if (!users.length) {
+      return json({ ok: false, setupRequired: true, error: "还没有配置登录账号。请在 Cloudflare 环境变量中添加 CONTROL_CENTER_USERS 或 CREATOR_USERNAME / CREATOR_PASSWORD。" }, 503);
+    }
+    const user = users.find((item) => item.username === username && item.password === password);
+    if (!user) return json({ ok: false, error: "账号或密码不正确。" }, 401);
+    const token = await issueAuthToken(env, user);
+    return json({ ok: true, token, user: publicAuthUser(user), expiresIn: AUTH_TOKEN_TTL_SECONDS });
+  }
+  if (path === "auth/me") {
+    const auth = await verifyAuth(request, env);
+    if (!auth.ok) {
+      return json({ ok: false, authenticated: false, setupRequired: authUsers(env).length === 0, error: auth.error }, auth.status);
+    }
+    return json({ ok: true, authenticated: true, user: auth.user });
+  }
+  if (path === "auth/logout" && request.method === "POST") return json({ ok: true });
+  return null;
 }
 
 function amount(value) {
@@ -1996,7 +2170,11 @@ export async function onRequest(context) {
   const url = new URL(request.url);
 
   try {
+    const authRoute = await handleAuthRoute(path, request, env);
+    if (authRoute) return authRoute;
     if (path === "health") return json({ ok: true, service: "cloudflare-ozon-wb-control-center", kvBound: Boolean(env.LISTING_CACHE) });
+    const auth = await verifyAuth(request, env);
+    if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
     if (path === "debug") return json({ ...debugStatus(env), kvBound: Boolean(env.LISTING_CACHE) });
     if (path === "products") return json(PRODUCTS);
     if (path === "product-images") {
@@ -2084,6 +2262,9 @@ export async function onRequest(context) {
     }
     if (path.startsWith("integrations/")) {
       if (request.method === "DELETE") {
+        if (!isStoreDeleteAllowed(auth.user)) {
+          return json({ ok: false, error: "只有创作者账号可以删除店铺。" }, 403);
+        }
         const body = await request.json().catch(() => ({}));
         try {
           return json(await deleteCloudflareStore(env, decodeURIComponent(path.split("/")[1] || ""), body));
