@@ -156,6 +156,8 @@ const initialProducts = [
     let apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
     try { localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs)); } catch {}
     let storeGroups = JSON.parse(localStorage.getItem(storeGroupKey) || "[]");
+    let inventoryStores = [];
+    let inventoryWarehouses = [];
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
@@ -2484,16 +2486,20 @@ const initialProducts = [
       drawRevenueChart();
     });
 
-    function renderCosts() {
-      $("sideCount").textContent = products.length;
+    function scopedCostProducts() {
       const keyword = $("costSearch").value.trim().toLowerCase();
       const scopePlatform = normalizePlatform($("costScopePlatform")?.value);
       const scopeMode = normalizeMode($("costScopeMode")?.value);
       const scopeFulfillment = normalizeFulfillment($("costScopeFulfillment")?.value, scopePlatform, scopeMode);
-      const rows = products
+      return products
         .map((p) => ensureProductScope(p))
         .filter((p) => p.platform === scopePlatform && p.mode === scopeMode && p.fulfillment === scopeFulfillment)
         .filter((p) => [p.code, p.sku, p.name].join(" ").toLowerCase().includes(keyword));
+    }
+
+    function renderCosts() {
+      $("sideCount").textContent = products.length;
+      const rows = scopedCostProducts();
       $("costRows").innerHTML = rows.length ? rows.map((p) => `
         <tr>
           <td><strong>${escapeHtml(p.code)}</strong><div>${escapeHtml(p.name)}</div><div class="sku">${escapeHtml(p.sku)}</div></td>
@@ -2508,6 +2514,143 @@ const initialProducts = [
         </tr>
       `).join("") : `<tr><td colspan="9" class="muted-cell">当前范围暂无产品成本，可在左侧表单添加或导入表格。</td></tr>`;
       renderFeeRows();
+    }
+
+    function setInventoryStatus(message) {
+      const el = $("inventoryStatus");
+      if (el) el.textContent = message;
+    }
+
+    function renderInventoryStores() {
+      const select = $("inventoryStore");
+      if (!select) return;
+      const current = select.value;
+      select.innerHTML = inventoryStores.length
+        ? inventoryStores.map((store) => `<option value="${Number(store.index || 0)}">${escapeHtml(store.name || `Ozon 店铺 ${Number(store.index || 0) + 1}`)}</option>`).join("")
+        : `<option value="">未配置 Ozon 店铺</option>`;
+      if (inventoryStores.some((store) => String(store.index || 0) === current)) select.value = current;
+    }
+
+    function renderInventoryWarehouses() {
+      const select = $("inventoryWarehouse");
+      if (!select) return;
+      const current = select.value;
+      select.innerHTML = inventoryWarehouses.length
+        ? inventoryWarehouses.map((warehouse) => `<option value="${Number(warehouse.id || 0)}">${escapeHtml(warehouse.name || `仓库 ${warehouse.id}`)}</option>`).join("")
+        : `<option value="">请先加载仓库</option>`;
+      if (inventoryWarehouses.some((warehouse) => String(warehouse.id) === current)) select.value = current;
+    }
+
+    async function loadInventoryStores() {
+      if (!$("inventoryStore")) return;
+      try {
+        const data = await apiRequest("/api/listing/stores");
+        inventoryStores = (data.stores || []).filter((store) => normalizePlatform(store.platform) === "Ozon");
+      } catch (error) {
+        inventoryStores = apiConfigs
+          .filter((store) => normalizePlatform(store.platform) === "Ozon")
+          .map((store, index) => ({ index, platform: "Ozon", name: store.name || `Ozon 店铺 ${index + 1}` }));
+        if (!inventoryStores.length) setInventoryStatus("店铺加载失败：" + (error.message || error));
+      }
+      renderInventoryStores();
+      if (inventoryStores.length) {
+        await loadInventoryWarehouses();
+      } else {
+        inventoryWarehouses = [];
+        renderInventoryWarehouses();
+        setInventoryStatus("未配置 Ozon 店铺，请先在 Cloudflare 环境变量中配置店铺凭证。");
+      }
+    }
+
+    async function loadInventoryWarehouses() {
+      const select = $("inventoryStore");
+      if (!select || select.value === "") {
+        inventoryWarehouses = [];
+        renderInventoryWarehouses();
+        setInventoryStatus("请先配置 Ozon 店铺。");
+        return;
+      }
+      const btn = $("loadInventoryWarehouses");
+      if (btn) { btn.disabled = true; btn.textContent = "加载中..."; }
+      setInventoryStatus("正在加载仓库...");
+      try {
+        const params = new URLSearchParams({ platform: "Ozon", storeIndex: select.value });
+        const data = await apiRequest(`/api/listing/warehouses?${params.toString()}`);
+        if (!data.ok) throw new Error(data.error || "仓库加载失败");
+        inventoryWarehouses = data.warehouses || [];
+        renderInventoryWarehouses();
+        setInventoryStatus(inventoryWarehouses.length ? `已加载 ${inventoryWarehouses.length} 个仓库。` : "当前店铺没有可用仓库。");
+      } catch (error) {
+        inventoryWarehouses = [];
+        renderInventoryWarehouses();
+        setInventoryStatus("仓库加载失败：" + (error.message || error));
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "加载仓库"; }
+      }
+    }
+
+    function fillInventoryRowsFromScope() {
+      const stock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      const rows = scopedCostProducts()
+        .filter((p) => normalizePlatform(p.platform) === "Ozon" && (p.code || p.sku))
+        .map((p) => `${p.code || p.sku},${stock}`);
+      const input = $("inventoryRowsInput");
+      if (input) input.value = rows.join("\n");
+      setInventoryStatus(rows.length ? `已填充 ${rows.length} 个当前筛选产品。` : "当前筛选范围没有可提交的 Ozon 产品。");
+    }
+
+    function inventoryTargetFromToken(value) {
+      const token = String(value || "").trim();
+      const productIdMatch = token.match(/^(?:product_id|productId|id)[:=](\d+)$/i);
+      if (productIdMatch) return { productId: Number(productIdMatch[1]), label: token };
+      const product = productBySku(token);
+      return { offerId: String(product?.code || token).trim(), label: token };
+    }
+
+    function parseInventoryRows() {
+      const defaultStock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      const text = $("inventoryRowsInput")?.value || "";
+      const warehouseId = Number($("inventoryWarehouse")?.value || 0);
+      const rows = [];
+      text.split(/\r?\n/).forEach((line) => {
+        const parts = line.trim().split(/[\t,，;； ]+/).filter(Boolean);
+        if (!parts.length) return;
+        const target = inventoryTargetFromToken(parts[0]);
+        const stock = Math.max(0, Math.round(Number(parts[1] ?? defaultStock)));
+        if (!Number.isFinite(stock) || (!target.offerId && !target.productId)) return;
+        rows.push({ ...target, warehouseId, stock });
+      });
+      return rows;
+    }
+
+    async function submitInventoryBatch() {
+      const storeSelect = $("inventoryStore");
+      const warehouseId = Number($("inventoryWarehouse")?.value || 0);
+      if (!storeSelect || storeSelect.value === "") { alert("请先选择 Ozon 店铺。"); return; }
+      if (!warehouseId) { alert("请先加载并选择仓库。"); return; }
+      const rows = parseInventoryRows();
+      if (!rows.length) { alert("请先填写要修改库存的商品行。"); return; }
+      if (!confirm(`确认提交 ${rows.length} 个商品的库存修改？`)) return;
+      const btn = $("submitInventoryBatch");
+      if (btn) { btn.disabled = true; btn.textContent = "提交中..."; }
+      setInventoryStatus(`正在提交 ${rows.length} 个商品库存...`);
+      try {
+        const data = await apiRequest("/api/listing/set-stock", {
+          method: "POST",
+          body: JSON.stringify({
+            platform: "Ozon",
+            storeIndex: Number(storeSelect.value || 0),
+            stocks: rows,
+          }),
+        });
+        if (!data.ok) throw new Error(data.error || "库存提交失败");
+        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 个商品，仓库 ${warehouseId}。`);
+      } catch (error) {
+        setInventoryStatus("库存提交失败：" + (error.message || error));
+        alert("库存提交失败：" + (error.message || error));
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "提交库存"; }
+      }
     }
 
     function renderProductSelects() {
@@ -2933,6 +3076,10 @@ const initialProducts = [
     });
     $("resetCostForm").addEventListener("click", resetCostForm);
     $("costSearch").addEventListener("input", renderCosts);
+    $("inventoryStore")?.addEventListener("change", loadInventoryWarehouses);
+    $("loadInventoryWarehouses")?.addEventListener("click", loadInventoryWarehouses);
+    $("fillInventoryRows")?.addEventListener("click", fillInventoryRowsFromScope);
+    $("submitInventoryBatch")?.addEventListener("click", submitInventoryBatch);
 
     $("costScopePlatform").addEventListener("change", () => {
       syncScopeFulfillment();
@@ -3278,11 +3425,24 @@ const initialProducts = [
       box.textContent = message;
     }
 
+    function isOzonSellerClientId(value) {
+      return /^\d+$/.test(String(value || "").trim());
+    }
+
+    function ozonSellerClientIdMessage(clientId) {
+      return `Ozon 店铺 Client ID 必须是纯数字。你现在填写的是「${clientId}」，看起来像广告/Performance API 的 Client ID 或登录账号，不能用于商品上架/店铺 API。请到 Ozon Seller 后台的 API Key 页面复制数字 Client ID。`;
+    }
+
     async function verifyApiCredentials() {
       const clientId = $("apiClientId").value.trim();
       const secret = $("apiSecret").value.trim();
       if (!clientId || !secret) {
         setApiVerifyStatus(false, "请先填写 Client ID 和 API 密钥。");
+        return false;
+      }
+      const platform = normalizePlatform($("apiPlatform")?.value || "Ozon");
+      if (platform === "Ozon" && !isOzonSellerClientId(clientId)) {
+        setApiVerifyStatus(false, "✗ " + ozonSellerClientIdMessage(clientId));
         return false;
       }
       const btn = $("verifyApiBtn");
@@ -3334,6 +3494,10 @@ const initialProducts = [
       };
       if (!payload.name || !payload.clientId || !payload.secret) {
         alert("请填写店铺名称、Client ID 和 API 密钥。");
+        return;
+      }
+      if (normalizePlatform(payload.platform) === "Ozon" && !isOzonSellerClientId(payload.clientId)) {
+        setApiVerifyStatus(false, "✗ " + ozonSellerClientIdMessage(payload.clientId));
         return;
       }
       if (backendEnabled) {
@@ -3632,6 +3796,7 @@ const initialProducts = [
       initCostScope();
       resetCostForm();
       renderAll();
+      loadInventoryStores();
       // 启动时从云端 KV 加载广告缓存,避免后端冷启动后一片空白
       loadAdsCacheFromCloud().then((loaded) => {
         if (loaded) { renderAds(); }

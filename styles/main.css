@@ -889,6 +889,35 @@ form { display: grid; gap: 14px; }
   font-size: 12.5px;
 }
 .cost-fee-hint.configured { color: var(--accent-sage); border-color: var(--accent-sage); }
+.inventory-panel {
+  display: grid;
+  gap: 14px;
+}
+.inventory-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.2fr) auto minmax(120px, .7fr) auto auto;
+  gap: 12px;
+  align-items: end;
+}
+.inventory-controls button {
+  height: 42px;
+}
+#inventoryRowsInput {
+  min-height: 150px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  line-height: 1.55;
+}
+@media (max-width: 1180px) {
+  .inventory-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .inventory-controls {
+    grid-template-columns: 1fr;
+  }
+}
 .scope-chip {
   display: inline-block;
   padding: 4px 10px;

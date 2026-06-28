@@ -1231,24 +1231,30 @@ async function setOzonStocks(env, body, headers = {}) {
   const productId = Number(body?.productId || 0);
   const stocks = Array.isArray(body?.stocks) ? body.stocks : [];
   const normalized = stocks.map((row) => ({
-    offer_id: offerId || undefined,
-    product_id: productId || undefined,
+    offer_id: String(row.offerId || row.offer_id || row.sku || row.code || offerId || "").trim() || undefined,
+    product_id: Number(row.productId || row.product_id || productId || 0) || undefined,
     warehouse_id: Number(row.warehouseId || row.warehouse_id || 0),
     stock: Math.max(0, Math.round(Number(row.stock || 0))),
   })).filter((row) => row.warehouse_id && (row.offer_id || row.product_id));
   if (!normalized.length) return { ok: false, error: "缺少仓库或库存数量" };
   try {
-    const response = await fetch("https://api-seller.ozon.ru/v2/products/stocks", {
-      method: "POST",
-      headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
-      body: JSON.stringify({ stocks: normalized }),
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = JSON.parse(text); } catch { payload = null; }
-    if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300), raw: payload };
-    const result = { ok: true, result: payload?.result || payload, stocks: normalized };
-    result.kvSaved = await kvPutJson(env, flowCacheKey(platform, store, offerId || productId, "stock"), result, 60 * 60 * 24 * 90);
+    const chunks = [];
+    for (let i = 0; i < normalized.length; i += 100) chunks.push(normalized.slice(i, i + 100));
+    const responses = [];
+    for (const chunk of chunks) {
+      const response = await fetch("https://api-seller.ozon.ru/v2/products/stocks", {
+        method: "POST",
+        headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+        body: JSON.stringify({ stocks: chunk }),
+      });
+      const text = await response.text();
+      let payload = null;
+      try { payload = JSON.parse(text); } catch { payload = null; }
+      if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300), raw: payload, stocks: chunk };
+      responses.push(payload?.result || payload);
+    }
+    const result = { ok: true, result: responses.length === 1 ? responses[0] : responses, stocks: normalized, count: normalized.length };
+    result.kvSaved = await kvPutJson(env, flowCacheKey(platform, store, offerId || productId || "batch", "stock"), result, 60 * 60 * 24 * 90);
     return result;
   } catch (e) {
     return { ok: false, error: "设置库存失败:" + (e.message || String(e)) };

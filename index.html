@@ -263,6 +263,31 @@
           </div>
         </section>
 
+        <section class="panel inventory-panel">
+          <div class="toolbar">
+            <div>
+              <h3>批量修改库存</h3>
+              <p class="section-note">选择 Ozon 店铺和仓库后，可把当前筛选出的产品统一改为同一库存，也可以粘贴 SKU 与库存逐行提交。</p>
+            </div>
+          </div>
+          <div class="inventory-controls">
+            <label>店铺
+              <select id="inventoryStore"></select>
+            </label>
+            <label>仓库
+              <select id="inventoryWarehouse"></select>
+            </label>
+            <button class="secondary" id="loadInventoryWarehouses" type="button">加载仓库</button>
+            <label>统一库存
+              <input id="inventoryBulkStock" type="number" min="0" step="1" value="20" />
+            </label>
+            <button class="secondary" id="fillInventoryRows" type="button">填充当前筛选产品</button>
+            <button class="primary" id="submitInventoryBatch" type="button">提交库存</button>
+          </div>
+          <textarea id="inventoryRowsInput" rows="7" placeholder="每行一个商品：货号/SKU,库存&#10;例如：HS,20 或 3555785455,20&#10;也支持用空格或 Tab 分隔；product_id:12345 可按 Ozon Product ID 提交"></textarea>
+          <div id="inventoryStatus" class="table-status">尚未加载仓库。</div>
+        </section>
+
         <div class="grid split">
           <section class="panel">
             <h3 id="costFormTitle">添加产品成本</h3>
