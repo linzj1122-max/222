@@ -1237,13 +1237,71 @@ function stockAmount(row) {
   return 0;
 }
 
-function normalizeStockRow(item, stock = {}, detail = {}) {
+function fallbackStockWarehouses(store) {
+  const name = String(store?.name || "");
+  if (/子杰3店/i.test(name)) {
+    return [
+      { id: 111, name: "111", source: "manual-fallback" },
+      { id: 222, name: "222", source: "manual-fallback" },
+    ];
+  }
+  return [];
+}
+
+async function fetchOzonStockWarehouses(store) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const endpoints = [
+    {
+      url: "https://api-seller.ozon.ru/v1/delivery-method/list",
+      bodies: [
+        { limit: 100, offset: 0 },
+        { filter: {}, limit: 100, offset: 0 },
+      ],
+    },
+    {
+      url: "https://api-seller.ozon.ru/v1/warehouse/list",
+      bodies: [{}],
+    },
+  ];
+  const warehouses = new Map();
+  for (const endpoint of endpoints) {
+    for (const body of endpoint.bodies) {
+      try {
+        const response = await fetch(endpoint.url, { method: "POST", headers, body: JSON.stringify(body) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) continue;
+        const result = payload?.result || payload;
+        const rows = Array.isArray(result)
+          ? result
+          : (result?.delivery_methods || result?.warehouses || result?.items || []);
+        if (!Array.isArray(rows)) continue;
+        rows.forEach((row) => {
+          const id = Number(row.warehouse_id || row.warehouse?.id || row.id || 0);
+          if (!id) return;
+          const name = String(row.warehouse_name || row.warehouse?.name || row.name || row.provider_name || `仓库 ${id}`);
+          warehouses.set(String(id), { id, name, status: row.status || "", source: endpoint.url });
+        });
+      } catch {
+        // Try the next warehouse source.
+      }
+    }
+    if (warehouses.size) break;
+  }
+  return [...warehouses.values()];
+}
+
+function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = null) {
   const productId = Number(item.product_id || item.id || detail.product_id || detail.id || 0);
   const offerId = String(item.offer_id || item.offerId || detail.offer_id || detail.offerId || "");
   const sku = String(stock.sku || item.sku || detail.sku || "");
-  const warehouseId = Number(stock.warehouse_id || stock.warehouseId || stock.warehouse?.id || stock.source_id || 0);
-  const warehouseName = String(stock.warehouse_name || stock.warehouseName || stock.warehouse?.name || stock.source || stock.type || "");
-  const image = detail.primary_image || detail.primary_image_url || detail.images?.[0] || item.primary_image || item.primary_image_url || item.images?.[0] || "";
+  const source = String(stock.source || stock.type || "").toLowerCase();
+  const directWarehouseId = Number(stock.warehouse_id || stock.warehouseId || stock.warehouse?.id || stock.source_id || 0);
+  const warehouseIds = Array.isArray(stock.warehouse_ids) ? stock.warehouse_ids.map(Number).filter(Boolean) : [];
+  const isSellerWarehouseStock = ["fbs", "rfbs"].includes(source);
+  const warehouseId = directWarehouseId || warehouseIds[0] || (isSellerWarehouseStock && fallbackWarehouse ? Number(fallbackWarehouse.id || 0) : 0);
+  const warehouseName = String(stock.warehouse_name || stock.warehouseName || stock.warehouse?.name || fallbackWarehouse?.name || stock.source || stock.type || "");
+  const rawImage = detail.primary_image || detail.primary_image_url || detail.images?.[0] || item.primary_image || item.primary_image_url || item.images?.[0] || "";
+  const image = Array.isArray(rawImage) ? (rawImage[0] || "") : String(rawImage || "");
   return {
     id: `${productId || offerId || sku}:${warehouseId || warehouseName || "stock"}`,
     productId,
@@ -1253,7 +1311,8 @@ function normalizeStockRow(item, stock = {}, detail = {}) {
     image,
     warehouseId,
     warehouseName,
-    source: String(stock.source || stock.type || ""),
+    source,
+    editable: isSellerWarehouseStock && Boolean(warehouseId),
     present: stockAmount(stock),
     reserved: amount(stock.reserved),
     rawStock: stock,
@@ -1331,20 +1390,26 @@ async function getOzonInventory(env, searchParams, headers = {}) {
   const store = resolveStore(env, headers, platform, storeIndex);
   if (!store) return { ok: false, error: "未配置 Ozon 店铺" };
   try {
-    const fetched = await fetchOzonInventoryStocks(store);
+    const [fetched, fetchedWarehouses] = await Promise.all([
+      fetchOzonInventoryStocks(store),
+      fetchOzonStockWarehouses(store),
+    ]);
+    const stockWarehouses = fetchedWarehouses.length ? fetchedWarehouses : fallbackStockWarehouses(store);
     const details = await fetchOzonProductDetails(store, fetched.items);
     const rows = [];
+    const singleWarehouse = stockWarehouses.length === 1 ? stockWarehouses[0] : null;
     fetched.items.forEach((item) => {
       const detail = details.get(String(item.product_id || item.id || "")) || details.get(String(item.offer_id || "")) || details.get(String(item.sku || "")) || {};
       const stocks = Array.isArray(item.stocks) && item.stocks.length ? item.stocks : [item];
-      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail)));
+      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail, singleWarehouse)));
     });
-    const warehouses = [...new Map(rows
+    const stockTypeWarehouses = [...new Map(rows
       .filter((row) => row.warehouseId || row.warehouseName)
       .map((row) => [String(row.warehouseId || row.warehouseName), {
         id: row.warehouseId,
         name: row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "未命名仓库"),
       }])).values()];
+    const warehouses = stockWarehouses.length ? stockWarehouses : stockTypeWarehouses;
     return { ok: true, store: store.name, source: fetched.endpoint, rows, warehouses, count: rows.length, productCount: new Set(rows.map((row) => row.productId || row.offerId || row.sku)).size };
   } catch (e) {
     return { ok: false, error: "拉取库存失败:" + (e.message || String(e)) };

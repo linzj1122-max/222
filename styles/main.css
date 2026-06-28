@@ -921,6 +921,9 @@ form { display: grid; gap: 14px; }
   background: var(--bg-3);
   color: var(--ink-2);
 }
+.inventory-loading[hidden] {
+  display: none;
+}
 .inventory-loading span {
   width: 18px;
   height: 18px;

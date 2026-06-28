@@ -368,7 +368,14 @@
             <label>搜索
               <input id="inventorySearch" type="search" placeholder="Product ID / SKU / 货号 / 商品名" />
             </label>
-            <label>目标库存
+            <label>调整方式
+              <select id="inventoryStockMode">
+                <option value="set">设为</option>
+                <option value="increase">增加</option>
+                <option value="decrease">减少</option>
+              </select>
+            </label>
+            <label>库存数量
               <input id="inventoryBulkStock" type="number" min="0" step="1" value="20" />
             </label>
             <button class="primary" id="submitInventoryBatch" type="button">应用到选中商品</button>

@@ -2559,11 +2559,38 @@ const initialProducts = [
       return `${row.productId || row.offerId || row.sku}|${row.warehouseId || row.warehouseName || ""}`;
     }
 
+    function selectedInventoryWarehouseId() {
+      const value = String($("inventoryWarehouse")?.value || "all");
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    }
+
+    function inventoryRowCanEdit(row) {
+      const source = String(row.source || row.warehouseName || "").toLowerCase();
+      return Boolean(row.warehouseId || selectedInventoryWarehouseId()) && source !== "fbo";
+    }
+
+    function inventoryNextStock(row) {
+      const value = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      const mode = $("inventoryStockMode")?.value || "set";
+      const current = Math.max(0, Math.round(Number(row.present || 0)));
+      if (mode === "increase") return current + value;
+      if (mode === "decrease") return Math.max(0, current - value);
+      return value;
+    }
+
+    function inventoryModeLabel() {
+      const mode = $("inventoryStockMode")?.value || "set";
+      if (mode === "increase") return "增加";
+      if (mode === "decrease") return "减少";
+      return "设为";
+    }
+
     function filteredInventoryRows() {
       const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
       const warehouse = $("inventoryWarehouse")?.value || "all";
       return inventoryRows.filter((row) => {
-        if (warehouse !== "all" && String(row.warehouseId || row.warehouseName || "") !== warehouse) return false;
+        if (warehouse !== "all" && row.warehouseId && String(row.warehouseId) !== warehouse) return false;
         if (!query) return true;
         return [row.productId, row.sku, row.offerId, row.name, row.warehouseName]
           .join(" ")
@@ -2577,7 +2604,7 @@ const initialProducts = [
       if (!body) return;
       const rows = filteredInventoryRows();
       const selectedVisible = rows.filter((row) => inventorySelected.has(inventoryRowKey(row))).length;
-      const selectableVisible = rows.filter((row) => row.warehouseId).length;
+      const selectableVisible = rows.filter(inventoryRowCanEdit).length;
       const allBox = $("inventorySelectAll");
       if (allBox) {
         allBox.checked = selectableVisible > 0 && selectedVisible === selectableVisible;
@@ -2585,12 +2612,14 @@ const initialProducts = [
       }
       body.innerHTML = rows.length ? rows.map((row) => {
         const key = inventoryRowKey(row);
-        const disabled = row.warehouseId ? "" : "disabled";
+        const canEdit = inventoryRowCanEdit(row);
+        const disabled = canEdit ? "" : "disabled";
+        const title = canEdit ? "" : " title=\"FBO 库存不能在此直接修改；请选择 FBS/rFBS 商品和实际仓库\"";
         const image = row.image
           ? `<img class="inventory-product-img" src="${escapeHtml(row.image)}" alt="${escapeHtml(row.name || row.offerId || row.sku || "")}" />`
           : `<span class="inventory-product-placeholder">${escapeHtml(String(row.offerId || row.sku || "?").slice(0, 3))}</span>`;
         return `<tr>
-          <td><input class="inventory-row-check" type="checkbox" value="${escapeHtml(key)}" ${inventorySelected.has(key) ? "checked" : ""} ${disabled} /></td>
+          <td><input class="inventory-row-check" type="checkbox" value="${escapeHtml(key)}" ${inventorySelected.has(key) ? "checked" : ""} ${disabled}${title} /></td>
           <td><div class="inventory-product">${image}<div><strong>${escapeHtml(row.name || row.offerId || "未命名商品")}</strong><div class="sku">${escapeHtml(row.offerId || "")}</div></div></div></td>
           <td>${escapeHtml(row.productId || "—")}</td>
           <td>${escapeHtml(row.sku || "—")}</td>
@@ -2656,6 +2685,10 @@ const initialProducts = [
         inventoryRows = data.rows || [];
         inventoryWarehouses = data.warehouses || [];
         renderInventoryWarehouses();
+        const warehouseSelect = $("inventoryWarehouse");
+        if (warehouseSelect && inventoryWarehouses.length && warehouseSelect.value === "all") {
+          warehouseSelect.value = String(inventoryWarehouses[0].id || inventoryWarehouses[0].name || "all");
+        }
         renderInventoryRows();
         setInventoryStatus(`已加载 ${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。`);
       } catch (error) {
@@ -2672,12 +2705,14 @@ const initialProducts = [
     async function submitInventoryBatch() {
       const storeSelect = $("inventoryStore");
       if (!storeSelect || storeSelect.value === "") { alert("请先选择 Ozon 店铺。"); return; }
-      const stock = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      const selectedWarehouseId = selectedInventoryWarehouseId();
       const rows = inventoryRows
-        .filter((row) => inventorySelected.has(inventoryRowKey(row)) && row.warehouseId)
-        .map((row) => ({ offerId: row.offerId, productId: row.productId, warehouseId: row.warehouseId, stock }));
-      if (!rows.length) { alert("请先勾选至少一个带仓库 ID 的商品库存行。"); return; }
-      if (!confirm(`确认提交 ${rows.length} 个商品的库存修改？`)) return;
+        .filter((row) => inventorySelected.has(inventoryRowKey(row)) && inventoryRowCanEdit(row))
+        .map((row) => ({ offerId: row.offerId, productId: row.productId, warehouseId: row.warehouseId || selectedWarehouseId, stock: inventoryNextStock(row) }))
+        .filter((row) => row.warehouseId);
+      if (!rows.length) { alert("请先选择实际仓库，并勾选至少一个 FBS/rFBS 商品。"); return; }
+      const value = Math.max(0, Math.round(Number($("inventoryBulkStock")?.value || 0)));
+      if (!confirm(`确认将 ${rows.length} 个商品库存${inventoryModeLabel()} ${value}？`)) return;
       const btn = $("submitInventoryBatch");
       if (btn) { btn.disabled = true; btn.textContent = "提交中..."; }
       setInventoryStatus(`正在提交 ${rows.length} 个商品库存...`);
@@ -2691,7 +2726,7 @@ const initialProducts = [
           }),
         });
         if (!data.ok) throw new Error(data.error || "库存提交失败");
-        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 行，目标库存 ${stock}。正在刷新...`);
+        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 行，正在刷新...`);
         await loadInventoryStoreData();
       } catch (error) {
         setInventoryStatus("库存提交失败：" + (error.message || error));
