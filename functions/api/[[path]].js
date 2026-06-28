@@ -347,12 +347,20 @@ function normalizePlatform(value) {
 function integrations(env) {
   return ozonStores(env).map((store, index) => ({
     id: `ozon-env-${index}`,
+    index,
     name: store.name,
     platform: "Ozon",
     clientId: maskClientId(store.clientId),
     source: "env",
     createdAt: "Cloudflare 环境变量",
   }));
+}
+
+function readCfEnvValue(entry) {
+  if (entry == null) return "";
+  if (typeof entry === "string") return entry;
+  if (typeof entry.value === "string") return entry.value;
+  return "";
 }
 
 function cloudflareManagementConfig(env) {
@@ -432,6 +440,75 @@ function existingCloudflareEnvNames(project) {
     Object.keys(vars).forEach((name) => names.add(name));
   }
   return names;
+}
+
+function cloudflareProjectIntegrations(project) {
+  const envVars = project?.deployment_configs?.production?.env_vars || {};
+  const out = [];
+  const existing = new Set();
+  for (let index = 1; index <= 50; index += 1) {
+    const name = readCfEnvValue(envVars[`OZON_STORE_${index}_NAME`]);
+    const clientId = readCfEnvValue(envVars[`OZON_STORE_${index}_CLIENT_ID`]);
+    const apiKey = envVars[`OZON_STORE_${index}_API_KEY`];
+    if (name || clientId || apiKey) {
+      out.push({
+        id: `ozon-cf-${index - 1}`,
+        index: index - 1,
+        name: name || `Ozon 店铺 ${index}`,
+        platform: "Ozon",
+        clientId: maskClientId(clientId),
+        source: "cloudflare-config",
+        createdAt: "Cloudflare 项目配置",
+        pendingRuntime: true,
+      });
+      existing.add(`ozon:${index}`);
+    }
+    const wbName = readCfEnvValue(envVars[`WB_STORE_${index}_NAME`]);
+    const wbToken = envVars[`WB_STORE_${index}_API_TOKEN`] || envVars[`WB_STORE_${index}_TOKEN`];
+    if (wbName || wbToken) {
+      out.push({
+        id: `wb-cf-${index - 1}`,
+        index: index - 1,
+        name: wbName || `WB 店铺 ${index}`,
+        platform: "WB",
+        clientId: "",
+        source: "cloudflare-config",
+        createdAt: "Cloudflare 项目配置",
+        pendingRuntime: true,
+      });
+      existing.add(`wb:${index}`);
+    }
+  }
+  return out;
+}
+
+async function integrationsWithCloudflareConfig(env) {
+  const runtime = integrations(env);
+  const byKey = new Map(runtime.map((item) => [`${item.platform}:${item.index}`, item]));
+  const config = cloudflareManagementConfig(env);
+  if (config.missing.length) return runtime;
+  const cacheKey = "config:integrations:cloudflare";
+  const cached = await kvGetData(env, cacheKey);
+  if (Array.isArray(cached?.data)) {
+    for (const item of cached.data) {
+      const key = `${item.platform}:${item.index}`;
+      if (!byKey.has(key)) byKey.set(key, item);
+    }
+    return [...byKey.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
+  }
+  try {
+    const encodedProject = encodeURIComponent(config.projectName);
+    const project = await cloudflarePagesRequest(env, "GET", `/accounts/${config.accountId}/pages/projects/${encodedProject}`);
+    const configured = cloudflareProjectIntegrations(project);
+    await kvPutData(env, cacheKey, configured, 10 * 60);
+    for (const item of configured) {
+      const key = `${item.platform}:${item.index}`;
+      if (!byKey.has(key)) byKey.set(key, item);
+    }
+  } catch {
+    return runtime;
+  }
+  return [...byKey.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
 }
 
 function nextCloudflareStoreIndex(project, platform) {
@@ -524,6 +601,20 @@ async function upsertCloudflareStore(env, body) {
       preview: { env_vars: envVars },
     },
   });
+  const cachedIntegrations = await integrationsWithCloudflareConfig(env);
+  const newIntegration = {
+    id: `${platform.toLowerCase()}-cf-${index - 1}`,
+    index: index - 1,
+    name,
+    platform,
+    clientId: maskClientId(clientId),
+    source: "cloudflare-config",
+    createdAt: "Cloudflare 项目配置",
+    pendingRuntime: true,
+  };
+  const mergedIntegrations = new Map(cachedIntegrations.map((item) => [`${item.platform}:${item.index}`, item]));
+  mergedIntegrations.set(`${platform}:${index - 1}`, newIntegration);
+  await kvPutData(env, "config:integrations:cloudflare", [...mergedIntegrations.values()], 10 * 60);
   let redeploy = { ok: false, error: "" };
   try {
     redeploy = await triggerCloudflarePagesRedeploy(env, config, encodedProject);
@@ -1919,7 +2010,7 @@ export async function onRequest(context) {
           }, 400);
         }
       }
-      return json(integrations(env));
+      return json(await integrationsWithCloudflareConfig(env));
     }
     if (path.startsWith("integrations/")) {
       if (request.method === "DELETE") return json({ ok: true, id: path.split("/")[1] });
@@ -1930,7 +2021,7 @@ export async function onRequest(context) {
       if (request.method === "POST") {
         return json({ ok: false, error: "店铺凭证不能写入 KV。请使用 Cloudflare Pages 环境变量/Secrets。" }, 400);
       }
-      return json({ ok: true, stores: integrations(env), source: "env" });
+      return json({ ok: true, stores: await integrationsWithCloudflareConfig(env), source: "env" });
     }
     if (path === "ads-cache") {
       if (!env.LISTING_CACHE) return json({ ok: false, error: "未绑定 KV,无法持久化广告缓存" }, 503);

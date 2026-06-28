@@ -476,6 +476,25 @@
           name: store.name || `${platform} 环境变量店铺`,
           raw: store,
         }));
+      const integrationsRes = await fetch("/api/integrations");
+      const integrationsData = await readJsonResponse(integrationsRes);
+      const byIndex = new Map(envStores.map((store) => [Number(store.apiIndex || 0), store]));
+      (Array.isArray(integrationsData) ? integrationsData : [])
+        .filter((store) => normalizePlatform(store.platform) === platform)
+        .forEach((store) => {
+          const apiIndex = Number(store.index || 0);
+          if (!byIndex.has(apiIndex)) {
+            byIndex.set(apiIndex, {
+              source: "cloudflare-config",
+              apiIndex,
+              platform: normalizePlatform(store.platform),
+              name: store.name || `${platform} 云端店铺`,
+              raw: store,
+              pendingRuntime: true,
+            });
+          }
+        });
+      envStores = [...byIndex.values()].sort((a, b) => Number(a.apiIndex || 0) - Number(b.apiIndex || 0));
     } catch (e) {
       console.warn("[listing] 后端店铺加载失败", e);
     }

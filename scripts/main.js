@@ -1024,7 +1024,7 @@ const initialProducts = [
     function renderChartControls() {
       const select = $("chartStoreSelect");
       if (select) {
-        const stores = [...new Set([...orders, ...trendOrders].map((order) => order.store).filter(Boolean))].sort();
+        const stores = allStoreNames();
         const nextHtml = [`<option value="all">全部店铺</option>`, ...stores.map((store) => `<option value="${escapeHtml(store)}">${escapeHtml(store)}</option>`)].join("");
         if (select.innerHTML !== nextHtml) select.innerHTML = nextHtml;
         if (!stores.includes(chartStore) && chartStore !== "all") chartStore = "all";
@@ -1976,7 +1976,7 @@ const initialProducts = [
       if (!$("adStoreSelect")) return;
       updateAdDateInputs();
       const currentStore = $("adStoreSelect").value || "all";
-      const allStores = [...new Set([...orders.map((order) => order.store), ...importedAds.map((row) => row.store), ...adRowsArray().map((row) => row.store)].filter(Boolean))];
+      const allStores = allStoreNames();
       const validValues = new Set(["all", ...allStores, ...storeGroups.map((group) => `group:${group.id}`)]);
       const groupOptions = storeGroups.length
         ? `<optgroup label="店铺分组">${storeGroups.map((group) => `<option value="group:${escapeHtml(group.id)}">${escapeHtml(group.name)}${group.owner ? `（${escapeHtml(group.owner)}）` : ""}</option>`).join("")}</optgroup>`
@@ -2544,7 +2544,15 @@ const initialProducts = [
       if (!$("inventoryStore")) return;
       try {
         const data = await apiRequest("/api/listing/stores");
-        inventoryStores = (data.stores || []).filter((store) => normalizePlatform(store.platform) === "Ozon");
+        const runtimeStores = (data.stores || []).filter((store) => normalizePlatform(store.platform) === "Ozon");
+        const byIndex = new Map(runtimeStores.map((store) => [Number(store.index || 0), store]));
+        apiConfigs
+          .filter((store) => normalizePlatform(store.platform) === "Ozon")
+          .forEach((store) => {
+            const index = Number(store.index || 0);
+            if (!byIndex.has(index)) byIndex.set(index, { index, platform: "Ozon", name: store.name || `Ozon 店铺 ${index + 1}`, pendingRuntime: true });
+          });
+        inventoryStores = [...byIndex.values()].sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
       } catch (error) {
         inventoryStores = apiConfigs
           .filter((store) => normalizePlatform(store.platform) === "Ozon")
@@ -3836,20 +3844,25 @@ const initialProducts = [
       showGlobalLoader("正在加载店铺数据…");
       if (backendEnabled) {
         try {
-          const [backendProducts, backendCompetitors, backendIntegrations] = await Promise.all([
-            apiRequest("/api/products"),
-            apiRequest("/api/competitors"),
-            apiRequest("/api/integrations")
-          ]);
-          if (backendProducts.length) products = backendProducts.map((p) => ensureProductScope(p));
-          await loadBackendOrders();
-          await loadStoreAnalytics();
-          competitors = backendCompetitors;
-          apiConfigs = sanitizeApiConfigs(backendIntegrations);
+          apiConfigs = sanitizeApiConfigs(await apiRequest("/api/integrations"));
         } catch {
           apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
         }
-      }
+        try {
+          const [backendProducts, backendCompetitors] = await Promise.all([
+            apiRequest("/api/products"),
+            apiRequest("/api/competitors")
+          ]);
+          if (backendProducts.length) products = backendProducts.map((p) => ensureProductScope(p));
+          competitors = backendCompetitors;
+        } catch {}
+        try {
+          await loadBackendOrders();
+        } catch {}
+        try {
+          await loadStoreAnalytics();
+        } catch {}
+        }
       initCostScope();
       resetCostForm();
       renderAll();
