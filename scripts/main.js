@@ -2586,13 +2586,20 @@ const initialProducts = [
       return "设为";
     }
 
+    function inventoryPriceText(row) {
+      const price = Number(row.price || 0);
+      if (!price) return "—";
+      const currency = String(row.currencyCode || "RUB").toUpperCase();
+      return currency === "RUB" ? rub(price) : `${price.toFixed(2)} ${currency}`;
+    }
+
     function filteredInventoryRows() {
       const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
       const warehouse = $("inventoryWarehouse")?.value || "all";
       return inventoryRows.filter((row) => {
         if (warehouse !== "all" && row.warehouseId && String(row.warehouseId) !== warehouse) return false;
         if (!query) return true;
-        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName]
+        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName, row.price]
           .join(" ")
           .toLowerCase()
           .includes(query);
@@ -2603,7 +2610,7 @@ const initialProducts = [
       const body = $("inventoryRows");
       if (!body) return;
       const rows = filteredInventoryRows();
-      const selectedVisible = rows.filter((row) => inventorySelected.has(inventoryRowKey(row))).length;
+      const selectedVisible = rows.filter((row) => inventoryRowCanEdit(row) && inventorySelected.has(inventoryRowKey(row))).length;
       const selectableVisible = rows.filter(inventoryRowCanEdit).length;
       const allBox = $("inventorySelectAll");
       if (allBox) {
@@ -2624,11 +2631,12 @@ const initialProducts = [
           <td>${escapeHtml(row.productId || "—")}</td>
           <td>${escapeHtml(row.sku || "—")}</td>
           <td>${escapeHtml(row.offerId || "—")}</td>
+          <td class="money">${escapeHtml(inventoryPriceText(row))}</td>
           <td>${escapeHtml(row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID"))}</td>
           <td><strong>${Number(row.present || 0)}</strong></td>
           <td>${Number(row.reserved || 0)}</td>
         </tr>`;
-      }).join("") : `<tr><td colspan="8" class="muted-cell">${inventoryLoading ? "库存加载中..." : "没有匹配的库存商品。"}</td></tr>`;
+      }).join("") : `<tr><td colspan="9" class="muted-cell">${inventoryLoading ? "库存加载中..." : "没有匹配的库存商品。"}</td></tr>`;
       const selectedTotal = inventoryRows.filter((row) => inventorySelected.has(inventoryRowKey(row))).length;
       const suffix = inventoryRows.length ? `已显示 ${rows.length} 行，已选 ${selectedTotal} 行。` : "";
       if (!inventoryLoading && suffix) setInventoryStatus(suffix);
@@ -3169,7 +3177,7 @@ const initialProducts = [
     $("inventorySelectAll")?.addEventListener("change", (event) => {
       const checked = event.target.checked;
       filteredInventoryRows().forEach((row) => {
-        if (!row.warehouseId) return;
+        if (!inventoryRowCanEdit(row)) return;
         const key = inventoryRowKey(row);
         if (checked) inventorySelected.add(key);
         else inventorySelected.delete(key);

@@ -1237,6 +1237,37 @@ function stockAmount(row) {
   return 0;
 }
 
+function stockPrice(item = {}, detail = {}) {
+  const candidates = [
+    detail.price,
+    detail.marketing_price,
+    detail.old_price,
+    detail.min_price,
+    detail.price?.price,
+    detail.price?.marketing_price,
+    item.price,
+    item.marketing_price,
+    item.old_price,
+    item.min_price,
+    item.price?.price,
+    item.price?.marketing_price,
+  ];
+  for (const value of candidates) {
+    const n = amount(value);
+    if (n) return n;
+  }
+  return 0;
+}
+
+function stockOldPrice(item = {}, detail = {}) {
+  const candidates = [detail.old_price, detail.price?.old_price, item.old_price, item.price?.old_price];
+  for (const value of candidates) {
+    const n = amount(value);
+    if (n) return n;
+  }
+  return 0;
+}
+
 function fallbackStockWarehouses(store) {
   const name = String(store?.name || "");
   if (/子杰3店/i.test(name)) {
@@ -1313,6 +1344,9 @@ function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = nu
     warehouseName,
     source,
     editable: isSellerWarehouseStock && Boolean(warehouseId),
+    price: stockPrice(item, detail),
+    oldPrice: stockOldPrice(item, detail),
+    currencyCode: String(detail.currency_code || item.currency_code || "RUB"),
     present: stockAmount(stock),
     reserved: amount(stock.reserved),
     rawStock: stock,
