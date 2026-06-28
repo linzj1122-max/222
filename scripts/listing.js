@@ -596,7 +596,7 @@
       if (!item.id) return;
       map.set(item.id, {
         id: item.id,
-        name: item.nameZh || item.name,
+        name: item.fullName ? item.name : (item.nameZh || item.name),
         level: 0,
         leaf: makeLeaf(item),
         children: [],
@@ -630,7 +630,7 @@
   }
 
   // 类目缓存版本:数据结构变更后递增,旧缓存自动失效重抓
-  const CAT_CACHE_VERSION = 6;
+  const CAT_CACHE_VERSION = 7;
 
   // 自动抓取:进入第一步 / 切换平台 / 切换店铺 时触发,带缓存
   async function autoLoadCategories() {
@@ -1496,7 +1496,8 @@
     box.hidden = false;
     box.innerHTML = matched.map((x) => {
       const isLeaf = !(x.node.children && x.node.children.length);
-      const tag = isLeaf ? `<span class="leaf-tag">可上架</span>` : `<span class="level-tag">${x.level}级</span>`;
+      const canPublish = isLeaf && Number(x.node.leaf?.categoryId || 0) > 0 && Number(x.node.leaf?.typeId || 0) > 0;
+      const tag = canPublish ? `<span class="leaf-tag">可上架</span>` : `<span class="level-tag">${x.level}级</span>`;
       // 高亮匹配段
       const pathHtml = escapeHtml(x.pathStr).replace(new RegExp(`(${escapeHtml(kw)})`, "gi"), '<mark>$1</mark>');
       return `<div class="listing-search-item" data-search-id="${escapeAttr(x.node.id)}" data-search-level="${x.level}">
@@ -1515,7 +1516,8 @@
     const node = findIn(categoryTree, id);
     if (!node) return;
     const isLeaf = !(node.children && node.children.length);
-    if (isLeaf) {
+    const canPublish = isLeaf && Number(node.leaf?.categoryId || 0) > 0 && Number(node.leaf?.typeId || 0) > 0;
+    if (canPublish) {
       // 末级:直接确认上架
       const leaf = node.leaf || {};
       const oldKey = attrCategoryKey();
