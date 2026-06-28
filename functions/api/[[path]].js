@@ -340,6 +340,10 @@ function maskClientId(value) {
   return `${text.slice(0, 3)}***${text.slice(-3)}`;
 }
 
+function normalizePlatform(value) {
+  return String(value || "").toLowerCase() === "wb" ? "WB" : "Ozon";
+}
+
 function integrations(env) {
   return ozonStores(env).map((store, index) => ({
     id: `ozon-env-${index}`,
@@ -349,6 +353,122 @@ function integrations(env) {
     source: "env",
     createdAt: "Cloudflare 环境变量",
   }));
+}
+
+function cloudflareManagementConfig(env) {
+  const token = String(env.CLOUDFLARE_API_TOKEN || env.CF_API_TOKEN || "").trim().replace(/^Bearer\s+/i, "");
+  const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID || "").trim();
+  const projectName = String(env.CLOUDFLARE_PAGES_PROJECT_NAME || env.CLOUDFLARE_PROJECT_NAME || "").trim();
+  const missing = [];
+  if (!token) missing.push("CLOUDFLARE_API_TOKEN");
+  if (!accountId) missing.push("CLOUDFLARE_ACCOUNT_ID");
+  if (!projectName) missing.push("CLOUDFLARE_PAGES_PROJECT_NAME");
+  return { token, accountId, projectName, missing };
+}
+
+function cfEnvPlain(value) {
+  return { type: "plain_text", value: String(value || "") };
+}
+
+function cfEnvSecret(value) {
+  return { type: "secret_text", value: String(value || "") };
+}
+
+async function cloudflarePagesRequest(env, method, path, body) {
+  const config = cloudflareManagementConfig(env);
+  if (config.missing.length) {
+    const readable = config.missing.join("、");
+    throw new Error(`还没有配置 Cloudflare 管理权限：请先在 Pages 环境变量里添加 ${readable}。第一次配置后，以后新增店铺就可以自动写入。`);
+  }
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    method,
+    headers: {
+      "authorization": `Bearer ${config.token}`,
+      "content-type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+  if (!response.ok || payload?.success === false) {
+    const message = payload?.errors?.map((item) => item.message).filter(Boolean).join("; ")
+      || payload?.message
+      || text.slice(0, 300)
+      || `Cloudflare API 请求失败:${response.status}`;
+    throw new Error(message);
+  }
+  return payload?.result ?? payload;
+}
+
+function existingCloudflareEnvNames(project) {
+  const configs = project?.deployment_configs || {};
+  const names = new Set();
+  for (const config of Object.values(configs)) {
+    const vars = config?.env_vars || {};
+    Object.keys(vars).forEach((name) => names.add(name));
+  }
+  return names;
+}
+
+function nextCloudflareStoreIndex(project, platform) {
+  const prefix = normalizePlatform(platform) === "WB" ? "WB_STORE" : "OZON_STORE";
+  const regex = new RegExp(`^${prefix}_(\\d+)_`);
+  let max = 0;
+  for (const name of existingCloudflareEnvNames(project)) {
+    const match = String(name).match(regex);
+    if (match) max = Math.max(max, Number(match[1] || 0));
+  }
+  return max + 1;
+}
+
+async function upsertCloudflareStore(env, body) {
+  const platform = normalizePlatform(body.platform || "Ozon");
+  const name = String(body.name || "").trim();
+  const clientId = String(body.clientId || "").trim();
+  const secret = String(body.secret || body.apiKey || "").trim();
+  if (!name || !secret || (platform === "Ozon" && !clientId)) {
+    return { ok: false, error: "请填写店铺名称、Client ID 和 API 密钥。" };
+  }
+  if (platform === "Ozon") {
+    const verified = await verifyOzonCredentials(clientId, secret);
+    if (!verified.ok) return verified;
+  }
+
+  const config = cloudflareManagementConfig(env);
+  const encodedProject = encodeURIComponent(config.projectName);
+  const project = await cloudflarePagesRequest(env, "GET", `/accounts/${config.accountId}/pages/projects/${encodedProject}`);
+  const index = nextCloudflareStoreIndex(project, platform);
+  const prefix = platform === "WB" ? `WB_STORE_${index}` : `OZON_STORE_${index}`;
+  const envVars = platform === "WB"
+    ? {
+        [`${prefix}_NAME`]: cfEnvPlain(name),
+        [`${prefix}_API_TOKEN`]: cfEnvSecret(secret),
+      }
+    : {
+        [`${prefix}_NAME`]: cfEnvPlain(name),
+        [`${prefix}_CLIENT_ID`]: cfEnvPlain(clientId),
+        [`${prefix}_API_KEY`]: cfEnvSecret(secret),
+      };
+
+  await cloudflarePagesRequest(env, "PATCH", `/accounts/${config.accountId}/pages/projects/${encodedProject}`, {
+    deployment_configs: {
+      production: { env_vars: envVars },
+      preview: { env_vars: envVars },
+    },
+  });
+
+  return {
+    ok: true,
+    name,
+    platform,
+    clientId: maskClientId(clientId),
+    source: "cloudflare-api",
+    index,
+    variables: Object.keys(envVars),
+    requiresRedeploy: true,
+    message: `已写入 Cloudflare 环境变量：${Object.keys(envVars).join("、")}。如果店铺列表还没出现，请重新部署 Pages 后刷新。`,
+  };
 }
 
 async function verifyOzonCredentials(clientId, apiKey) {
@@ -1709,14 +1829,18 @@ export async function onRequest(context) {
           const apiKey = String(body.secret || body.apiKey || "").trim();
           return json(await verifyOzonCredentials(clientId, apiKey));
         }
-        return json({
-          ok: false,
-          requiresCloudflareEnv: true,
-          message: "出于安全考虑，接口不会把店铺 API Key 写入 KV 或浏览器。请将凭证配置为 Cloudflare Pages 环境变量/Secrets。",
-          variables: body.platform === "WB"
-            ? ["WB_STORE_<n>_NAME", "WB_STORE_<n>_API_TOKEN"]
-            : ["OZON_STORE_<n>_NAME", "OZON_STORE_<n>_CLIENT_ID", "OZON_STORE_<n>_API_KEY"],
-        });
+        try {
+          return json(await upsertCloudflareStore(env, body));
+        } catch (error) {
+          return json({
+            ok: false,
+            requiresCloudflareEnv: true,
+            error: error.message || String(error),
+            variables: normalizePlatform(body.platform) === "WB"
+              ? ["WB_STORE_<n>_NAME", "WB_STORE_<n>_API_TOKEN"]
+              : ["OZON_STORE_<n>_NAME", "OZON_STORE_<n>_CLIENT_ID", "OZON_STORE_<n>_API_KEY"],
+          }, 400);
+        }
       }
       return json(integrations(env));
     }

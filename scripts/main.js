@@ -409,7 +409,6 @@ const initialProducts = [
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         ...options
       });
-      if (!response.ok) throw new Error(`API 请求失败：${response.status}`);
       return readJsonResponse(response);
     }
 
@@ -3483,6 +3482,13 @@ const initialProducts = [
       return `${prefix}_NAME=${payload.name}\n${prefix}_CLIENT_ID=${payload.clientId}\n${prefix}_API_KEY=${payload.secret}`;
     }
 
+    async function reloadApiConfigs() {
+      if (!backendEnabled) return apiConfigs;
+      const backendIntegrations = await apiRequest("/api/integrations");
+      apiConfigs = sanitizeApiConfigs(backendIntegrations);
+      return apiConfigs;
+    }
+
     $("apiForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const editId = $("editApiId").value;
@@ -3504,11 +3510,31 @@ const initialProducts = [
         try {
           const verified = await verifyApiCredentials();
           if (!verified) return;
-          const snippet = cloudflareEnvSnippet(payload);
-          setApiVerifyStatus(true, `凭证验证成功。为安全起见，页面不会保存 API Key。请把下面变量添加到 Cloudflare Pages 环境变量/Secrets 后重新部署或刷新:\n${snippet}`);
+          const submitBtn = $("apiForm")?.querySelector('button[type="submit"]');
+          if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "写入中..."; }
+          const result = await apiRequest("/api/integrations", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+          if (!result.ok) throw new Error(result.error || "写入 Cloudflare 失败");
+          let reloaded = false;
+          try {
+            await reloadApiConfigs();
+            reloaded = apiConfigs.some((item) => item.name === payload.name);
+          } catch {}
+          const note = reloaded
+            ? "店铺列表已更新。"
+            : "Cloudflare 已保存变量，但当前运行环境可能要重新部署后才会在店铺列表显示。";
+          setApiVerifyStatus(true, "✓ " + (result.message || "已写入 Cloudflare 环境变量。") + "\n" + note);
+          $("apiForm").reset();
+          $("editApiId").value = "";
         } catch (error) {
-          alert(error.message);
+          const snippet = cloudflareEnvSnippet(payload);
+          setApiVerifyStatus(false, "✗ " + (error.message || error) + `\n\n如果还没有完成首次授权，请在 Cloudflare Pages 环境变量里添加管理配置后再试：\nCLOUDFLARE_ACCOUNT_ID=你的 Account ID\nCLOUDFLARE_PAGES_PROJECT_NAME=ozon-wb-control-center\nCLOUDFLARE_API_TOKEN=刚创建的 Cloudflare token\n\n临时手动变量格式：\n${snippet}`);
           return;
+        } finally {
+          const submitBtn = $("apiForm")?.querySelector('button[type="submit"]');
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "写入 Cloudflare"; }
         }
       } else {
         if (editId) {
