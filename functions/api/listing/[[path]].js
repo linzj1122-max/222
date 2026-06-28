@@ -1331,11 +1331,33 @@ async function fetchOzonStockWarehouseProbe(store) {
   const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
   const endpoints = [
     {
+      url: "https://api-seller.ozon.ru/v3/delivery-method/list",
+      bodies: [
+        { limit: 100, offset: 0 },
+        { filter: {}, limit: 100, offset: 0 },
+      ],
+    },
+    {
+      url: "https://api-seller.ozon.ru/v2/delivery-method/list",
+      bodies: [
+        { limit: 100, offset: 0 },
+        { filter: {}, limit: 100, offset: 0 },
+      ],
+    },
+    {
       url: "https://api-seller.ozon.ru/v1/delivery-method/list",
       bodies: [
         { limit: 100, offset: 0 },
         { filter: {}, limit: 100, offset: 0 },
       ],
+    },
+    {
+      url: "https://api-seller.ozon.ru/v3/warehouse/list",
+      bodies: [{}],
+    },
+    {
+      url: "https://api-seller.ozon.ru/v2/warehouse/list",
+      bodies: [{}],
     },
     {
       url: "https://api-seller.ozon.ru/v1/warehouse/list",
