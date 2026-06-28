@@ -360,39 +360,26 @@ async function verifyOzonCredentials(clientId, apiKey) {
       error: "Ozon 店铺 Client ID 必须是纯数字。你填写的值看起来像广告/Performance API 的 Client ID 或登录账号，不能用于商品上架/店铺 API。请到 Ozon Seller 后台 API Key 页面复制数字 Client ID。",
     };
   }
-  const endpoints = [
-    "https://api-seller.ozon.ru/v3/product/info/list",
-    "https://api-seller.ozon.ru/v2/product/list",
-  ];
-  let lastError = "";
-  for (const endpoint of endpoints) {
-    try {
-      const body = endpoint.includes("/list") && endpoint.includes("product/list")
-        ? JSON.stringify({ filter: { visibility: "ALL" }, limit: 1, last_id: "" })
-        : JSON.stringify({ sku: [], offer_id: [] });
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", "client-id": clientId, "api-key": apiKey },
-        body,
-      });
-      const text = await response.text();
-      let payload = null;
-      try { payload = JSON.parse(text); } catch { payload = null; }
-      if (response.ok) {
-        return { ok: true, status: response.status, message: "验证成功：Client ID 与 API 密钥有效，已通过 Ozon 校验" };
-      }
-      if (payload && (payload.code || payload.message)) {
-        const msg = payload.message || payload.error?.message || "凭证被 Ozon 拒绝";
-        if (/deactivated|invalid|unauthor|access|api-key/i.test(msg)) {
-          return { ok: false, status: response.status, error: `Ozon 拒绝：${msg}（请到 Ozon 后台重新生成密钥）`, code: payload.code || "" };
-        }
-        lastError = msg;
-      }
-    } catch (error) {
-      lastError = error.message || String(error);
+  try {
+    const response = await fetch("https://api-seller.ozon.ru/v1/description-category/tree", {
+      method: "POST",
+      headers: { "content-type": "application/json", "client-id": clientId, "api-key": apiKey },
+      body: JSON.stringify({ language: "ZH_HANS" }),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch { payload = null; }
+    if (response.ok) {
+      return { ok: true, status: response.status, message: "验证成功：Client ID 与 API 密钥有效，已通过 Ozon Seller API 校验" };
     }
+    const msg = payload?.message || payload?.error?.message || payload?.error || text.slice(0, 300) || "凭证被 Ozon 拒绝";
+    if (/deactivated|invalid|unauthor|access|api-key|forbidden|denied/i.test(String(msg))) {
+      return { ok: false, status: response.status, error: `Ozon 拒绝：${msg}（请检查 Client ID 与 API Key 是否来自同一个 Seller 店铺）`, code: payload?.code || "" };
+    }
+    return { ok: false, status: response.status, error: String(msg), code: payload?.code || "" };
+  } catch (error) {
+    return { ok: false, status: 0, error: error.message || String(error) || "无法连接 Ozon API，请稍后重试" };
   }
-  return { ok: false, status: 0, error: lastError || "无法连接 Ozon API，请稍后重试" };
 }
 
 const ANALYTICS_METRICS = ["revenue", "ordered_units", "session_view", "hits_view_search", "hits_tocart_search", "conv_tocart"];
