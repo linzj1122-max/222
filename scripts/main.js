@@ -2733,8 +2733,17 @@ const initialProducts = [
             stocks: rows,
           }),
         });
-        if (!data.ok) throw new Error(data.error || "库存提交失败");
-        setInventoryStatus(`库存提交成功：${Number(data.count || rows.length)} 行，正在刷新...`);
+        if (!data.ok) {
+          const details = (data.failures || [])
+            .slice(0, 5)
+            .map((row) => `${row.offerId || row.productId || "商品"}：${row.message}`)
+            .join("\n");
+          throw new Error([data.error || "库存提交失败", details].filter(Boolean).join("\n"));
+        }
+        const updatedCount = Number(data.updatedCount || data.count || rows.length);
+        const successMessage = `库存修改成功：${updatedCount} 个商品已提交到 Ozon，正在刷新库存...`;
+        setInventoryStatus(successMessage);
+        alert(successMessage);
         await loadInventoryStoreData();
       } catch (error) {
         setInventoryStatus("库存提交失败：" + (error.message || error));

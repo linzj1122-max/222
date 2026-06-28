@@ -1459,17 +1459,21 @@ async function setOzonStocks(env, body, headers = {}) {
   const offerId = String(body?.offerId || body?.code || "").trim();
   const productId = Number(body?.productId || 0);
   const stocks = Array.isArray(body?.stocks) ? body.stocks : [];
-  const normalized = stocks.map((row) => ({
-    offer_id: String(row.offerId || row.offer_id || row.sku || row.code || offerId || "").trim() || undefined,
-    product_id: Number(row.productId || row.product_id || productId || 0) || undefined,
-    warehouse_id: Number(row.warehouseId || row.warehouse_id || 0),
-    stock: Math.max(0, Math.round(Number(row.stock || 0))),
-  })).filter((row) => row.warehouse_id && (row.offer_id || row.product_id));
+  const normalized = stocks.map((row) => {
+    const rowOfferId = String(row.offerId || row.offer_id || row.sku || row.code || offerId || "").trim();
+    const rowProductId = Number(row.productId || row.product_id || productId || 0) || undefined;
+    return {
+      ...(rowOfferId ? { offer_id: rowOfferId } : { product_id: rowProductId }),
+      warehouse_id: Number(row.warehouseId || row.warehouse_id || 0),
+      stock: Math.max(0, Math.round(Number(row.stock || 0))),
+    };
+  }).filter((row) => row.warehouse_id && (row.offer_id || row.product_id));
   if (!normalized.length) return { ok: false, error: "缺少仓库或库存数量" };
   try {
     const chunks = [];
     for (let i = 0; i < normalized.length; i += 100) chunks.push(normalized.slice(i, i + 100));
     const responses = [];
+    const updatedRows = [];
     for (const chunk of chunks) {
       const response = await fetch("https://api-seller.ozon.ru/v2/products/stocks", {
         method: "POST",
@@ -1480,14 +1484,57 @@ async function setOzonStocks(env, body, headers = {}) {
       let payload = null;
       try { payload = JSON.parse(text); } catch { payload = null; }
       if (!response.ok) return { ok: false, status: response.status, error: payload?.message || payload?.error?.message || text.slice(0, 300), raw: payload, stocks: chunk };
+      const resultRows = ozonStockUpdateRows(payload);
+      if (!resultRows.length) {
+        return { ok: false, status: response.status, error: "Ozon 未返回逐商品更新结果，无法确认库存是否修改成功", raw: payload, stocks: chunk };
+      }
+      const failures = resultRows
+        .map((row, index) => ozonStockFailure(row, chunk[index]))
+        .filter(Boolean);
+      if (failures.length) {
+        const detail = failures.slice(0, 5).map((row) => `${row.offerId || row.productId || "商品"}：${row.message}`).join("；");
+        return { ok: false, status: response.status, error: `Ozon 拒绝 ${failures.length}/${chunk.length} 行库存修改：${detail}`, failures, raw: payload, stocks: chunk };
+      }
+      updatedRows.push(...resultRows);
       responses.push(payload?.result || payload);
     }
-    const result = { ok: true, result: responses.length === 1 ? responses[0] : responses, stocks: normalized, count: normalized.length };
+    const result = { ok: true, result: responses.length === 1 ? responses[0] : responses, stocks: normalized, count: normalized.length, updatedCount: updatedRows.length };
     result.kvSaved = await kvPutJson(env, flowCacheKey(platform, store, offerId || productId || "batch", "stock"), result, 60 * 60 * 24 * 90);
     return result;
   } catch (e) {
     return { ok: false, error: "设置库存失败:" + (e.message || String(e)) };
   }
+}
+
+function ozonStockUpdateRows(payload) {
+  const result = payload?.result ?? payload?.items ?? payload;
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result?.stocks)) return result.stocks;
+  return [];
+}
+
+function ozonStockFailure(row = {}, fallback = {}) {
+  const errors = [];
+  if (Array.isArray(row.errors)) {
+    row.errors.forEach((error) => {
+      const message = error?.message || error?.error || error?.code || JSON.stringify(error);
+      if (message) errors.push(message);
+    });
+  }
+  if (row.error) errors.push(String(row.error));
+  if (row.error_message) errors.push(String(row.error_message));
+  if (row.message && row.updated === false) errors.push(String(row.message));
+  if (row.updated === false && !errors.length) errors.push("Ozon 返回 updated=false");
+  if (!errors.length) return null;
+  return {
+    offerId: row.offer_id || fallback.offer_id || "",
+    productId: row.product_id || fallback.product_id || "",
+    warehouseId: row.warehouse_id || fallback.warehouse_id || "",
+    stock: row.stock ?? fallback.stock ?? "",
+    message: errors.join("；"),
+    raw: row,
+  };
 }
 
 function attrKvKeys(platform, categoryId, typeId) {
