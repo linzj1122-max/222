@@ -66,6 +66,13 @@ const routeModules = [
     },
   },
   {
+    prefix: "/api/promotions/",
+    modulePath: path.join(root, "functions", "api", "promotions", "[[path]].js"),
+    params(urlPath) {
+      return { path: urlPath.slice("/api/promotions/".length).split("/").filter(Boolean) };
+    },
+  },
+  {
     prefix: "/api/",
     modulePath: path.join(root, "functions", "api", "[[path]].js"),
     params(urlPath) {

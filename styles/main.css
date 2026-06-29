@@ -135,6 +135,7 @@ nav {
 .tab-btn[data-tab="inventory"]   { order: 32; }
 .tab-btn[data-tab="sourcing"]    { order: 35; }
 .tab-btn[data-tab="listing"]     { order: 38; }
+.tab-btn[data-tab="promotions"]  { order: 39; }
 .tab-btn[data-tab="ads"]         { order: 40; }
 .tab-btn[data-tab="analytics"]   { order: 45; }
 .tab-btn[data-tab="aiStudio"]    { order: 48; }
@@ -2695,6 +2696,96 @@ label.inline-select > select {
   border-left: 3px solid var(--brand);
 }
 
+/* =========================================================
+   OZON 活动报名（Promotions）
+   ========================================================= */
+.promo-control-panel .toolbar {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.promo-controls,
+.promo-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.promo-controls .inline-select,
+.promo-bulkbar .inline-select {
+  min-width: 150px;
+}
+
+.promo-controls select,
+.promo-bulkbar input,
+.promo-price-input,
+.promo-stock-input {
+  min-height: 38px;
+}
+
+.promo-controls #promoAction {
+  min-width: min(360px, 52vw);
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: var(--ink-2);
+  font-weight: 700;
+}
+
+.inline-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+}
+
+.promo-grid {
+  align-items: start;
+}
+
+.promo-actions-wrap {
+  max-height: 520px;
+}
+
+.promo-products-wrap {
+  max-height: 640px;
+}
+
+.promo-actions-wrap tbody tr,
+.promo-products-wrap tbody tr {
+  transition: background 0.15s ease;
+}
+
+.promo-action-active {
+  background: var(--brand-soft);
+}
+
+.promo-price-input,
+.promo-stock-input {
+  width: 112px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--ink-1);
+  font: inherit;
+}
+
+.promo-stock-input {
+  width: 86px;
+}
+
+.promo-products-wrap th:first-child,
+.promo-products-wrap td:first-child {
+  width: 42px;
+  text-align: center;
+}
+
 /* 响应式：货盘与上架在窄屏时表单堆叠 */
 @media (max-width: 900px) {
   .listing-step {
@@ -2705,6 +2796,17 @@ label.inline-select > select {
   }
   #sourcingForm .cols-3 {
     grid-template-columns: 1fr;
+  }
+  .promo-controls,
+  .promo-bulkbar {
+    align-items: stretch;
+  }
+  .promo-controls > *,
+  .promo-bulkbar > * {
+    flex: 1 1 160px;
+  }
+  .promo-controls #promoAction {
+    min-width: 100%;
   }
 }
 
