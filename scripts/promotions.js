@@ -465,6 +465,7 @@
       saveState();
       renderActions();
       renderProducts();
+      loadActions().catch((e) => setStatus(e.message || String(e), "fail"));
     });
     $("promoAction")?.addEventListener("change", () => {
       products = [];
