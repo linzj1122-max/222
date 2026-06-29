@@ -270,6 +270,10 @@
     return amount(row.enrolledActionPrice || row.enrolled_action_price || (row.participating ? row.actionPrice : 0));
   }
 
+  function productImage(row) {
+    return String(row.image || row.primary_image || row.primaryImage || row.primary_image_url || row.image_url || row.images?.[0] || "").trim();
+  }
+
   function renderProducts() {
     const body = $("promoProductRows");
     if (!body) return;
@@ -296,10 +300,14 @@
       const hint = [row.offerId ? `Offer: ${row.offerId}` : "", row.sku ? `SKU: ${row.sku}` : "", row.productId ? `Product: ${row.productId}` : ""].filter(Boolean).join(" · ");
       const suggestion = [row.minActionPrice ? `最低 ${rub(row.minActionPrice)}` : "", row.maxActionPrice ? `上限 ${rub(row.maxActionPrice)}` : ""].filter(Boolean).join(" / ") || "—";
       const enrolledPrice = productEnrolledPrice(row);
+      const imageUrl = productImage(row);
+      const image = imageUrl
+        ? `<img class="promo-product-img" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" />`
+        : `<span class="promo-product-placeholder">${escapeHtml(String(row.offerId || row.sku || title || "?").slice(0, 3))}</span>`;
       return `
         <tr>
           <td><input class="promo-row-check" type="checkbox" value="${escapeHtml(key)}" ${checked} /></td>
-          <td><strong>${escapeHtml(title)}</strong><div class="sku">${escapeHtml(hint || key)}</div></td>
+          <td><div class="promo-product">${image}<div class="promo-product-copy"><strong class="promo-product-name" title="${escapeHtml(title)}">${escapeHtml(title)}</strong><div class="sku">${escapeHtml(hint || key)}</div></div></div></td>
           <td class="money">${row.currentPrice || row.price ? rub(row.currentPrice || row.price) : "—"}</td>
           <td class="money">${enrolledPrice ? rub(enrolledPrice) : (row.participating ? "待返回" : "—")}</td>
           <td><input class="promo-price-input" data-promo-price="${escapeHtml(key)}" type="number" step="0.01" min="0" value="${productDefaultPrice(row) || ""}" placeholder="必填" /></td>

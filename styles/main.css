@@ -2786,6 +2786,49 @@ label.inline-select > select {
   text-align: center;
 }
 
+.promo-product {
+  display: grid;
+  grid-template-columns: 46px minmax(160px, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.promo-product-copy {
+  min-width: 0;
+}
+
+.promo-product-name {
+  display: -webkit-box;
+  max-height: 42px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.promo-product .sku {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.promo-product-img,
+.promo-product-placeholder {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+
+.promo-product-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-weight: 800;
+  font-size: 12px;
+}
 /* 响应式：货盘与上架在窄屏时表单堆叠 */
 @media (max-width: 900px) {
   .listing-step {

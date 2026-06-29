@@ -189,11 +189,16 @@ function resolveStore(env, storeIndex) {
   return stores[Number(storeIndex || 0)] || stores[0] || null;
 }
 
+const OZON_LANGUAGE_HEADERS = {
+  "accept-language": "zh-CN,zh;q=0.9,ru;q=0.7,en;q=0.6",
+};
+
 async function ozonRequest(store, endpoint, body = {}) {
   const response = await fetch(`https://api-seller.ozon.ru${endpoint}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...OZON_LANGUAGE_HEADERS,
       "client-id": store.clientId,
       "api-key": store.apiKey,
     },
@@ -217,6 +222,7 @@ async function ozonGet(store, endpoint, params = {}) {
   const response = await fetch(url.toString(), {
     method: "GET",
     headers: {
+      ...OZON_LANGUAGE_HEADERS,
       "client-id": store.clientId,
       "api-key": store.apiKey,
     },
@@ -274,11 +280,80 @@ function describePayloadShape(payload) {
   return `object; keys:${keys}`;
 }
 
+function hasChinese(value) {
+  return /[\u3400-\u9fff]/.test(String(value || ""));
+}
+
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
+function localizedObjectText(value) {
+  if (!value || typeof value !== "object") return "";
+  for (const key of ["zh_CN", "zh-CN", "zh", "cn", "china", "chinese"]) {
+    const text = cleanText(value[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function localizedArrayText(value) {
+  if (!Array.isArray(value)) return "";
+  const zh = value.find((item) => {
+    const lang = String(item?.language || item?.locale || item?.lang || "").toLowerCase();
+    return lang === "zh" || lang === "zh-cn" || lang === "cn" || lang.includes("chinese");
+  });
+  return cleanText(zh?.title || zh?.name || zh?.value || zh?.text);
+}
+
+function mappedActionTitle(title) {
+  const normalized = cleanText(title).replace(/\s+/g, " ").toLowerCase();
+  const map = new Map([
+    ["эластичный бустинг. без ограничения срока действия", "弹性助推（无期限）"],
+  ]);
+  return map.get(normalized) || "";
+}
+
+function actionTitle(row = {}, id = "") {
+  const preferred = [
+    row.title_zh,
+    row.titleZh,
+    row.name_zh,
+    row.nameZh,
+    row.action_name_zh,
+    row.actionNameZh,
+    localizedObjectText(row.title),
+    localizedObjectText(row.name),
+    localizedObjectText(row.action_name),
+    localizedObjectText(row.description),
+    localizedArrayText(row.translations),
+    localizedArrayText(row.localized),
+    localizedArrayText(row.localizations),
+  ].map(cleanText).find(Boolean);
+  if (preferred) return preferred;
+
+  const raw = [
+    row.title,
+    row.name,
+    row.action_name,
+    row.description,
+  ].map(cleanText).find(Boolean);
+  if (hasChinese(raw)) return raw;
+  return mappedActionTitle(raw) || raw || `活动 ${id}`;
+}
+
 function normalizeAction(row = {}) {
   const id = row.id || row.action_id || row.actionId || row.promo_id || row.promotion_id || "";
+  const rawTitle = [
+    row.title,
+    row.name,
+    row.action_name,
+    row.description,
+  ].map(cleanText).find(Boolean);
   return {
     id: String(id),
-    title: String(row.title || row.name || row.action_name || row.description || `活动 ${id}`),
+    title: actionTitle(row, id),
+    originalTitle: rawTitle || "",
     status: String(row.status || row.state || row.type || ""),
     type: String(row.type || row.mechanics_type || row.mechanic_type || ""),
     dateStart: row.date_start || row.dateStart || row.start_date || row.startDate || "",
@@ -305,6 +380,27 @@ function productPriceValue(row = {}) {
   return 0;
 }
 
+function productImageValue(row = {}) {
+  const candidates = [
+    row.primary_image,
+    row.primaryImage,
+    row.primary_image_url,
+    row.image,
+    row.image_url,
+    row.images?.[0],
+    row.images360?.[0],
+    row.pictures?.[0],
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (value && typeof value === "object") {
+      const nested = value.url || value.src || value.file_name;
+      if (nested) return String(nested).trim();
+    }
+  }
+  return "";
+}
+
 function normalizeProduct(row = {}, participating = false) {
   const productId = row.product_id || row.productId || row.id || row.sku || row.sku_id || 0;
   const currentPrice = productPriceValue(row);
@@ -320,6 +416,7 @@ function normalizeProduct(row = {}, participating = false) {
     offerId: String(row.offer_id || row.offerId || row.article || ""),
     sku: String(row.sku || row.sku_id || ""),
     name: String(row.name || row.title || row.product_name || ""),
+    image: productImageValue(row),
     currentPrice,
     actionPrice,
     enrolledActionPrice,
@@ -338,6 +435,7 @@ function mergeProduct(base, incoming) {
   merged.offerId = incoming?.offerId || base?.offerId || "";
   merged.sku = incoming?.sku || base?.sku || "";
   merged.name = incoming?.name || base?.name || "";
+  merged.image = incoming?.image || base?.image || "";
   merged.currentPrice = amount(incoming?.currentPrice) || amount(base?.currentPrice);
   merged.actionPrice = amount(incoming?.actionPrice) || amount(base?.actionPrice);
   merged.enrolledActionPrice = amount(incoming?.enrolledActionPrice) || amount(base?.enrolledActionPrice);
@@ -405,7 +503,7 @@ async function fetchActionProducts(store, actionId, kind = "candidates") {
 }
 
 async function fetchStoreProducts(store) {
-  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const headers = { "content-type": "application/json", ...OZON_LANGUAGE_HEADERS, "client-id": store.clientId, "api-key": store.apiKey };
   const rows = [];
   const seen = new Set();
   const endpoints = [
@@ -477,7 +575,7 @@ async function enrichStoreProducts(store, rows) {
 }
 
 async function fetchStoreProductsFromProductList(store) {
-  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const headers = { "content-type": "application/json", ...OZON_LANGUAGE_HEADERS, "client-id": store.clientId, "api-key": store.apiKey };
   const rows = [];
   const seen = new Set();
   let lastId = "";
@@ -521,7 +619,7 @@ async function fetchStoreProductsFromProductList(store) {
 }
 
 async function fetchPromotionProductDetails(store, products) {
-  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const headers = { "content-type": "application/json", ...OZON_LANGUAGE_HEADERS, "client-id": store.clientId, "api-key": store.apiKey };
   const byKey = new Map();
   const productIds = [...new Set(products.map((item) => Number(item.productId || item.product_id || 0)).filter(Boolean))].slice(0, 1000);
   const offerIds = [...new Set(products.map((item) => String(item.offerId || item.offer_id || "").trim()).filter(Boolean))].slice(0, 1000);
