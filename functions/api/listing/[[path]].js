@@ -1350,6 +1350,112 @@ function stockAmount(row) {
   return 0;
 }
 
+function stockRowsByWarehouse(payload) {
+  const result = payload?.result || payload;
+  const candidates = [
+    result,
+    result?.items,
+    result?.stocks,
+    result?.warehouses,
+    result?.products,
+    payload?.items,
+    payload?.stocks,
+  ];
+  return candidates.find((rows) => Array.isArray(rows)) || [];
+}
+
+function stockLookupKeys(row = {}) {
+  return [
+    row.product_id,
+    row.productId,
+    row.id,
+    row.offer_id,
+    row.offerId,
+    row.sku,
+    row.sku_id,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function addStockLookup(map, item) {
+  stockLookupKeys(item).forEach((key) => map.set(key, item));
+  const stocks = Array.isArray(item?.stocks) ? item.stocks : [];
+  stocks.forEach((stock) => stockLookupKeys({ ...item, ...stock }).forEach((key) => map.set(key, item)));
+}
+
+function warehouseStockRequestBodies(items, filters = {}) {
+  const offerIds = [...new Set([
+    ...(Array.isArray(filters.offerIds) ? filters.offerIds : []),
+    ...items.map((item) => item.offer_id || item.offerId),
+  ].map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 1000);
+  const productIds = [...new Set([
+    ...(Array.isArray(filters.productIds) ? filters.productIds : []),
+    ...items.map((item) => item.product_id || item.id),
+  ].map(Number).filter(Boolean))].slice(0, 1000);
+  const skus = [...new Set(items.flatMap((item) => {
+    const stocks = Array.isArray(item.stocks) ? item.stocks : [];
+    return [item.sku, ...stocks.map((stock) => stock.sku)];
+  }).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 1000);
+  const bodies = [{ limit: 1000, offset: 0 }];
+  if (offerIds.length) {
+    bodies.push({ offer_id: offerIds, limit: 1000, offset: 0 });
+    bodies.push({ filter: { offer_id: offerIds }, limit: 1000, offset: 0 });
+  }
+  if (productIds.length) {
+    bodies.push({ product_id: productIds, limit: 1000, offset: 0 });
+    bodies.push({ filter: { product_id: productIds }, limit: 1000, offset: 0 });
+  }
+  if (skus.length) {
+    bodies.push({ sku: skus, limit: 1000, offset: 0 });
+    bodies.push({ filter: { sku: skus }, limit: 1000, offset: 0 });
+  }
+  return bodies;
+}
+
+async function fetchOzonWarehouseInventoryStocks(store, items, filters = {}) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const endpoints = [
+    "https://api-seller.ozon.ru/v2/product/info/stocks-by-warehouse/fbs",
+    "https://api-seller.ozon.ru/v1/product/info/stocks-by-warehouse/fbs",
+  ];
+  const bodies = warehouseStockRequestBodies(Array.isArray(items) ? items : [], filters);
+  const attempts = [];
+  for (const endpoint of endpoints) {
+    for (const body of bodies) {
+      try {
+        const rows = [];
+        let offset = Number(body.offset || 0);
+        for (let page = 0; page < 50; page += 1) {
+          const requestBody = { ...body, offset };
+          const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(requestBody) });
+          const text = await response.text();
+          let payload = null;
+          try { payload = JSON.parse(text || "{}"); } catch { payload = null; }
+          const batch = response.ok ? stockRowsByWarehouse(payload) : [];
+          attempts.push({
+            url: endpoint,
+            status: response.status,
+            ok: response.ok,
+            body: requestBody,
+            rows: batch.length,
+            error: response.ok ? "" : (payload?.message || payload?.error?.message || text.slice(0, 200)),
+          });
+          if (!response.ok) break;
+          rows.push(...batch);
+          const limit = Number(requestBody.limit || batch.length || 0);
+          const total = Number(payload?.result?.total || payload?.total || 0);
+          if (!limit || batch.length < limit || (total && rows.length >= total)) break;
+          offset += limit;
+        }
+        const usableRows = rows.filter((row) => Number(row.warehouse_id || row.warehouseId || row.warehouse?.id || 0));
+        if (usableRows.length) return { endpoint, items: usableRows, attempts };
+      } catch (error) {
+        attempts.push({ url: endpoint, status: 0, ok: false, body, rows: 0, error: error.message || String(error) });
+      }
+    }
+  }
+  return { endpoint: "", items: [], attempts };
+}
+
 function stockPrice(item = {}, detail = {}) {
   const candidates = [
     detail.price,
@@ -1793,18 +1899,29 @@ async function getOzonInventory(env, searchParams, headers = {}) {
       fetchOzonStockWarehouseProbe(store),
     ]);
     const stockWarehouses = warehouseProbe.warehouses;
-    const [details, promotionResult] = await Promise.all([
+    const [details, promotionResult, warehouseFetched] = await Promise.all([
       fetchOzonProductDetails(store, fetched.items),
       fetchOzonPromotionPrices(store, fetched.items).catch((error) => ({ prices: new Map(), checkedActions: 0, matched: 0, error: error.message || String(error) })),
+      fetchOzonWarehouseInventoryStocks(store, fetched.items, { offerIds, productIds }).catch((error) => ({ endpoint: "", items: [], attempts: [{ error: error.message || String(error) }] })),
     ]);
     const promotionPrices = promotionResult.prices || new Map();
     const rows = [];
-    const singleWarehouse = stockWarehouses.length === 1 ? stockWarehouses[0] : null;
-    fetched.items.forEach((item) => {
-      const detail = details.get(String(item.product_id || item.id || "")) || details.get(String(item.offer_id || "")) || details.get(String(item.sku || "")) || {};
-      const promotion = promotionLookupKeys({ ...item, ...detail }).map((key) => promotionPrices.get(key)).find(Boolean) || null;
-      const stocks = Array.isArray(item.stocks) && item.stocks.length ? item.stocks : [item];
-      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail, singleWarehouse, promotion)));
+    const itemByKey = new Map();
+    fetched.items.forEach((item) => addStockLookup(itemByKey, item));
+    const warehouseRows = Array.isArray(warehouseFetched.items) ? warehouseFetched.items : [];
+    const rowSourceItems = warehouseRows.length ? warehouseRows : fetched.items;
+    rowSourceItems.forEach((item) => {
+      const baseItem = warehouseRows.length
+        ? (stockLookupKeys(item).map((key) => itemByKey.get(key)).find(Boolean) || item)
+        : item;
+      const detail = details.get(String(baseItem.product_id || baseItem.id || item.product_id || item.id || "")) || details.get(String(baseItem.offer_id || item.offer_id || "")) || details.get(String(baseItem.sku || item.sku || "")) || {};
+      const promotion = promotionLookupKeys({ ...baseItem, ...item, ...detail }).map((key) => promotionPrices.get(key)).find(Boolean) || null;
+      if (warehouseRows.length) {
+        rows.push(normalizeStockRow(baseItem, { ...item, source: item.source || item.type || "rfbs" }, detail, null, promotion));
+      } else {
+        const stocks = Array.isArray(item.stocks) && item.stocks.length ? item.stocks : [item];
+        stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail, null, promotion)));
+      }
     });
     const stockTypeWarehouses = [...new Map(rows
       .filter((row) => row.warehouseId || row.warehouseName)
@@ -1816,7 +1933,7 @@ async function getOzonInventory(env, searchParams, headers = {}) {
     return {
       ok: true,
       store: store.name,
-      source: fetched.endpoint,
+      source: warehouseRows.length ? warehouseFetched.endpoint : fetched.endpoint,
       rows,
       warehouses,
       count: rows.length,
@@ -1827,7 +1944,7 @@ async function getOzonInventory(env, searchParams, headers = {}) {
         stockWarehouses.length ? "" : "没有从 Ozon API 获取到可提交库存的仓库 ID，后台编号 111/222 不能直接提交。",
         promotionResult.error ? `活动价拉取失败：${promotionResult.error}` : "",
       ].filter(Boolean).join(" "),
-      warehouseAttempts: searchParams.get("debug") === "1" ? warehouseProbe.attempts : undefined,
+      warehouseAttempts: searchParams.get("debug") === "1" ? [...warehouseProbe.attempts, ...(warehouseFetched.attempts || [])] : undefined,
     };
   } catch (e) {
     return { ok: false, error: "拉取库存失败:" + (e.message || String(e)) };

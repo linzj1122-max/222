@@ -2833,22 +2833,21 @@ const initialProducts = [
       return currency === "RUB" ? rub(price) : `${price.toFixed(2)} ${currency}`;
     }
 
-    function selectedInventoryWarehouse() {
-      const value = String($("inventoryWarehouse")?.value || "all");
-      if (value === "all") return null;
-      return inventoryWarehouses.find((warehouse) => String(warehouse.id || warehouse.name || "") === value) || null;
-    }
-
     function inventoryWarehouseText(row) {
-      const selected = selectedInventoryWarehouse();
-      if (selected) return selected.name || (selected.id ? `仓库 ${selected.id}` : "");
       if (row.warehouseId) {
         const matched = inventoryWarehouses.find((warehouse) => String(warehouse.id || "") === String(row.warehouseId));
         if (matched) return matched.name || `仓库 ${matched.id}`;
+        return `仓库 ${row.warehouseId}`;
       }
       const raw = String(row.warehouseName || "");
-      if (/^(fbs|rfbs)$/i.test(raw) && inventoryWarehouses.length === 1) return inventoryWarehouses[0].name || raw;
-      return raw || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID");
+      if (/^(fbs|rfbs)$/i.test(raw)) return `${raw.toUpperCase()}（未返回仓库ID）`;
+      return raw || "未返回仓库ID";
+    }
+
+    function inventoryRowWarehouseMatches(row, warehouse) {
+      if (warehouse === "all") return true;
+      if (!row.warehouseId) return false;
+      return String(row.warehouseId) === String(warehouse);
     }
 
     function inventorySortValue(row, key) {
@@ -2891,7 +2890,7 @@ const initialProducts = [
       const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
       const warehouse = $("inventoryWarehouse")?.value || "all";
       const rows = inventoryRows.filter((row) => {
-        if (warehouse !== "all" && row.warehouseId && String(row.warehouseId) !== warehouse) return false;
+        if (!inventoryRowWarehouseMatches(row, warehouse)) return false;
         if (!query) return true;
         return [row.productId, row.sku, row.offerId, row.name, inventoryWarehouseText(row), row.price, row.activityPrice, row.activityTitle]
           .join(" ")
@@ -3021,10 +3020,6 @@ const initialProducts = [
         inventoryRows = data.rows || [];
         inventoryWarehouses = data.warehouses || [];
         renderInventoryWarehouses();
-        const warehouseSelect = $("inventoryWarehouse");
-        if (warehouseSelect && inventoryWarehouses.length && warehouseSelect.value === "all") {
-          warehouseSelect.value = String(inventoryWarehouses[0].id || inventoryWarehouses[0].name || "all");
-        }
         renderInventoryRows();
         const warning = data.warning ? ` ${data.warning}` : "";
         setInventoryStatus(`已加载「${data.store || store?.name || storeIndex}」${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。${warning}`);
