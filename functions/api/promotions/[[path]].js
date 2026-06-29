@@ -209,6 +209,28 @@ async function ozonRequest(store, endpoint, body = {}) {
   return payload || {};
 }
 
+async function ozonGet(store, endpoint, params = {}) {
+  const url = new URL(`https://api-seller.ozon.ru${endpoint}`);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+  });
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      "client-id": store.clientId,
+      "api-key": store.apiKey,
+    },
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+  if (!response.ok) {
+    const message = payload?.message || payload?.error?.message || payload?.error || text.slice(0, 400);
+    throw new Error(`Ozon ${endpoint} ${response.status}: ${message}`);
+  }
+  return payload || {};
+}
+
 function resultRows(payload, names = []) {
   const candidates = [
     payload?.result,
@@ -298,7 +320,7 @@ async function fetchActions(store) {
   let offset = 0;
   const limit = 50;
   for (let page = 0; page < 20; page += 1) {
-    const payload = await ozonRequest(store, "/v1/actions", { limit, offset });
+    const payload = await ozonGet(store, "/v1/actions", { limit, offset });
     if (page === 0) {
       attempts.push({
         endpoint: "/v1/actions",
