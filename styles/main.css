@@ -937,21 +937,86 @@ form { display: grid; gap: 14px; }
 .inventory-table-wrap {
   max-height: 620px;
 }
+.inventory-table {
+  table-layout: fixed;
+  min-width: 1340px;
+}
 .inventory-table th:first-child,
 .inventory-table td:first-child {
   width: 44px;
   text-align: center;
+}
+.inventory-table th:nth-child(2),
+.inventory-table td:nth-child(2) {
+  width: 430px;
+  max-width: 430px;
+}
+.inventory-table th:nth-child(3),
+.inventory-table td:nth-child(3) {
+  width: 126px;
+}
+.inventory-table th:nth-child(4),
+.inventory-table td:nth-child(4) {
+  width: 150px;
+}
+.inventory-table th:nth-child(5),
+.inventory-table td:nth-child(5),
+.inventory-table th:nth-child(6),
+.inventory-table td:nth-child(6) {
+  width: 112px;
+}
+.inventory-table th:nth-child(7),
+.inventory-table td:nth-child(7) {
+  width: 210px;
+}
+.inventory-table th:nth-child(8),
+.inventory-table td:nth-child(8),
+.inventory-table th:nth-child(9),
+.inventory-table td:nth-child(9) {
+  width: 92px;
 }
 .inventory-table input[type="checkbox"] {
   width: 16px;
   height: 16px;
   padding: 0;
 }
+.inventory-sort {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: inherit;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+.inventory-sort.active {
+  color: var(--brand);
+}
 .inventory-product {
   display: grid;
   grid-template-columns: 46px minmax(160px, 1fr);
   gap: 10px;
   align-items: center;
+  min-width: 0;
+}
+.inventory-product-copy {
+  min-width: 0;
+}
+.inventory-product-name {
+  display: -webkit-box;
+  max-height: 42px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.inventory-product .sku {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .inventory-product-img,
 .inventory-product-placeholder {
@@ -2829,6 +2894,7 @@ label.inline-select > select {
   font-weight: 800;
   font-size: 12px;
 }
+
 /* 响应式：货盘与上架在窄屏时表单堆叠 */
 @media (max-width: 900px) {
   .listing-step {

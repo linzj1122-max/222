@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ozon / WB 经营中控</title>
-  <link rel="stylesheet" href="styles/main.css?v=20260630-promotions-images" />
+  <link rel="stylesheet" href="styles/main.css?v=20260630-inventory-table" />
   <script src="scripts/vendor/xlsx.mini.min.js?v=20260627"></script>
   <script>
     if (!window.XLSX && typeof module !== "undefined" && module.exports) window.XLSX = module.exports;
@@ -410,14 +410,14 @@
               <thead>
                 <tr>
                   <th><input id="inventorySelectAll" type="checkbox" /></th>
-                  <th>商品</th>
-                  <th>Product ID</th>
-                  <th>SKU</th>
-                  <th>货号</th>
-                  <th>活动价 / 定价</th>
-                  <th>仓库</th>
-                  <th>可售库存</th>
-                  <th>占用</th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="name" data-label="商品">商品</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="sku" data-label="SKU">SKU</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="offerId" data-label="货号">货号</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="activityPrice" data-label="活动价">活动价</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="price" data-label="定价">定价</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="warehouse" data-label="仓库">仓库</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="present" data-label="可售库存">可售库存</button></th>
+                  <th><button class="table-sort inventory-sort" type="button" data-inventory-sort="reserved" data-label="占用">占用</button></th>
                 </tr>
               </thead>
               <tbody id="inventoryRows"></tbody>
@@ -711,7 +711,7 @@
     <img id="imageModalImg" alt="竞品大图" />
   </div>
 
-  <script src="scripts/main.js?v=20260629-inventory-activity-price"></script>
+  <script src="scripts/main.js?v=20260630-inventory-table"></script>
   <script src="scripts/sourcing.js"></script>
   <script src="scripts/listing.js?v=20260628-store-sync"></script>
   <script src="scripts/promotions.js?v=20260630-promotions-images"></script>

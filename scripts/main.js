@@ -179,6 +179,8 @@ const initialProducts = [
     let inventorySelected = new Set();
     let inventoryLoading = false;
     let inventoryLoadSeq = 0;
+    let inventorySortKey = "";
+    let inventorySortDir = "asc";
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
@@ -2831,30 +2833,78 @@ const initialProducts = [
       return currency === "RUB" ? rub(price) : `${price.toFixed(2)} ${currency}`;
     }
 
-    function inventoryPriceHtml(row) {
-      const activityPrice = inventoryActivityPriceText(row);
-      const basePrice = inventoryPriceText(row);
-      if (!activityPrice) return escapeHtml(basePrice);
-      const title = row.activityTitle ? ` title="${escapeHtml(row.activityTitle)}"` : "";
-      return `<strong${title}>${escapeHtml(activityPrice)}</strong><div class="sku">原定价 ${escapeHtml(basePrice)}</div>`;
+    function selectedInventoryWarehouse() {
+      const value = String($("inventoryWarehouse")?.value || "all");
+      if (value === "all") return null;
+      return inventoryWarehouses.find((warehouse) => String(warehouse.id || warehouse.name || "") === value) || null;
+    }
+
+    function inventoryWarehouseText(row) {
+      const selected = selectedInventoryWarehouse();
+      if (selected) return selected.name || (selected.id ? `仓库 ${selected.id}` : "");
+      if (row.warehouseId) {
+        const matched = inventoryWarehouses.find((warehouse) => String(warehouse.id || "") === String(row.warehouseId));
+        if (matched) return matched.name || `仓库 ${matched.id}`;
+      }
+      const raw = String(row.warehouseName || "");
+      if (/^(fbs|rfbs)$/i.test(raw) && inventoryWarehouses.length === 1) return inventoryWarehouses[0].name || raw;
+      return raw || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID");
+    }
+
+    function inventorySortValue(row, key) {
+      if (key === "activityPrice") return Number(row.activityPrice || 0) || "";
+      if (key === "price") return Number(row.price || 0) || "";
+      if (key === "present") return Number(row.present || 0);
+      if (key === "reserved") return Number(row.reserved || 0);
+      if (key === "warehouse") return inventoryWarehouseText(row).toLowerCase();
+      if (key === "sku") return String(row.sku || "").toLowerCase();
+      if (key === "offerId") return String(row.offerId || "").toLowerCase();
+      return String(row.name || row.offerId || row.sku || "").toLowerCase();
+    }
+
+    function sortInventoryRows(rows) {
+      if (!inventorySortKey) return rows;
+      const dir = inventorySortDir === "desc" ? -1 : 1;
+      return [...rows].sort((a, b) => {
+        const av = inventorySortValue(a, inventorySortKey);
+        const bv = inventorySortValue(b, inventorySortKey);
+        if (av === "" && bv === "") return 0;
+        if (av === "") return 1;
+        if (bv === "") return -1;
+        if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+        return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" }) * dir;
+      });
+    }
+
+    function renderInventorySortHeaders() {
+      document.querySelectorAll("[data-inventory-sort]").forEach((button) => {
+        const key = button.getAttribute("data-inventory-sort") || "";
+        const label = button.getAttribute("data-label") || button.textContent.trim();
+        const active = key && key === inventorySortKey;
+        button.textContent = active ? `${label} ${inventorySortDir === "asc" ? "↑" : "↓"}` : label;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-sort", active ? (inventorySortDir === "asc" ? "ascending" : "descending") : "none");
+      });
     }
 
     function filteredInventoryRows() {
       const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
       const warehouse = $("inventoryWarehouse")?.value || "all";
-      return inventoryRows.filter((row) => {
+      const rows = inventoryRows.filter((row) => {
         if (warehouse !== "all" && row.warehouseId && String(row.warehouseId) !== warehouse) return false;
         if (!query) return true;
-        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName, row.price, row.activityPrice, row.activityTitle]
+        return [row.productId, row.sku, row.offerId, row.name, inventoryWarehouseText(row), row.price, row.activityPrice, row.activityTitle]
           .join(" ")
           .toLowerCase()
           .includes(query);
       });
+      return sortInventoryRows(rows);
     }
 
     function renderInventoryRows() {
       const body = $("inventoryRows");
       if (!body) return;
+      renderInventorySortHeaders();
       const rows = filteredInventoryRows();
       const selectedVisible = rows.filter((row) => inventoryRowCanEdit(row) && inventorySelected.has(inventoryRowKey(row))).length;
       const selectableVisible = rows.filter(inventoryRowCanEdit).length;
@@ -2871,14 +2921,16 @@ const initialProducts = [
         const image = row.image
           ? `<img class="inventory-product-img" src="${escapeHtml(row.image)}" alt="${escapeHtml(row.name || row.offerId || row.sku || "")}" />`
           : `<span class="inventory-product-placeholder">${escapeHtml(String(row.offerId || row.sku || "?").slice(0, 3))}</span>`;
+        const productName = row.name || row.offerId || "未命名商品";
+        const activityTitle = row.activityTitle ? ` title="${escapeHtml(row.activityTitle)}"` : "";
         return `<tr>
           <td><input class="inventory-row-check" type="checkbox" value="${escapeHtml(key)}" ${inventorySelected.has(key) ? "checked" : ""} ${disabled}${title} /></td>
-          <td><div class="inventory-product">${image}<div><strong>${escapeHtml(row.name || row.offerId || "未命名商品")}</strong><div class="sku">${escapeHtml(row.offerId || "")}</div></div></div></td>
-          <td>${escapeHtml(row.productId || "—")}</td>
+          <td><div class="inventory-product">${image}<div class="inventory-product-copy"><strong class="inventory-product-name" title="${escapeHtml(productName)}">${escapeHtml(productName)}</strong><div class="sku">${escapeHtml(row.offerId || "")}</div></div></div></td>
           <td>${escapeHtml(row.sku || "—")}</td>
           <td>${escapeHtml(row.offerId || "—")}</td>
-          <td class="money">${inventoryPriceHtml(row)}</td>
-          <td>${escapeHtml(row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID"))}</td>
+          <td class="money"><strong${activityTitle}>${escapeHtml(inventoryActivityPriceText(row) || "—")}</strong></td>
+          <td class="money">${escapeHtml(inventoryPriceText(row))}</td>
+          <td>${escapeHtml(inventoryWarehouseText(row))}</td>
           <td><strong>${Number(row.present || 0)}</strong></td>
           <td>${Number(row.reserved || 0)}</td>
         </tr>`;
@@ -3598,6 +3650,19 @@ const initialProducts = [
     $("refreshInventory")?.addEventListener("click", loadInventoryStoreData);
     $("inventoryWarehouse")?.addEventListener("change", renderInventoryRows);
     $("inventorySearch")?.addEventListener("input", renderInventoryRows);
+    document.querySelectorAll("[data-inventory-sort]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.getAttribute("data-inventory-sort") || "";
+        if (!key) return;
+        if (inventorySortKey === key) {
+          inventorySortDir = inventorySortDir === "asc" ? "desc" : "asc";
+        } else {
+          inventorySortKey = key;
+          inventorySortDir = ["activityPrice", "price", "present", "reserved"].includes(key) ? "desc" : "asc";
+        }
+        renderInventoryRows();
+      });
+    });
     $("inventorySelectAll")?.addEventListener("change", (event) => {
       const checked = event.target.checked;
       filteredInventoryRows().forEach((row) => {
