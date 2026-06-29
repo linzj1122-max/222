@@ -327,7 +327,17 @@
     saveState();
     setResult("");
     setStatus("正在从 OZON 拉取活动列表...");
-    const data = await apiRequest(`${API("actions")}?storeIndex=${selectedStoreIndex()}`);
+    let data = null;
+    try {
+      data = await apiRequest(`${API("actions")}?storeIndex=${selectedStoreIndex()}`);
+    } catch (error) {
+      actions = [];
+      renderActions();
+      bootstrapped = true;
+      setStatus(`活动加载失败：${error.message || error}。正在尝试加载店铺商品...`, "fail");
+      await loadStoreProductsOnly();
+      return;
+    }
     actions = data.actions || [];
     if (!actions.some((action) => String(action.id) === String(state.actionId))) state.actionId = actions[0]?.id || "";
     renderActions();
@@ -336,7 +346,19 @@
     setStatus(actions.length ? `已加载 ${actions.length} 个活动。${note}` : `OZON 当前没有返回可报名活动。${note}`);
     if (actions.length) {
       await loadProducts();
+    } else {
+      await loadStoreProductsOnly();
     }
+  }
+
+  async function loadStoreProductsOnly() {
+    selectedProducts = new Set();
+    renderProducts();
+    setStatus("正在加载店铺商品...");
+    const data = await apiRequest(`${API("store-products")}?storeIndex=${selectedStoreIndex()}`);
+    products = data.products || [];
+    renderProducts();
+    setStatus(products.length ? `已加载 ${products.length} 个店铺商品。当前店铺暂无可选择活动，报名/删除需先有活动。` : "没有拉到店铺商品。");
   }
 
   async function loadProducts() {
@@ -376,7 +398,7 @@
   async function activateSelected() {
     const actionId = selectedActionId();
     const payload = selectedPayload();
-    if (!actionId) return setStatus("请先选择活动。", "fail");
+    if (!actionId) return setStatus("请先选择活动；当前如果没有活动，只能查看店铺商品。", "fail");
     if (!payload.length) return setStatus("请勾选商品，并填写大于 0 的活动价。", "fail");
     if (!confirm(`确认将 ${payload.length} 个商品报名到当前 OZON 活动？`)) return;
     setStatus(`正在提交 ${payload.length} 个商品报名...`);
@@ -402,7 +424,7 @@
       .filter((row) => selectedProducts.has(productKey(row)))
       .map((row) => Number(row.productId || row.product_id || row.id || 0))
       .filter(Boolean);
-    if (!actionId) return setStatus("请先选择活动。", "fail");
+    if (!actionId) return setStatus("请先选择活动；当前如果没有活动，只能查看店铺商品。", "fail");
     if (!productIds.length) return setStatus("请先勾选要取消报名的商品。", "fail");
     if (!confirm(`确认取消 ${productIds.length} 个商品的活动报名？`)) return;
     setStatus(`正在取消 ${productIds.length} 个商品报名...`);

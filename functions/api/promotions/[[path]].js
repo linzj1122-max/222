@@ -453,7 +453,15 @@ async function fetchStoreProducts(store) {
     }
     if (rows.length) break;
   }
+  if (!rows.length) {
+    const listRows = await fetchStoreProductsFromProductList(store);
+    if (listRows.length) return enrichStoreProducts(store, listRows);
+  }
   if (!rows.length && lastError) throw new Error(lastError);
+  return enrichStoreProducts(store, rows);
+}
+
+async function enrichStoreProducts(store, rows) {
   const details = await fetchPromotionProductDetails(store, rows);
   return rows.map((row) => {
     const detail = details.get(String(row.productId || "")) || details.get(String(row.offerId || "")) || details.get(String(row.sku || "")) || {};
@@ -466,6 +474,50 @@ async function fetchStoreProducts(store) {
       price: detail.price || detail.marketing_price || detail.old_price || row.currentPrice,
     }, false));
   });
+}
+
+async function fetchStoreProductsFromProductList(store) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const rows = [];
+  const seen = new Set();
+  let lastId = "";
+  for (let page = 0; page < 20; page += 1) {
+    const body = {
+      filter: { visibility: "ALL" },
+      limit: 1000,
+      last_id: lastId,
+    };
+    const response = await fetch("https://api-seller.ozon.ru/v3/product/list", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+    if (!response.ok) {
+      if (!rows.length) throw new Error(payload?.message || payload?.error?.message || text.slice(0, 300));
+      break;
+    }
+    const result = payload?.result || {};
+    const batch = result.items || payload?.items || [];
+    if (!Array.isArray(batch) || !batch.length) break;
+    batch.forEach((item) => {
+      const product = normalizeProduct({
+        ...item,
+        product_id: item.product_id || item.id,
+        offer_id: item.offer_id,
+        sku: item.sku,
+      }, false);
+      const key = productKey(product);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      rows.push({ ...product, status: "店铺商品", source: "product-list" });
+    });
+    lastId = result.last_id || payload?.last_id || "";
+    if (!lastId) break;
+  }
+  return rows;
 }
 
 async function fetchPromotionProductDetails(store, products) {
@@ -643,6 +695,11 @@ export async function onRequest(context) {
     if (path === "actions") {
       const result = await fetchActions(store);
       return json({ ok: true, storeName: store.name, actions: result.actions, count: result.actions.length, diagnostics: result.diagnostics });
+    }
+
+    if (path === "store-products") {
+      const products = await fetchStoreProducts(store);
+      return json({ ok: true, products, count: products.length, counts: { store: products.length, candidates: 0, active: 0, total: products.length } });
     }
 
     if (path === "candidates") {
