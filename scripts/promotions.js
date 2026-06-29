@@ -36,6 +36,8 @@
   let selectedProducts = new Set();
   let importedMap = new Map();
   let state = {};
+  let bootstrapped = false;
+  let bootstrapping = false;
 
   try { state = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {}; } catch { state = {}; }
 
@@ -82,6 +84,26 @@
     el.hidden = !message;
     el.className = "api-verify-status " + (ok ? "ok" : "fail");
     el.textContent = message || "";
+  }
+
+  function authLocked() {
+    return document.body.classList.contains("auth-locked");
+  }
+
+  async function ensureReady() {
+    if (bootstrapped || bootstrapping) return;
+    if (authLocked()) {
+      setStatus("登录完成后会加载 OZON 活动；也可以进入本模块后点击「刷新活动」。");
+      return;
+    }
+    bootstrapping = true;
+    try {
+      await loadStores();
+      await loadActions();
+      bootstrapped = true;
+    } finally {
+      bootstrapping = false;
+    }
   }
 
   function injectShell() {
@@ -203,6 +225,7 @@
     if ($("pageTitle")) $("pageTitle").textContent = "活动报名";
     renderActions();
     renderProducts();
+    ensureReady().catch((error) => setStatus(error.message || String(error), "fail"));
   }
 
   function selectedStoreIndex() {
@@ -348,7 +371,9 @@
     actions = data.actions || [];
     if (!actions.some((action) => String(action.id) === String(state.actionId))) state.actionId = actions[0]?.id || "";
     renderActions();
-    setStatus(actions.length ? `已加载 ${actions.length} 个活动。` : "当前店铺没有返回可报名活动。");
+    bootstrapped = true;
+    const note = data.diagnostics?.shape ? `（返回结构：${data.diagnostics.shape}）` : "";
+    setStatus(actions.length ? `已加载 ${actions.length} 个活动。${note}` : `OZON 当前没有返回可报名活动。${note}`);
   }
 
   async function loadProducts() {
@@ -519,6 +544,7 @@
       actions = [];
       products = [];
       selectedProducts = new Set();
+      bootstrapped = false;
       saveState();
       renderActions();
       renderProducts();
@@ -573,11 +599,15 @@
     if ($("promoSearch")) $("promoSearch").value = state.query || "";
     bindEvents();
     renderProducts();
-    try {
-      await loadStores();
-      await loadActions();
-    } catch (error) {
-      setStatus(error.message || String(error), "fail");
+    setStatus("进入「活动报名」后会自动加载 OZON 店铺和活动。");
+    const observer = new MutationObserver(() => {
+      if (!authLocked() && $(TAB_ID)?.classList.contains("active")) {
+        ensureReady().catch((error) => setStatus(error.message || String(error), "fail"));
+      }
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    if (!authLocked() && $(TAB_ID)?.classList.contains("active")) {
+      ensureReady().catch((error) => setStatus(error.message || String(error), "fail"));
     }
   }
 

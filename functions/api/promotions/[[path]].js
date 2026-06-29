@@ -238,6 +238,20 @@ function resultTotal(payload, fallbackCount) {
   );
 }
 
+function describePayloadShape(payload) {
+  if (Array.isArray(payload)) return `array:${payload.length}`;
+  if (!payload || typeof payload !== "object") return typeof payload;
+  const keys = Object.keys(payload).slice(0, 8).join(",");
+  const result = payload.result;
+  if (Array.isArray(result)) return `result[]:${result.length}; keys:${keys}`;
+  if (result && typeof result === "object") {
+    const resultKeys = Object.keys(result).slice(0, 8).join(",");
+    const arrayKey = Object.keys(result).find((key) => Array.isArray(result[key]));
+    return arrayKey ? `result.${arrayKey}[]:${result[arrayKey].length}; keys:${resultKeys}` : `result{}; keys:${resultKeys}`;
+  }
+  return `object; keys:${keys}`;
+}
+
 function normalizeAction(row = {}) {
   const id = row.id || row.action_id || row.actionId || row.promo_id || row.promotion_id || "";
   return {
@@ -275,10 +289,18 @@ function normalizeProduct(row = {}, participating = false) {
 
 async function fetchActions(store) {
   const rows = [];
+  const attempts = [];
   let offset = 0;
-  const limit = 100;
+  const limit = 50;
   for (let page = 0; page < 20; page += 1) {
     const payload = await ozonRequest(store, "/v1/actions", { limit, offset });
+    if (page === 0) {
+      attempts.push({
+        endpoint: "/v1/actions",
+        shape: describePayloadShape(payload),
+        total: resultTotal(payload, 0),
+      });
+    }
     const batch = resultRows(payload, ["actions"]).map(normalizeAction).filter((item) => item.id);
     rows.push(...batch);
     const total = resultTotal(payload, batch.length);
@@ -286,11 +308,12 @@ async function fetchActions(store) {
     offset += limit;
   }
   const seen = new Set();
-  return rows.filter((action) => {
+  const actions = rows.filter((action) => {
     if (seen.has(action.id)) return false;
     seen.add(action.id);
     return true;
   });
+  return { actions, diagnostics: attempts[0] || { endpoint: "/v1/actions", shape: "empty" } };
 }
 
 async function fetchActionProducts(store, actionId, kind = "candidates") {
@@ -428,8 +451,8 @@ export async function onRequest(context) {
     if (!store) return json({ ok: false, error: "未配置 OZON 店铺，请先到「店铺设置」添加店铺 API。" }, 400);
 
     if (path === "actions") {
-      const actions = await fetchActions(store);
-      return json({ ok: true, storeName: store.name, actions, count: actions.length });
+      const result = await fetchActions(store);
+      return json({ ok: true, storeName: store.name, actions: result.actions, count: result.actions.length, diagnostics: result.diagnostics });
     }
 
     if (path === "candidates") {
