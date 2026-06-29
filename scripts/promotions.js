@@ -4,7 +4,7 @@
  *  独立自包含模块：
  *    - 自行注入导航按钮和页面 DOM；
  *    - 调用 /api/promotions/*，不在前端保存店铺密钥；
- *    - 支持活动列表、候选商品、Excel/CSV 匹配、批量报名/取消。
+ *    - 支持活动列表、全部商品状态、批量报名、从活动中删除。
  * ========================================================= */
 (function () {
   "use strict";
@@ -14,7 +14,6 @@
   const STORAGE_KEY = "ozon_wb_promotions_state_v1";
 
   const $ = (id) => document.getElementById(id);
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const escapeHtml = (v) =>
     String(v ?? "")
       .replaceAll("&", "&amp;")
@@ -27,14 +26,11 @@
     return Number.isFinite(n) ? n : 0;
   };
   const rub = (v) => `₽${Number(v || 0).toFixed(2)}`;
-  const today = () => new Date().toISOString().slice(0, 10);
-  const norm = (v) => String(v ?? "").replace(/\s+/g, "").toLowerCase();
 
   let stores = [];
   let actions = [];
   let products = [];
   let selectedProducts = new Set();
-  let importedMap = new Map();
   let state = {};
   let bootstrapped = false;
   let bootstrapping = false;
@@ -45,7 +41,6 @@
     const keep = {
       storeIndex: $("promoStore")?.value || "0",
       actionId: $("promoAction")?.value || "",
-      includeActive: $("promoIncludeActive")?.checked || false,
       query: $("promoSearch")?.value || "",
     };
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(keep)); } catch {}
@@ -135,7 +130,7 @@
       <section class="dashboard-brief">
         <div>
           <h2>OZON 活动报名</h2>
-          <p>按店铺拉取 OZON 可报名活动，筛选候选商品后批量提交活动价。</p>
+          <p>选择店铺和活动后查看全部商品，勾选商品批量报名或从活动中删除。</p>
         </div>
         <span class="live-chip"><span></span>Seller API</span>
       </section>
@@ -143,8 +138,8 @@
       <section class="panel promo-control-panel">
         <div class="toolbar">
           <div>
-            <h3>活动与店铺</h3>
-            <p class="section-note">先选择店铺并刷新活动，再进入具体活动查看可报名商品。</p>
+            <h3>活动工作台</h3>
+            <p class="section-note">活动列表来自 OZON Seller API，商品表会合并店铺商品、未报名商品和已报名商品。</p>
           </div>
           <div class="promo-controls">
             <label class="inline-select">店铺
@@ -153,7 +148,6 @@
             <label class="inline-select">活动
               <select id="promoAction"></select>
             </label>
-            <label class="inline-check"><input id="promoIncludeActive" type="checkbox" /> 包含已报名商品</label>
             <button class="secondary" id="promoReloadActions" type="button">刷新活动</button>
             <button class="primary" id="promoLoadProducts" type="button">加载商品</button>
           </div>
@@ -162,59 +156,37 @@
         <div id="promoResult" class="api-verify-status" hidden></div>
       </section>
 
-      <div class="grid split promo-grid">
-        <section class="panel">
-          <div class="toolbar">
-            <h3>可报名活动</h3>
-            <span class="status" id="promoActionCount">0 个活动</span>
-          </div>
-          <div class="table-wrap promo-actions-wrap">
-            <table>
-              <thead><tr><th>活动</th><th>时间</th><th>状态</th><th>操作</th></tr></thead>
-              <tbody id="promoActionRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="toolbar">
-            <h3>候选商品</h3>
-            <input class="search" id="promoSearch" placeholder="搜索 Product ID / Offer ID / SKU / 商品名" />
-          </div>
-          <div class="promo-bulkbar">
-            <label class="inline-select">活动价
-              <input id="promoBulkPrice" type="number" step="0.01" min="0" placeholder="批量填入" />
-            </label>
-            <label class="inline-select">库存
-              <input id="promoBulkStock" type="number" step="1" min="0" placeholder="可选" />
-            </label>
-            <button class="secondary" id="promoApplyBulkPrice" type="button">填入选中</button>
-            <button class="secondary" id="promoImportFileBtn" type="button">导入报名表</button>
-            <button class="secondary" id="promoTemplateBtn" type="button">下载模板</button>
-            <button class="primary" id="promoActivateBtn" type="button">批量报名</button>
-            <button class="danger" id="promoDeactivateBtn" type="button">取消报名</button>
-            <input id="promoImportFile" type="file" accept=".xlsx,.xls,.csv" hidden />
-          </div>
-          <div class="table-status" id="promoProductSummary">请选择活动并加载候选商品。</div>
-          <div class="table-wrap promo-products-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th><input id="promoSelectAll" type="checkbox" /></th>
-                  <th>商品</th>
-                  <th>当前价</th>
-                  <th>已报名价</th>
-                  <th>活动价</th>
-                  <th>建议/上限</th>
-                  <th>库存</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody id="promoProductRows"></tbody>
-            </table>
-          </div>
-        </section>
-      </div>
+      <section class="panel promo-products-panel">
+        <div class="toolbar">
+          <h3>商品</h3>
+          <input class="search" id="promoSearch" placeholder="搜索 Product ID / Offer ID / SKU / 商品名" />
+        </div>
+        <div class="promo-bulkbar">
+          <label class="inline-select">活动价
+            <input id="promoBulkPrice" type="number" step="0.01" min="0" placeholder="批量填入" />
+          </label>
+          <button class="secondary" id="promoApplyBulkPrice" type="button">填入选中</button>
+          <button class="primary" id="promoActivateBtn" type="button">批量报名</button>
+          <button class="danger" id="promoDeactivateBtn" type="button">从活动删除</button>
+        </div>
+        <div class="table-status" id="promoProductSummary">请选择店铺和活动后加载商品。</div>
+        <div class="table-wrap promo-products-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th><input id="promoSelectAll" type="checkbox" /></th>
+                <th>商品</th>
+                <th>当前价</th>
+                <th>已报名价</th>
+                <th>活动价</th>
+                <th>建议/上限</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="promoProductRows"></tbody>
+          </table>
+        </div>
+      </section>
     `;
   }
 
@@ -271,23 +243,6 @@
 
   function renderActions() {
     renderActionSelect();
-    const body = $("promoActionRows");
-    if (!body) return;
-    if ($("promoActionCount")) $("promoActionCount").textContent = `${actions.length} 个活动`;
-    if (!actions.length) {
-      body.innerHTML = `<tr><td colspan="4" class="muted-cell">暂无活动。请选择店铺后点击「刷新活动」。</td></tr>`;
-      return;
-    }
-    body.innerHTML = actions.map((action) => {
-      const active = String(action.id) === selectedActionId();
-      return `
-        <tr class="${active ? "promo-action-active" : ""}">
-          <td><strong>${escapeHtml(action.title || `活动 ${action.id}`)}</strong><div class="sku">ID: ${escapeHtml(action.id)}</div></td>
-          <td>${escapeHtml(actionDateText(action))}</td>
-          <td><span class="scope-chip">${escapeHtml(action.status || action.type || "可查看")}</span></td>
-          <td><button class="${active ? "primary" : "secondary"}" type="button" data-promo-pick="${escapeHtml(action.id)}">选择</button></td>
-        </tr>`;
-    }).join("");
   }
 
   function productKey(row) {
@@ -308,7 +263,7 @@
   }
 
   function productDefaultPrice(row) {
-    return amount(importedMap.get(productKey(row))?.actionPrice || row.actionPrice || row.maxActionPrice || row.currentPrice || row.price);
+    return amount(row.actionPrice || row.maxActionPrice || row.enrolledActionPrice || row.currentPrice || row.price);
   }
 
   function productEnrolledPrice(row) {
@@ -328,16 +283,15 @@
     if ($("promoProductSummary")) {
       $("promoProductSummary").textContent = products.length
         ? `已加载 ${products.length} 个商品，显示 ${rows.length} 个，已选 ${selectedProducts.size} 个。`
-        : "请选择活动并加载候选商品。";
+        : "请选择活动并加载商品。";
     }
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="8" class="muted-cell">没有匹配的商品。</td></tr>`;
+      body.innerHTML = `<tr><td colspan="7" class="muted-cell">没有匹配的商品。</td></tr>`;
       return;
     }
     body.innerHTML = rows.map((row) => {
       const key = productKey(row);
       const checked = selectedProducts.has(key) ? "checked" : "";
-      const imported = importedMap.get(key);
       const title = row.name || row.title || row.offerId || row.sku || `Product ${row.productId}`;
       const hint = [row.offerId ? `Offer: ${row.offerId}` : "", row.sku ? `SKU: ${row.sku}` : "", row.productId ? `Product: ${row.productId}` : ""].filter(Boolean).join(" · ");
       const suggestion = [row.minActionPrice ? `最低 ${rub(row.minActionPrice)}` : "", row.maxActionPrice ? `上限 ${rub(row.maxActionPrice)}` : ""].filter(Boolean).join(" / ") || "—";
@@ -350,8 +304,7 @@
           <td class="money">${enrolledPrice ? rub(enrolledPrice) : (row.participating ? "待返回" : "—")}</td>
           <td><input class="promo-price-input" data-promo-price="${escapeHtml(key)}" type="number" step="0.01" min="0" value="${productDefaultPrice(row) || ""}" placeholder="必填" /></td>
           <td>${escapeHtml(suggestion)}</td>
-          <td><input class="promo-stock-input" data-promo-stock="${escapeHtml(key)}" type="number" step="1" min="0" value="${amount(imported?.stock || row.stock || "") || ""}" placeholder="可选" /></td>
-          <td><span class="scope-chip">${escapeHtml(imported ? "已导入" : (row.status || row.participating ? "已报名" : "候选"))}</span></td>
+          <td><span class="scope-chip">${escapeHtml(row.status || (row.participating ? "已报名" : (row.candidate ? "未报名" : "店铺商品")))}</span></td>
         </tr>`;
     }).join("");
   }
@@ -381,6 +334,9 @@
     bootstrapped = true;
     const note = data.diagnostics?.shape ? `（返回结构：${data.diagnostics.shape}）` : "";
     setStatus(actions.length ? `已加载 ${actions.length} 个活动。${note}` : `OZON 当前没有返回可报名活动。${note}`);
+    if (actions.length) {
+      await loadProducts();
+    }
   }
 
   async function loadProducts() {
@@ -391,14 +347,17 @@
     }
     saveState();
     selectedProducts = new Set();
-    importedMap = new Map();
     renderProducts();
-    const includeActive = $("promoIncludeActive")?.checked ? "1" : "0";
-    setStatus(`正在加载活动「${currentAction()?.title || actionId}」的候选商品...`);
-    const data = await apiRequest(`${API("candidates")}?storeIndex=${selectedStoreIndex()}&actionId=${encodeURIComponent(actionId)}&includeActive=${includeActive}`);
+    setStatus(`正在加载活动「${currentAction()?.title || actionId}」的全部商品状态...`);
+    const data = await apiRequest(`${API("candidates")}?storeIndex=${selectedStoreIndex()}&actionId=${encodeURIComponent(actionId)}`);
     products = data.products || [];
     renderProducts();
-    setStatus(products.length ? `已加载 ${products.length} 个商品。` : "该活动没有返回候选商品，或店铺暂无可报名商品。");
+    const counts = data.counts || {};
+    const extra = products.length
+      ? `店铺商品 ${counts.store ?? "?"} 个，可报名 ${counts.candidates ?? 0} 个，已报名 ${counts.active ?? 0} 个。`
+      : "没有拉到店铺商品或活动商品。";
+    const warnings = [data.diagnostics?.storeError, data.diagnostics?.candidatesError, data.diagnostics?.activeError].filter(Boolean);
+    setStatus(`已加载 ${products.length} 个商品。${extra}${warnings.length ? " 注意：" + warnings.join("；") : ""}`);
   }
 
   function selectedPayload() {
@@ -406,12 +365,10 @@
     return rows.map((row) => {
       const key = productKey(row);
       const price = amount(document.querySelector(`[data-promo-price="${CSS.escape(key)}"]`)?.value);
-      const stock = amount(document.querySelector(`[data-promo-stock="${CSS.escape(key)}"]`)?.value);
       return {
         product_id: Number(row.productId || row.product_id || row.id || 0),
         offer_id: row.offerId || row.offer_id || "",
         action_price: price,
-        stock: stock > 0 ? Math.round(stock) : undefined,
       };
     }).filter((row) => row.product_id && row.action_price > 0);
   }
@@ -431,8 +388,6 @@
     const failCount = data.errorCount ?? data.errors?.length ?? 0;
     setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。`, failCount === 0);
     if (okCount > 0) {
-      const includeActive = $("promoIncludeActive");
-      if (includeActive) includeActive.checked = true;
       setStatus("报名完成，正在重新加载已报名商品和活动价...");
       await loadProducts();
       setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。已刷新已报名价。`, failCount === 0);
@@ -457,101 +412,26 @@
     });
     const okCount = data.successCount ?? data.successProductIds?.length ?? 0;
     const failCount = data.errorCount ?? data.errors?.length ?? 0;
-    setResult(`取消完成：成功 ${okCount} 个，失败 ${failCount} 个。`, failCount === 0);
-    setStatus("取消请求已提交，可重新加载商品核对活动状态。");
+    setResult(`删除完成：成功 ${okCount} 个，失败 ${failCount} 个。`, failCount === 0);
+    if (okCount > 0) {
+      setStatus("已同步删除 OZON 活动商品，正在刷新列表...");
+      await loadProducts();
+    } else {
+      setStatus("删除请求已提交，可重新加载商品核对活动状态。");
+    }
   }
 
   function applyBulkPrice() {
     const price = amount($("promoBulkPrice")?.value);
-    const stock = amount($("promoBulkStock")?.value);
     if (!selectedProducts.size) return setStatus("请先勾选商品。", "fail");
-    if (price <= 0 && stock <= 0) return setStatus("请填写活动价或库存。", "fail");
+    if (price <= 0) return setStatus("请填写活动价。", "fail");
     selectedProducts.forEach((key) => {
       if (price > 0) {
         const input = document.querySelector(`[data-promo-price="${CSS.escape(key)}"]`);
         if (input) input.value = price;
       }
-      if (stock > 0) {
-        const input = document.querySelector(`[data-promo-stock="${CSS.escape(key)}"]`);
-        if (input) input.value = Math.round(stock);
-      }
     });
     setStatus(`已填入 ${selectedProducts.size} 个选中商品。`);
-  }
-
-  function downloadTemplate() {
-    const csv = "\uFEFFproduct_id,offer_id,sku,action_price,stock\n123456789,ABC-001,,999,20\n";
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ozon活动报名模板_${today()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  async function parseImport(file) {
-    if (!window.XLSX) throw new Error("Excel 解析组件未加载，请刷新页面后重试。");
-    const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-    const headerIndex = rows.findIndex((row) => row.some((cell) => /product|offer|sku|活动价|价格|库存/i.test(String(cell))));
-    if (headerIndex < 0) throw new Error("未识别到表头，请使用模板列名 product_id / offer_id / sku / action_price / stock。");
-    const headers = rows[headerIndex].map(norm);
-    const aliases = {
-      productId: ["product_id", "productid", "商品id", "产品id"],
-      offerId: ["offer_id", "offerid", "货号", "offer"],
-      sku: ["sku"],
-      actionPrice: ["action_price", "活动价", "报名价", "价格", "price"],
-      stock: ["stock", "库存", "数量"],
-    };
-    const idx = (keys) => headers.findIndex((h) => keys.map(norm).includes(h));
-    const pos = Object.fromEntries(Object.entries(aliases).map(([key, keys]) => [key, idx(keys)]));
-    const out = [];
-    rows.slice(headerIndex + 1).forEach((row) => {
-      const item = {
-        id: uid(),
-        productId: pos.productId >= 0 ? String(row[pos.productId]).trim() : "",
-        offerId: pos.offerId >= 0 ? String(row[pos.offerId]).trim() : "",
-        sku: pos.sku >= 0 ? String(row[pos.sku]).trim() : "",
-        actionPrice: pos.actionPrice >= 0 ? amount(row[pos.actionPrice]) : 0,
-        stock: pos.stock >= 0 ? amount(row[pos.stock]) : 0,
-      };
-      if (item.productId || item.offerId || item.sku) out.push(item);
-    });
-    return out;
-  }
-
-  function importKeyMatches(row, imported) {
-    const keys = [row.productId, row.offerId, row.sku].map((v) => String(v || "").trim()).filter(Boolean);
-    const importedKeys = [imported.productId, imported.offerId, imported.sku].map((v) => String(v || "").trim()).filter(Boolean);
-    return keys.some((key) => importedKeys.includes(key));
-  }
-
-  async function handleImport(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const rows = await parseImport(file);
-      let matched = 0;
-      rows.forEach((item) => {
-        const row = products.find((product) => importKeyMatches(product, item));
-        if (!row) return;
-        const key = productKey(row);
-        importedMap.set(key, item);
-        selectedProducts.add(key);
-        matched += 1;
-      });
-      renderProducts();
-      setStatus(`导入完成：读取 ${rows.length} 行，匹配当前商品 ${matched} 行。`);
-    } catch (error) {
-      setStatus("导入失败：" + (error.message || error), "fail");
-      alert("导入失败：" + (error.message || error));
-    } finally {
-      event.target.value = "";
-    }
   }
 
   function bindEvents() {
@@ -570,21 +450,11 @@
       saveState();
       renderActions();
       renderProducts();
+      loadProducts().catch((e) => setStatus(e.message || String(e), "fail"));
     });
-    $("promoIncludeActive")?.addEventListener("change", saveState);
     $("promoReloadActions")?.addEventListener("click", () => loadActions().catch((e) => setStatus(e.message || String(e), "fail")));
     $("promoLoadProducts")?.addEventListener("click", () => loadProducts().catch((e) => setStatus(e.message || String(e), "fail")));
     $("promoSearch")?.addEventListener("input", () => { saveState(); renderProducts(); });
-    $("promoActionRows")?.addEventListener("click", (event) => {
-      const btn = event.target.closest("[data-promo-pick]");
-      if (!btn) return;
-      $("promoAction").value = btn.getAttribute("data-promo-pick") || "";
-      products = [];
-      selectedProducts = new Set();
-      saveState();
-      renderActions();
-      renderProducts();
-    });
     $("promoSelectAll")?.addEventListener("change", (event) => {
       filteredProducts().forEach((row) => {
         const key = productKey(row);
@@ -603,14 +473,10 @@
     $("promoApplyBulkPrice")?.addEventListener("click", applyBulkPrice);
     $("promoActivateBtn")?.addEventListener("click", () => activateSelected().catch((e) => setResult(e.message || String(e), false)));
     $("promoDeactivateBtn")?.addEventListener("click", () => deactivateSelected().catch((e) => setResult(e.message || String(e), false)));
-    $("promoImportFileBtn")?.addEventListener("click", () => $("promoImportFile")?.click());
-    $("promoImportFile")?.addEventListener("change", handleImport);
-    $("promoTemplateBtn")?.addEventListener("click", downloadTemplate);
   }
 
   async function init() {
     injectShell();
-    if ($("promoIncludeActive")) $("promoIncludeActive").checked = Boolean(state.includeActive);
     if ($("promoSearch")) $("promoSearch").value = state.query || "";
     bindEvents();
     renderProducts();

@@ -4,9 +4,9 @@
  *  路由前缀 /api/promotions/*
  *    GET  /stores
  *    GET  /actions?storeIndex=0
- *    GET  /candidates?storeIndex=0&actionId=123&includeActive=1
+ *    GET  /candidates?storeIndex=0&actionId=123
  *    GET  /products?storeIndex=0&actionId=123
- *    POST /activate     { storeIndex, actionId, products: [{ product_id, action_price, stock? }] }
+ *    POST /activate     { storeIndex, actionId, products: [{ product_id, action_price }] }
  *    POST /deactivate   { storeIndex, actionId, productIds: [123] }
  *
  *  店铺凭证复用主系统约定：
@@ -287,9 +287,27 @@ function normalizeAction(row = {}) {
   };
 }
 
+function productPriceValue(row = {}) {
+  const candidates = [
+    row.price,
+    row.price?.price,
+    row.price?.marketing_price,
+    row.current_price,
+    row.marketing_price,
+    row.old_price,
+    row.discount_price,
+    row.min_price,
+  ];
+  for (const value of candidates) {
+    const n = amount(value);
+    if (n) return n;
+  }
+  return 0;
+}
+
 function normalizeProduct(row = {}, participating = false) {
   const productId = row.product_id || row.productId || row.id || row.sku || row.sku_id || 0;
-  const currentPrice = amount(row.price || row.current_price || row.marketing_price || row.old_price || row.discount_price);
+  const currentPrice = productPriceValue(row);
   const actionPrice = amount(row.action_price || row.actionPrice || row.discount_price || row.discountPrice);
   const maxActionPrice = amount(row.max_action_price || row.maxActionPrice || row.max_discount_price || row.price_for_action);
   const minActionPrice = amount(row.min_action_price || row.minActionPrice);
@@ -307,11 +325,32 @@ function normalizeProduct(row = {}, participating = false) {
     enrolledActionPrice,
     maxActionPrice,
     minActionPrice,
-    stock: amount(row.stock || row.stock_count || row.quantity || row.available_stock_count),
     status: String(row.status || row.state || ""),
+    candidate: Boolean(row.candidate || row.is_candidate),
     participating: isParticipating,
     raw: row,
   };
+}
+
+function mergeProduct(base, incoming) {
+  const merged = { ...(base || {}), ...(incoming || {}) };
+  merged.productId = incoming?.productId || base?.productId || "";
+  merged.offerId = incoming?.offerId || base?.offerId || "";
+  merged.sku = incoming?.sku || base?.sku || "";
+  merged.name = incoming?.name || base?.name || "";
+  merged.currentPrice = amount(incoming?.currentPrice) || amount(base?.currentPrice);
+  merged.actionPrice = amount(incoming?.actionPrice) || amount(base?.actionPrice);
+  merged.enrolledActionPrice = amount(incoming?.enrolledActionPrice) || amount(base?.enrolledActionPrice);
+  merged.maxActionPrice = amount(incoming?.maxActionPrice) || amount(base?.maxActionPrice);
+  merged.minActionPrice = amount(incoming?.minActionPrice) || amount(base?.minActionPrice);
+  merged.candidate = Boolean(base?.candidate || incoming?.candidate);
+  merged.participating = Boolean(base?.participating || incoming?.participating);
+  merged.status = incoming?.status || base?.status || (merged.participating ? "已报名" : (merged.candidate ? "未报名" : "店铺商品"));
+  return merged;
+}
+
+function productKey(row = {}) {
+  return String(row.productId || row.offerId || row.sku || "").trim();
 }
 
 async function fetchActions(store) {
@@ -358,11 +397,140 @@ async function fetchActionProducts(store, actionId, kind = "candidates") {
   }
   const seen = new Set();
   return rows.filter((product) => {
-    const key = String(product.productId || product.offerId || product.sku);
+    const key = productKey(product);
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+async function fetchStoreProducts(store) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const rows = [];
+  const seen = new Set();
+  const endpoints = [
+    "https://api-seller.ozon.ru/v4/product/info/stocks",
+    "https://api-seller.ozon.ru/v3/product/info/stocks",
+  ];
+  let lastError = "";
+  for (const endpoint of endpoints) {
+    let cursor = "";
+    rows.length = 0;
+    seen.clear();
+    for (let page = 0; page < 20; page += 1) {
+      const body = {
+        filter: { visibility: "ALL" },
+        limit: 1000,
+        cursor,
+        last_id: cursor,
+      };
+      const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+      const text = await response.text();
+      let payload = null;
+      try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+      if (!response.ok) {
+        lastError = payload?.message || payload?.error?.message || text.slice(0, 300);
+        break;
+      }
+      const batch = payload?.items || payload?.result?.items || payload?.result || [];
+      if (!Array.isArray(batch) || !batch.length) break;
+      batch.forEach((item) => {
+        const product = normalizeProduct({
+          ...item,
+          product_id: item.product_id || item.id,
+          offer_id: item.offer_id,
+          sku: item.sku,
+          name: item.name,
+          price: item.price || item.marketing_price || item.old_price,
+        }, false);
+        const key = productKey(product);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        rows.push({ ...product, status: "店铺商品", source: "store" });
+      });
+      cursor = payload?.cursor || payload?.last_id || payload?.result?.cursor || payload?.result?.last_id || "";
+      if (!cursor) break;
+    }
+    if (rows.length) break;
+  }
+  if (!rows.length && lastError) throw new Error(lastError);
+  const details = await fetchPromotionProductDetails(store, rows);
+  return rows.map((row) => {
+    const detail = details.get(String(row.productId || "")) || details.get(String(row.offerId || "")) || details.get(String(row.sku || "")) || {};
+    return mergeProduct(row, normalizeProduct({
+      ...detail,
+      product_id: detail.product_id || detail.id || row.productId,
+      offer_id: detail.offer_id || row.offerId,
+      sku: detail.sku || row.sku,
+      name: detail.name || row.name,
+      price: detail.price || detail.marketing_price || detail.old_price || row.currentPrice,
+    }, false));
+  });
+}
+
+async function fetchPromotionProductDetails(store, products) {
+  const headers = { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey };
+  const byKey = new Map();
+  const productIds = [...new Set(products.map((item) => Number(item.productId || item.product_id || 0)).filter(Boolean))].slice(0, 1000);
+  const offerIds = [...new Set(products.map((item) => String(item.offerId || item.offer_id || "").trim()).filter(Boolean))].slice(0, 1000);
+  const bodies = [];
+  for (let i = 0; i < productIds.length; i += 100) bodies.push({ product_id: productIds.slice(i, i + 100) });
+  for (let i = 0; i < offerIds.length; i += 100) bodies.push({ offer_id: offerIds.slice(i, i + 100) });
+  for (const body of bodies) {
+    try {
+      const response = await fetch("https://api-seller.ozon.ru/v3/product/info/list", { method: "POST", headers, body: JSON.stringify(body) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) continue;
+      const rows = payload?.items || payload?.result?.items || payload?.result || [];
+      if (!Array.isArray(rows)) continue;
+      rows.forEach((row) => {
+        [row.product_id, row.id, row.offer_id, row.sku].map((value) => String(value || "")).filter(Boolean).forEach((key) => byKey.set(key, row));
+      });
+    } catch {
+      // Details are optional; product IDs can still be displayed.
+    }
+  }
+  return byKey;
+}
+
+async function fetchPromotionWorkspaceProducts(store, actionId) {
+  const [storeProducts, candidates, active] = await Promise.all([
+    fetchStoreProducts(store).catch((error) => ({ error: error.message || String(error), rows: [] })),
+    fetchActionProducts(store, actionId, "candidates").catch((error) => ({ error: error.message || String(error), rows: [] })),
+    fetchActionProducts(store, actionId, "products").catch((error) => ({ error: error.message || String(error), rows: [] })),
+  ]);
+  const diagnostics = {
+    storeError: storeProducts?.error || "",
+    candidatesError: candidates?.error || "",
+    activeError: active?.error || "",
+  };
+  const map = new Map();
+  const add = (list, patch = {}) => {
+    (Array.isArray(list) ? list : list?.rows || []).forEach((item) => {
+      const next = { ...item, ...patch };
+      const key = productKey(next);
+      if (!key) return;
+      map.set(key, mergeProduct(map.get(key), next));
+    });
+  };
+  add(storeProducts, { source: "store" });
+  add(candidates, { candidate: true, participating: false, status: "未报名" });
+  add(active, { participating: true, candidate: true, status: "已报名" });
+  const products = [...map.values()].sort((a, b) => {
+    if (a.participating !== b.participating) return a.participating ? -1 : 1;
+    if (a.candidate !== b.candidate) return a.candidate ? -1 : 1;
+    return String(a.name || a.offerId || a.productId).localeCompare(String(b.name || b.offerId || b.productId), "zh-Hans-CN");
+  });
+  return {
+    products,
+    counts: {
+      store: Array.isArray(storeProducts) ? storeProducts.length : 0,
+      candidates: Array.isArray(candidates) ? candidates.length : 0,
+      active: Array.isArray(active) ? active.length : 0,
+      total: products.length,
+    },
+    diagnostics,
+  };
 }
 
 function chunk(list, size = 100) {
@@ -392,7 +560,6 @@ async function activateProducts(store, actionId, products) {
     .map((item) => ({
       product_id: Number(item.product_id || item.productId || item.id || 0),
       action_price: amount(item.action_price || item.actionPrice || item.price),
-      stock: item.stock === undefined || item.stock === null || item.stock === "" ? undefined : Math.max(0, Math.round(amount(item.stock))),
     }))
     .filter((item) => item.product_id && item.action_price > 0);
   if (!normalized.length) return { ok: false, error: "没有可提交的商品，请填写 Product ID 和活动价。" };
@@ -402,11 +569,7 @@ async function activateProducts(store, actionId, products) {
   for (const part of chunk(normalized, 100)) {
     const body = {
       action_id: Number(actionId) || actionId,
-      products: part.map((item) => {
-        const out = { product_id: item.product_id, action_price: item.action_price };
-        if (item.stock !== undefined) out.stock = item.stock;
-        return out;
-      }),
+      products: part.map((item) => ({ product_id: item.product_id, action_price: item.action_price })),
     };
     try {
       const payload = await ozonRequest(store, "/v1/actions/products/activate", body);
@@ -485,14 +648,8 @@ export async function onRequest(context) {
     if (path === "candidates") {
       const actionId = url.searchParams.get("actionId") || url.searchParams.get("action_id");
       if (!actionId) return json({ ok: false, error: "缺少 actionId。" }, 400);
-      const candidates = await fetchActionProducts(store, actionId, "candidates");
-      const includeActive = url.searchParams.get("includeActive") === "1";
-      if (!includeActive) return json({ ok: true, products: candidates, count: candidates.length });
-      const active = await fetchActionProducts(store, actionId, "products");
-      const merged = new Map();
-      candidates.forEach((item) => merged.set(String(item.productId || item.offerId || item.sku), item));
-      active.forEach((item) => merged.set(String(item.productId || item.offerId || item.sku), { ...merged.get(String(item.productId || item.offerId || item.sku)), ...item, participating: true }));
-      return json({ ok: true, products: [...merged.values()], count: merged.size, activeCount: active.length });
+      const result = await fetchPromotionWorkspaceProducts(store, actionId);
+      return json({ ok: true, products: result.products, count: result.products.length, counts: result.counts, diagnostics: result.diagnostics });
     }
 
     if (path === "products") {
