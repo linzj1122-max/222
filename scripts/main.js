@@ -2824,13 +2824,28 @@ const initialProducts = [
       return currency === "RUB" ? rub(price) : `${price.toFixed(2)} ${currency}`;
     }
 
+    function inventoryActivityPriceText(row) {
+      const price = Number(row.activityPrice || 0);
+      if (!price) return "";
+      const currency = String(row.currencyCode || "RUB").toUpperCase();
+      return currency === "RUB" ? rub(price) : `${price.toFixed(2)} ${currency}`;
+    }
+
+    function inventoryPriceHtml(row) {
+      const activityPrice = inventoryActivityPriceText(row);
+      const basePrice = inventoryPriceText(row);
+      if (!activityPrice) return escapeHtml(basePrice);
+      const title = row.activityTitle ? ` title="${escapeHtml(row.activityTitle)}"` : "";
+      return `<strong${title}>${escapeHtml(activityPrice)}</strong><div class="sku">原定价 ${escapeHtml(basePrice)}</div>`;
+    }
+
     function filteredInventoryRows() {
       const query = String($("inventorySearch")?.value || "").trim().toLowerCase();
       const warehouse = $("inventoryWarehouse")?.value || "all";
       return inventoryRows.filter((row) => {
         if (warehouse !== "all" && row.warehouseId && String(row.warehouseId) !== warehouse) return false;
         if (!query) return true;
-        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName, row.price]
+        return [row.productId, row.sku, row.offerId, row.name, row.warehouseName, row.price, row.activityPrice, row.activityTitle]
           .join(" ")
           .toLowerCase()
           .includes(query);
@@ -2862,7 +2877,7 @@ const initialProducts = [
           <td>${escapeHtml(row.productId || "—")}</td>
           <td>${escapeHtml(row.sku || "—")}</td>
           <td>${escapeHtml(row.offerId || "—")}</td>
-          <td class="money">${escapeHtml(inventoryPriceText(row))}</td>
+          <td class="money">${inventoryPriceHtml(row)}</td>
           <td>${escapeHtml(row.warehouseName || (row.warehouseId ? `仓库 ${row.warehouseId}` : "无仓库 ID"))}</td>
           <td><strong>${Number(row.present || 0)}</strong></td>
           <td>${Number(row.reserved || 0)}</td>

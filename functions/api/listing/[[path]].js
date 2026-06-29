@@ -1381,6 +1381,138 @@ function stockOldPrice(item = {}, detail = {}) {
   return 0;
 }
 
+function promotionRows(payload, names = []) {
+  const result = payload?.result || payload;
+  const candidates = [
+    result,
+    payload,
+    result?.products,
+    result?.items,
+    payload?.products,
+    payload?.items,
+  ];
+  for (const name of names) {
+    candidates.unshift(result?.[name], payload?.[name]);
+  }
+  return candidates.find((rows) => Array.isArray(rows)) || [];
+}
+
+function promotionTotal(payload, fallbackCount) {
+  return Number(payload?.result?.total || payload?.result?.count || payload?.total || payload?.count || fallbackCount || 0);
+}
+
+async function ozonSellerGet(store, endpoint, params = {}) {
+  const url = new URL(`https://api-seller.ozon.ru${endpoint}`);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+  });
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: { "client-id": store.clientId, "api-key": store.apiKey },
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+  if (!response.ok) throw new Error(payload?.message || payload?.error?.message || text.slice(0, 300));
+  return payload || {};
+}
+
+async function ozonSellerPost(store, endpoint, body = {}) {
+  const response = await fetch(`https://api-seller.ozon.ru${endpoint}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "client-id": store.clientId, "api-key": store.apiKey },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+  if (!response.ok) throw new Error(payload?.message || payload?.error?.message || text.slice(0, 300));
+  return payload || {};
+}
+
+function promotionPriceValue(row = {}) {
+  const candidates = [
+    row.action_price,
+    row.actionPrice,
+    row.enrolled_action_price,
+    row.enrolledActionPrice,
+    row.participating_price,
+    row.participatingPrice,
+    row.discount_price,
+    row.discountPrice,
+    row.price_for_action,
+  ];
+  for (const value of candidates) {
+    const n = amount(value);
+    if (n) return n;
+  }
+  return 0;
+}
+
+function promotionLookupKeys(row = {}) {
+  return [
+    row.product_id,
+    row.productId,
+    row.id,
+    row.offer_id,
+    row.offerId,
+    row.article,
+    row.sku,
+    row.sku_id,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+async function fetchOzonPromotionPrices(store, items) {
+  const wanted = new Set();
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    promotionLookupKeys(item).forEach((key) => wanted.add(key));
+  });
+  if (!wanted.size) return { prices: new Map(), checkedActions: 0, matched: 0, error: "" };
+
+  const actions = [];
+  let offset = 0;
+  const limit = 50;
+  for (let page = 0; page < 10; page += 1) {
+    const payload = await ozonSellerGet(store, "/v1/actions", { limit, offset });
+    const batch = promotionRows(payload, ["actions"]);
+    if (!batch.length) break;
+    actions.push(...batch);
+    const total = promotionTotal(payload, batch.length);
+    if (actions.length >= total || batch.length < limit) break;
+    offset += limit;
+  }
+
+  const byKey = new Map();
+  for (const action of actions.slice(0, 30)) {
+    const actionId = action.id || action.action_id || action.actionId || action.promo_id || action.promotion_id;
+    if (!actionId) continue;
+    let productOffset = 0;
+    const productLimit = 100;
+    for (let page = 0; page < 20; page += 1) {
+      const payload = await ozonSellerPost(store, "/v1/actions/products", {
+        action_id: Number(actionId) || actionId,
+        limit: productLimit,
+        offset: productOffset,
+      });
+      const batch = promotionRows(payload, ["products", "items"]);
+      if (!batch.length) break;
+      batch.forEach((row) => {
+        const price = promotionPriceValue(row);
+        if (!price) return;
+        const title = String(action.title || action.name || action.action_name || `活动 ${actionId}`);
+        promotionLookupKeys(row).forEach((key) => {
+          if (!wanted.has(key)) return;
+          byKey.set(key, { price, title, actionId: String(actionId) });
+        });
+      });
+      const total = promotionTotal(payload, batch.length);
+      if (batch.length < productLimit || (productOffset + batch.length) >= total) break;
+      productOffset += productLimit;
+    }
+  }
+  return { prices: byKey, checkedActions: actions.length, matched: byKey.size, error: "" };
+}
+
 function fallbackStockWarehouses(store) {
   const name = String(store?.name || "");
   if (/子杰3店/i.test(name)) {
@@ -1533,7 +1665,7 @@ async function fetchOzonStockWarehouses(store) {
   return probe.warehouses;
 }
 
-function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = null) {
+function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = null, promotion = null) {
   const productId = Number(item.product_id || item.id || detail.product_id || detail.id || 0);
   const offerId = String(item.offer_id || item.offerId || detail.offer_id || detail.offerId || "");
   const sku = String(stock.sku || item.sku || detail.sku || "");
@@ -1558,6 +1690,9 @@ function normalizeStockRow(item, stock = {}, detail = {}, fallbackWarehouse = nu
     editable: isSellerWarehouseStock && Boolean(warehouseId),
     price: stockPrice(item, detail),
     oldPrice: stockOldPrice(item, detail),
+    activityPrice: amount(promotion?.price),
+    activityTitle: String(promotion?.title || ""),
+    activityId: String(promotion?.actionId || ""),
     currencyCode: String(detail.currency_code || item.currency_code || "RUB"),
     present: stockAmount(stock),
     reserved: amount(stock.reserved),
@@ -1658,13 +1793,18 @@ async function getOzonInventory(env, searchParams, headers = {}) {
       fetchOzonStockWarehouseProbe(store),
     ]);
     const stockWarehouses = warehouseProbe.warehouses;
-    const details = await fetchOzonProductDetails(store, fetched.items);
+    const [details, promotionResult] = await Promise.all([
+      fetchOzonProductDetails(store, fetched.items),
+      fetchOzonPromotionPrices(store, fetched.items).catch((error) => ({ prices: new Map(), checkedActions: 0, matched: 0, error: error.message || String(error) })),
+    ]);
+    const promotionPrices = promotionResult.prices || new Map();
     const rows = [];
     const singleWarehouse = stockWarehouses.length === 1 ? stockWarehouses[0] : null;
     fetched.items.forEach((item) => {
       const detail = details.get(String(item.product_id || item.id || "")) || details.get(String(item.offer_id || "")) || details.get(String(item.sku || "")) || {};
+      const promotion = promotionLookupKeys({ ...item, ...detail }).map((key) => promotionPrices.get(key)).find(Boolean) || null;
       const stocks = Array.isArray(item.stocks) && item.stocks.length ? item.stocks : [item];
-      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail, singleWarehouse)));
+      stocks.forEach((stock) => rows.push(normalizeStockRow(item, stock, detail, singleWarehouse, promotion)));
     });
     const stockTypeWarehouses = [...new Map(rows
       .filter((row) => row.warehouseId || row.warehouseName)
@@ -1681,7 +1821,12 @@ async function getOzonInventory(env, searchParams, headers = {}) {
       warehouses,
       count: rows.length,
       productCount: new Set(rows.map((row) => row.productId || row.offerId || row.sku)).size,
-      warning: stockWarehouses.length ? "" : "没有从 Ozon API 获取到可提交库存的仓库 ID，后台编号 111/222 不能直接提交。",
+      activityPriceCount: new Set(rows.filter((row) => row.activityPrice).map((row) => row.productId || row.offerId || row.sku)).size,
+      promotionWarning: promotionResult.error || "",
+      warning: [
+        stockWarehouses.length ? "" : "没有从 Ozon API 获取到可提交库存的仓库 ID，后台编号 111/222 不能直接提交。",
+        promotionResult.error ? `活动价拉取失败：${promotionResult.error}` : "",
+      ].filter(Boolean).join(" "),
       warehouseAttempts: searchParams.get("debug") === "1" ? warehouseProbe.attempts : undefined,
     };
   } catch (e) {
