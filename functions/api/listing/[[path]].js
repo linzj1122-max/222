@@ -512,12 +512,12 @@ function openaiBaseUrl(env) {
 
 function ozonStores(env) {
   const stores = [];
-  for (let index = 1; index <= 10; index += 1) {
+  for (let index = 1; index <= 50; index += 1) {
     const name = env[`OZON_STORE_${index}_NAME`];
     const clientId = env[`OZON_STORE_${index}_CLIENT_ID`];
     const apiKey = env[`OZON_STORE_${index}_API_KEY`];
     if (clientId && apiKey) {
-      stores.push({ name: name || `Ozon 店铺 ${index}`, clientId, apiKey });
+      stores.push({ index: index - 1, envNumber: index, name: name || `Ozon 店铺 ${index}`, clientId, apiKey });
     }
   }
   if (env.OZON_STORES) {
@@ -526,7 +526,7 @@ function ozonStores(env) {
       if (Array.isArray(parsed)) {
         parsed.forEach((item, index) => {
           if (item.clientId && item.apiKey) {
-            stores.push({ name: item.name || `Ozon 店铺 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
+            stores.push({ index, envNumber: index + 1, name: item.name || `Ozon 店铺 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
           }
         });
       }
@@ -535,28 +535,28 @@ function ozonStores(env) {
     }
   }
   if (env.OZON_CLIENT_ID && env.OZON_API_KEY) {
-    stores.push({ name: env.OZON_STORE_NAME || "Ozon 店铺", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
+    stores.push({ index: stores.length, envNumber: 0, name: env.OZON_STORE_NAME || "Ozon 店铺", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
   }
   return stores;
 }
 
 function wbStores(env) {
   const stores = [];
-  for (let index = 1; index <= 10; index += 1) {
+  for (let index = 1; index <= 50; index += 1) {
     const name = env[`WB_STORE_${index}_NAME`];
     const token = env[`WB_STORE_${index}_API_TOKEN`] || env[`WB_STORE_${index}_TOKEN`];
-    if (token) stores.push({ name: name || `WB 店铺 ${index}`, token });
+    if (token) stores.push({ index: index - 1, envNumber: index, name: name || `WB 店铺 ${index}`, token });
   }
   if (env.WB_API_TOKEN) {
-    stores.push({ name: env.WB_STORE_NAME || "WB 店铺", token: env.WB_API_TOKEN });
+    stores.push({ index: stores.length, envNumber: 0, name: env.WB_STORE_NAME || "WB 店铺", token: env.WB_API_TOKEN });
   }
   return stores;
 }
 
 function storeList(env) {
   return [
-    ...ozonStores(env).map((s, i) => ({ index: i, platform: "Ozon", name: s.name })),
-    ...wbStores(env).map((s, i) => ({ index: i, platform: "WB", name: s.name })),
+    ...ozonStores(env).map((s, i) => ({ index: Number.isFinite(Number(s.index)) ? Number(s.index) : i, platform: "Ozon", name: s.name })),
+    ...wbStores(env).map((s, i) => ({ index: Number.isFinite(Number(s.index)) ? Number(s.index) : i, platform: "WB", name: s.name })),
   ];
 }
 
@@ -565,10 +565,10 @@ function resolveStore(env, headers, platform, storeIndex) {
   const pf = String(platform || "Ozon").toLowerCase();
   if (pf === "wb") {
     const stores = wbStores(env);
-    return stores[storeIndex] || stores[0] || null;
+    return stores.find((store) => Number(store.index) === Number(storeIndex)) || stores[storeIndex] || stores[0] || null;
   }
   const stores = ozonStores(env);
-  return stores[storeIndex] || stores[0] || null;
+  return stores.find((store) => Number(store.index) === Number(storeIndex)) || stores[storeIndex] || stores[0] || null;
 }
 
 // ---------- 类目抓取 ----------

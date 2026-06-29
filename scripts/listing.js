@@ -22,6 +22,9 @@
   const TAB_ID = "listing";
   const TAB_LABEL = "🚀 商品上架";
 
+  const REMOVED_STORE_NAMES = new Set(["ИП Никитина Н.С.1", "ИП Никитина Н.С.2"]);
+  const normalizeStoreName = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const isRemovedStoreName = (value) => REMOVED_STORE_NAMES.has(normalizeStoreName(value));
   const API = (sub) => `/api/listing/${sub}`;
   let listingStores = [];
 
@@ -469,6 +472,7 @@
       const data = await readJsonResponse(res);
       envStores = (data.stores || [])
         .filter((store) => normalizePlatform(store.platform) === platform)
+        .filter((store) => !isRemovedStoreName(store.name))
         .map((store) => ({
           source: "env",
           apiIndex: Number(store.index || 0),
@@ -478,13 +482,18 @@
         }));
       const integrationsRes = await fetch("/api/integrations");
       const integrationsData = await readJsonResponse(integrationsRes);
-      const byIndex = new Map(envStores.map((store) => [Number(store.apiIndex || 0), store]));
-      (Array.isArray(integrationsData) ? integrationsData : [])
+      const configuredStores = (Array.isArray(integrationsData) ? integrationsData : [])
         .filter((store) => normalizePlatform(store.platform) === platform)
+        .filter((store) => !isRemovedStoreName(store.name));
+      const configuredNames = new Set(configuredStores.map((store) => store.name).filter(Boolean));
+      if (configuredNames.size) envStores = envStores.filter((store) => configuredNames.has(store.name));
+      const byName = new Map(envStores.map((store) => [store.name || `index:${Number(store.apiIndex || 0)}`, store]));
+      configuredStores
         .forEach((store) => {
           const apiIndex = Number(store.index || 0);
-          if (!byIndex.has(apiIndex)) {
-            byIndex.set(apiIndex, {
+          const key = store.name || `index:${apiIndex}`;
+          if (!byName.has(key)) {
+            byName.set(key, {
               source: "cloudflare-config",
               apiIndex,
               platform: normalizePlatform(store.platform),
@@ -494,7 +503,7 @@
             });
           }
         });
-      envStores = [...byIndex.values()].sort((a, b) => Number(a.apiIndex || 0) - Number(b.apiIndex || 0));
+      envStores = [...byName.values()].sort((a, b) => Number(a.apiIndex || 0) - Number(b.apiIndex || 0));
     } catch (e) {
       console.warn("[listing] 后端店铺加载失败", e);
     }

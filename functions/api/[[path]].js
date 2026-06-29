@@ -343,6 +343,99 @@ function dataCacheKey(prefix, store, from, to, extra = "") {
   return `data:${prefix}:${storeId}:${from}:${to}${extra ? ":" + extra : ""}`;
 }
 
+function cacheIdPart(value) {
+  return String(value || "default").replace(/[^a-zA-Z0-9._:-]+/g, "_").slice(0, 80);
+}
+
+async function deleteKvPrefixes(env, prefixes = []) {
+  const deleted = {};
+  if (!env.LISTING_CACHE) return { error: "KV not bound", deleted, total: 0 };
+  const cleanPrefixes = [...new Set(prefixes.filter(Boolean))];
+  let total = 0;
+  try {
+    for (const prefix of cleanPrefixes) {
+      let cursor;
+      deleted[prefix] = deleted[prefix] || 0;
+      do {
+        const listResult = await env.LISTING_CACHE.list({ prefix, cursor });
+        cursor = listResult.list_complete ? null : listResult.cursor;
+        for (const item of (listResult.keys || [])) {
+          await env.LISTING_CACHE.delete(item.name);
+          deleted[prefix] += 1;
+          total += 1;
+        }
+      } while (cursor);
+    }
+  } catch (error) {
+    return { error: error.message || String(error), deleted, total };
+  }
+  return { deleted, total };
+}
+
+async function deleteKvKeys(env, keys = []) {
+  const deleted = {};
+  if (!env.LISTING_CACHE) return { error: "KV not bound", deleted, total: 0 };
+  let total = 0;
+  for (const key of [...new Set(keys.filter(Boolean))]) {
+    try {
+      await env.LISTING_CACHE.delete(key);
+      deleted[key] = 1;
+      total += 1;
+    } catch (error) {
+      deleted[key] = error.message || String(error);
+    }
+  }
+  return { deleted, total };
+}
+
+function cloudflareDeletedStoreCacheRefs(platform, number, envVars = {}, body = {}) {
+  const pf = normalizePlatform(platform);
+  const namePrefix = pf === "WB" ? `WB_STORE_${number}` : `OZON_STORE_${number}`;
+  const name = String(body.name || readCfEnvValue(envVars[`${namePrefix}_NAME`]) || "").trim();
+  const clientId = pf === "Ozon"
+    ? String(body.clientId || readCfEnvValue(envVars[`OZON_STORE_${number}_CLIENT_ID`]) || "").trim()
+    : "";
+  const token = pf === "WB"
+    ? String(readCfEnvValue(envVars[`WB_STORE_${number}_API_TOKEN`]) || readCfEnvValue(envVars[`WB_STORE_${number}_TOKEN`]) || "").trim()
+    : "";
+  const identifiers = [...new Set([clientId, token, name].filter(Boolean).map(cacheIdPart))];
+  const lowerPlatform = cacheIdPart(pf).toLowerCase();
+  const catPlatforms = [...new Set([pf, String(pf).toLowerCase()])];
+  const keys = ["config:integrations:cloudflare", "ads:cache"];
+  const prefixes = ["data:orders:", "data:store:", "data:daily:", "data:products:", "data:ads:"];
+  identifiers.forEach((identifier) => {
+    prefixes.push(`flow:${lowerPlatform}:${identifier}:`);
+    keys.push(`warehouses:${lowerPlatform}:${identifier}`);
+    catPlatforms.forEach((catPlatform) => keys.push(`cat:${catPlatform}:${identifier}`));
+  });
+  if (clientId) prefixes.push(`${clientId}|`);
+  return { name, clientId, token: token ? "***" : "", identifiers, keys, prefixes };
+}
+
+function integrationItemCacheRefs(item = {}) {
+  const pf = normalizePlatform(item.platform || "Ozon");
+  const clientId = String(item.clientId || "").includes("*") ? "" : String(item.clientId || "").trim();
+  const identifiers = [...new Set([clientId, item.name].filter(Boolean).map(cacheIdPart))];
+  const lowerPlatform = cacheIdPart(pf).toLowerCase();
+  const catPlatforms = [...new Set([pf, String(pf).toLowerCase()])];
+  const keys = ["config:integrations:cloudflare", "ads:cache"];
+  const prefixes = ["data:orders:", "data:store:", "data:daily:", "data:products:", "data:ads:"];
+  identifiers.forEach((identifier) => {
+    prefixes.push(`flow:${lowerPlatform}:${identifier}:`);
+    keys.push(`warehouses:${lowerPlatform}:${identifier}`);
+    catPlatforms.forEach((catPlatform) => keys.push(`cat:${catPlatform}:${identifier}`));
+  });
+  if (clientId) prefixes.push(`${clientId}|`);
+  return { name: item.name || "", clientId, identifiers, keys, prefixes };
+}
+
+async function cleanupDeletedStoreKv(env, refs) {
+  if (!env.LISTING_CACHE) return { error: "KV not bound" };
+  const keys = await deleteKvKeys(env, refs.keys || []);
+  const prefixes = await deleteKvPrefixes(env, refs.prefixes || []);
+  return { keys, prefixes };
+}
+
 // 读缓存,返回 { data, ts } 或 null
 async function kvGetData(env, key) {
   if (!env.LISTING_CACHE) return null;
@@ -745,31 +838,35 @@ function cloudflareProjectIntegrations(project) {
 
 async function integrationsWithCloudflareConfig(env) {
   const runtime = integrations(env);
-  const byKey = new Map(runtime.map((item) => [`${item.platform}:${item.index}`, item]));
   const config = cloudflareManagementConfig(env);
   if (config.missing.length) return runtime;
   const cacheKey = "config:integrations:cloudflare";
-  const cached = await kvGetData(env, cacheKey);
-  if (Array.isArray(cached?.data)) {
-    for (const item of cached.data) {
-      const key = `${item.platform}:${item.index}`;
-      if (!byKey.has(key)) byKey.set(key, item);
-    }
-    return [...byKey.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
-  }
   try {
     const encodedProject = encodeURIComponent(config.projectName);
     const project = await cloudflarePagesRequest(env, "GET", `/accounts/${config.accountId}/pages/projects/${encodedProject}`);
     const configured = cloudflareProjectIntegrations(project);
-    await kvPutData(env, cacheKey, configured, 10 * 60);
-    for (const item of configured) {
-      const key = `${item.platform}:${item.index}`;
-      if (!byKey.has(key)) byKey.set(key, item);
+    const cached = await kvGetData(env, cacheKey);
+    if (Array.isArray(cached?.data) && cached.data.length) {
+      const liveKeys = new Set(configured.map((item) => `${item.platform}:${item.index}:${item.name || ""}`));
+      const removed = cached.data.filter((item) => !liveKeys.has(`${item.platform}:${item.index}:${item.name || ""}`));
+      for (const item of removed) {
+        await cleanupDeletedStoreKv(env, integrationItemCacheRefs(item));
+      }
     }
+    await kvPutData(env, cacheKey, configured, 10 * 60);
+    return configured.sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
   } catch {
+    const byKey = new Map(runtime.map((item) => [`${item.platform}:${item.index}`, item]));
+    const cached = await kvGetData(env, cacheKey);
+    if (Array.isArray(cached?.data)) {
+      for (const item of cached.data) {
+        const key = `${item.platform}:${item.index}`;
+        if (!byKey.has(key)) byKey.set(key, item);
+      }
+      return [...byKey.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
+    }
     return runtime;
   }
-  return [...byKey.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || Number(a.index || 0) - Number(b.index || 0));
 }
 
 function nextCloudflareStoreIndex(project, platform) {
@@ -940,6 +1037,7 @@ async function deleteCloudflareStore(env, id, body = {}) {
   if (!existing.length) {
     return { ok: false, error: `Cloudflare 项目里没有找到 ${target.platform} 店铺 ${target.number} 的环境变量。` };
   }
+  const cacheRefs = cloudflareDeletedStoreCacheRefs(target.platform, target.number, envVars, body);
   const deletePatch = Object.fromEntries(existing.map((name) => [name, null]));
   await cloudflarePagesRequest(env, "PATCH", `/accounts/${config.accountId}/pages/projects/${encodedProject}`, {
     deployment_configs: {
@@ -953,15 +1051,15 @@ async function deleteCloudflareStore(env, id, body = {}) {
   } catch (error) {
     redeploy = { ok: false, error: error.message || String(error) };
   }
-  if (env.LISTING_CACHE) {
-    try { await env.LISTING_CACHE.delete("config:integrations:cloudflare"); } catch {}
-  }
+  const cleaned = await cleanupDeletedStoreKv(env, cacheRefs);
   return {
     ok: true,
     id: target.id,
     platform: target.platform,
     index: target.index,
+    storeName: cacheRefs.name,
     variables: existing,
+    cleaned,
     redeploy,
     requiresRedeploy: !redeploy.ok,
     message: redeploy.ok
@@ -1071,8 +1169,8 @@ async function fetchStoreAnalytics(env, from, to) {
 // 用 KV list 遍历,删除 data:orders:* 和 data:store:* 开头的 key
 async function cleanStaleDataCache(env) {
   if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
-  const deleted = { orders: 0, store: 0, daily: 0, total: 0 };
-  const prefixes = ["data:orders:", "data:store:", "data:daily:", "data:products:"];
+  const deleted = { orders: 0, store: 0, daily: 0, products: 0, ads: 0, total: 0 };
+  const prefixes = ["data:orders:", "data:store:", "data:daily:", "data:products:", "data:ads:"];
   try {
     let cursor;
     do {
@@ -1085,6 +1183,8 @@ async function cleanStaleDataCache(env) {
         if (k.startsWith("data:orders:")) deleted.orders++;
         else if (k.startsWith("data:store:")) deleted.store++;
         else if (k.startsWith("data:daily:")) deleted.daily++;
+        else if (k.startsWith("data:products:")) deleted.products++;
+        else if (k.startsWith("data:ads:")) deleted.ads++;
         deleted.total++;
       }
     } while (cursor);
@@ -1097,6 +1197,18 @@ async function cleanStaleDataCache(env) {
 // 预热缓存:抓取常见日期范围的订单+店铺分析,写入 KV。
 // 范围:今天 / 7天 / 28天 / 本月 / 上月(均按莫斯科时间)。
 // 只缓存非空结果,避免把拉取失败缓存住。
+async function cleanSalesTrendCache(env) {
+  if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
+  const result = await deleteKvPrefixes(env, ["data:orders:", "data:daily:"]);
+  const byPrefix = result.deleted || {};
+  return {
+    orders: byPrefix["data:orders:"] || 0,
+    daily: byPrefix["data:daily:"] || 0,
+    total: result.total || 0,
+    error: result.error,
+  };
+}
+
 async function precacheCommonRanges(env) {
   if (!env.LISTING_CACHE) return { error: "未绑定 KV" };
   // 用莫斯科时间算今天
@@ -2432,6 +2544,10 @@ export async function onRequest(context) {
     // 单独清空所有订单/分析缓存(不带预热)
     if (path === "precache/clean") {
       const cleaned = await cleanStaleDataCache(env);
+      return json({ ok: true, cleaned, ts: Date.now() });
+    }
+    if (path === "cache/sales-trend/clean") {
+      const cleaned = await cleanSalesTrendCache(env);
       return json({ ok: true, cleaned, ts: Date.now() });
     }
     return json({ error: "Not found", path }, 404);

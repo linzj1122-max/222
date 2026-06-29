@@ -25,10 +25,16 @@ const initialProducts = [
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
     const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
     const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v2";
+    const trendOrdersKey = "ozon_wb_trend_orders_v1";
     const orderRangeCacheKey = "ozon_wb_order_range_cache_v2";
     const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v2";
     const summarySnapshotKey = "ozon_wb_summary_snapshot_v1";
     const platformFeesKey = "ozon_wb_platform_fees_v1";
+    const removedStoreCleanupKey = "ozon_wb_removed_store_cleanup_v20260629_nikitina";
+    const removedStoreRemoteCleanupKey = "ozon_wb_removed_store_remote_cleanup_v20260629_nikitina";
+    const removedStoreNames = new Set(["ИП Никитина Н.С.1", "ИП Никитина Н.С.2"]);
+    const normalizeStoreName = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const isFrontendRemovedStoreName = (value) => removedStoreNames.has(normalizeStoreName(value));
     const builtInOzonLocalFees = {
       "3555785455": { defaultPrice: 2812.68, commissionRate: 0.47, logisticsFee: 146.9176, handlingFee: 25.9, acquiringFee: 11.1049, otherFixedFee: 10.8444 },
       "3592078186": { defaultPrice: 3050.0357, commissionRate: 0.47, logisticsFee: 249.9216, handlingFee: 24.5982, acquiringFee: 15.6189, otherFixedFee: 13.4782 },
@@ -145,7 +151,7 @@ const initialProducts = [
     products.forEach((p) => { if (codeRenames[String(p.sku)]) p.code = codeRenames[String(p.sku)]; });
     products = products.map((p) => ensureProductScope(p));
     let orders = JSON.parse(localStorage.getItem(orderKey) || "[]");
-    let trendOrders = JSON.parse(localStorage.getItem("ozon_wb_trend_orders_v1") || "[]");
+    let trendOrders = JSON.parse(localStorage.getItem(trendOrdersKey) || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     function sanitizeApiConfig(item = {}) {
       return {
@@ -158,7 +164,9 @@ const initialProducts = [
       };
     }
     function sanitizeApiConfigs(list) {
-      return (Array.isArray(list) ? list : []).map(sanitizeApiConfig);
+      return (Array.isArray(list) ? list : [])
+        .map(sanitizeApiConfig)
+        .filter((item) => !isFrontendRemovedStoreName(item.name));
     }
     let apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
     try { localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs)); } catch {}
@@ -201,6 +209,44 @@ const initialProducts = [
       try {
         localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
         localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
+      } catch {}
+    }
+    if (localStorage.getItem(removedStoreCleanupKey) !== "1") {
+      orders = orders.filter((row) => !isFrontendRemovedStoreName(row.store));
+      trendOrders = [];
+      importedAds = importedAds.filter((row) => !isFrontendRemovedStoreName(row.store));
+      trendDailyAnalytics = trendDailyAnalytics.filter((row) => !isFrontendRemovedStoreName(row.store));
+      apiConfigs = apiConfigs.filter((item) => !isFrontendRemovedStoreName(item.name));
+      storeGroups.forEach((group) => {
+        if (Array.isArray(group.stores)) group.stores = group.stores.filter((name) => !isFrontendRemovedStoreName(name));
+      });
+      orderRangeCache = {};
+      Object.keys(storeAnalyticsCache).forEach((key) => {
+        const entry = storeAnalyticsCache[key];
+        if (Array.isArray(entry?.rows)) {
+          entry.rows = entry.rows.filter((row) => !isFrontendRemovedStoreName(row.store));
+          if (!entry.rows.length) delete storeAnalyticsCache[key];
+        }
+      });
+      Object.keys(adsRowsCache).forEach((key) => {
+        const entry = adsRowsCache[key];
+        if (Array.isArray(entry?.rows)) entry.rows = entry.rows.filter((row) => !isFrontendRemovedStoreName(row.store));
+        if (Array.isArray(entry?.status)) entry.status = entry.status.filter((row) => !isFrontendRemovedStoreName(row.store));
+        if ((!entry?.rows || !entry.rows.length) && (!entry?.status || !entry.status.length)) delete adsRowsCache[key];
+      });
+      adsTaskCache = {};
+      try {
+        localStorage.setItem(orderKey, JSON.stringify(orders));
+        localStorage.setItem(trendOrdersKey, JSON.stringify(trendOrders));
+        localStorage.setItem(importedAdsKey, JSON.stringify(importedAds));
+        localStorage.setItem(apiConfigKey, JSON.stringify(apiConfigs));
+        localStorage.setItem(storeGroupKey, JSON.stringify(storeGroups));
+        localStorage.setItem(orderRangeCacheKey, JSON.stringify(orderRangeCache));
+        localStorage.setItem(storeAnalyticsCacheKey, JSON.stringify(storeAnalyticsCache));
+        localStorage.setItem(adsRowsCacheKey, JSON.stringify(adsRowsCache));
+        localStorage.setItem(adsTaskCacheKey, JSON.stringify(adsTaskCache));
+        localStorage.setItem(trendDailyAnalyticsKey, JSON.stringify(trendDailyAnalytics));
+        localStorage.setItem(removedStoreCleanupKey, "1");
       } catch {}
     }
     let revenueChartHitboxes = [];
@@ -433,7 +479,6 @@ const initialProducts = [
       $("orderDateRangePanel")?.classList.remove("open");
       await reloadOrdersForRange(orderDateFrom, orderDateTo);
     };
-    const trendOrdersKey = "ozon_wb_trend_orders_v1";
     const orderIdentity = (order) => `${order.date}|${order.store}|${order.orderNo}|${order.sku}`;
     const mergeIntoTrendOrders = (newOrders) => {
       if (!Array.isArray(newOrders) || !newOrders.length) return;
@@ -500,6 +545,7 @@ const initialProducts = [
               if (!adsTaskCache[k]) adsTaskCache[k] = data.tasks[k];
             }
           }
+          if (syncStoresWithConfiguredStores()) syncAdsCacheToCloud();
           return cloudKeys.length > 0;
         }
       } catch (e) {
@@ -594,6 +640,7 @@ const initialProducts = [
       if (!options.forceCreate && adsRowsCache[key]) {
         backendAds = adsRowsCache[key].rows || [];
         adsStatusRows = adsRowsCache[key].status || [];
+        syncStoresWithConfiguredStores();
       }
       if (options.cacheOnly) return;
       if (backendAds.length === 0) { backendAds = []; adsStatusRows = []; }
@@ -632,6 +679,7 @@ const initialProducts = [
           save();
           syncAdsCacheToCloud();
         }
+        syncStoresWithConfiguredStores();
         fetchAdImagesForRows(backendAds).then(renderAds);
         const found = adsStatusRows.find((row) => row.uuid);
         if (found?.uuid) {
@@ -648,6 +696,7 @@ const initialProducts = [
           backendAds = [];
           adsStatusRows = [{ store: "API", state: "ERROR", error: error.message || String(error) }];
         }
+        syncStoresWithConfiguredStores();
       }
     }
 
@@ -717,6 +766,7 @@ const initialProducts = [
         if (adsRowsCache[key]?.rows?.length) {
           backendAds = adsRowsCache[key].rows || [];
           adsStatusRows = adsRowsCache[key].status || [];
+          syncStoresWithConfiguredStores();
           renderAds();
           return;
         }
@@ -740,12 +790,14 @@ const initialProducts = [
         if (missingDays.length === 0 && cachedRows.length > 0) {
           backendAds = cachedRows;
           adsStatusRows = [];
+          syncStoresWithConfiguredStores();
           renderAds();
           return;
         }
         // 如果部分天数有缓存,先显示已有数据
         if (cachedRows.length > 0) {
           backendAds = cachedRows;
+          syncStoresWithConfiguredStores();
           renderAds();
         }
         // 3. 抓取缺失的天数(如果有)
@@ -760,6 +812,7 @@ const initialProducts = [
           });
           if (cachedRows.length > 0) {
             backendAds = [...cachedRows, ...newRows];
+            syncStoresWithConfiguredStores();
           }
         }
         renderAds();
@@ -786,6 +839,7 @@ const initialProducts = [
         orders = cached.orders;
         loadBackendAds({ cacheOnly: true });
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
+        syncStoresWithConfiguredStores();
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地缓存读取 ${orders.length} 条订单（${cached.fetchDate} 抓取）。`;
         return true;   // 本地命中,无需再调 API
       }
@@ -795,6 +849,7 @@ const initialProducts = [
         orders = ordersFromTrend(orderDateFrom, orderDateTo);
         if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
         orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday: false, updatedAt: new Date().toISOString() };
+        syncStoresWithConfiguredStores();
         if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已从本地历史数据筛选 ${orders.length} 条订单。`;
         return true;   // 本地命中,无需再调 API
       }
@@ -809,6 +864,7 @@ const initialProducts = [
       loadBackendAds({ cacheOnly: true });
       if (adRowsArray().length) orders = mergeAdRowsIntoOrders(orders, adRowsArray());
       orderRangeCache[key] = { orders, fetchDate: mskFetchBoundaryDate(), includeToday, updatedAt: new Date().toISOString() };
+      syncStoresWithConfiguredStores();
       if ($("orderRangeStatus")) $("orderRangeStatus").textContent = `订单范围：${orderDateFrom} 至 ${orderDateTo}，已抓取并缓存 ${orders.length} 条订单。`;
       save();
       return false;   // 走了 API
@@ -880,12 +936,14 @@ const initialProducts = [
       const cached = storeAnalyticsCache[key];
       if (!rangeNeedsRefresh(cached, orderDateFrom, orderDateTo, options.force) && Array.isArray(cached?.rows) && cached.rows.length) {
         storeAnalyticsRows = cached.rows;
+        syncStoresWithConfiguredStores();
         return true;
       }
       // 2) 本地累积覆盖 → 直接聚合秒出
       if (!options.force && dailyAnalyticsCoversRange(orderDateFrom, orderDateTo)) {
         storeAnalyticsRows = aggregateDailyAnalytics(orderDateFrom, orderDateTo);
         storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
+        syncStoresWithConfiguredStores();
         return true;
       }
       // 3) 调 API:抓一个更大的范围(本月),累积到 trendDailyAnalytics,以后子范围都能本地秒出
@@ -906,6 +964,7 @@ const initialProducts = [
         // 从累积数据聚合出当前范围
         storeAnalyticsRows = aggregateDailyAnalytics(orderDateFrom, orderDateTo);
         storeAnalyticsCache[key] = { rows: storeAnalyticsRows, fetchDate: mskFetchBoundaryDate(), updatedAt: new Date().toISOString() };
+        syncStoresWithConfiguredStores();
         save();
         return false;
       } catch {
@@ -1062,13 +1121,23 @@ const initialProducts = [
     }
 
     function allStoreNames() {
+      const configured = configuredStoreNames();
+      if (configured.length) return configured;
       const names = new Set();
-      apiConfigs.forEach((item) => item.name && names.add(item.name));
-      orders.forEach((order) => order.store && names.add(order.store));
-      importedAds.forEach((row) => row.store && names.add(row.store));
-      adRowsArray().forEach((row) => row.store && names.add(row.store));
-      (Array.isArray(storeAnalyticsRows) ? storeAnalyticsRows : []).forEach((row) => row.store && names.add(row.store));
+      apiConfigs.forEach((item) => item.name && !isFrontendRemovedStoreName(item.name) && names.add(item.name));
+      orders.forEach((order) => order.store && !isFrontendRemovedStoreName(order.store) && names.add(order.store));
+      importedAds.forEach((row) => row.store && !isFrontendRemovedStoreName(row.store) && names.add(row.store));
+      adRowsArray().forEach((row) => row.store && !isFrontendRemovedStoreName(row.store) && names.add(row.store));
+      (Array.isArray(storeAnalyticsRows) ? storeAnalyticsRows : []).forEach((row) => row.store && !isFrontendRemovedStoreName(row.store) && names.add(row.store));
       return [...names].sort();
+    }
+
+    function configuredStoreNameSet() {
+      return new Set(apiConfigs.map((item) => item.name).filter((name) => name && !isFrontendRemovedStoreName(name)));
+    }
+
+    function configuredStoreNames() {
+      return [...configuredStoreNameSet()].sort();
     }
 
     function storesInGroup(groupId) {
@@ -1095,8 +1164,10 @@ const initialProducts = [
     function purgeStoreData(storeName) {
       orders = orders.filter((order) => order.store !== storeName);
       trendOrders = trendOrders.filter((order) => order.store !== storeName);
+      trendDailyAnalytics = trendDailyAnalytics.filter((row) => row.store !== storeName);
       importedAds = importedAds.filter((row) => row.store !== storeName);
       storeAnalyticsRows = storeAnalyticsRows.filter((row) => row.store !== storeName);
+      if (Array.isArray(analyticsProductRows)) analyticsProductRows = analyticsProductRows.filter((row) => row.store !== storeName);
       Object.keys(orderRangeCache).forEach((key) => {
         const entry = orderRangeCache[key];
         if (entry?.orders) {
@@ -1123,6 +1194,31 @@ const initialProducts = [
       storeGroups.forEach((group) => {
         if (Array.isArray(group.stores)) group.stores = group.stores.filter((name) => name !== storeName);
       });
+    }
+
+    function syncStoresWithConfiguredStores() {
+      const apiCount = apiConfigs.length;
+      apiConfigs = apiConfigs.filter((item) => !isFrontendRemovedStoreName(item.name));
+      const valid = configuredStoreNameSet();
+      const seen = new Set();
+      orders.forEach((row) => row.store && seen.add(row.store));
+      trendOrders.forEach((row) => row.store && seen.add(row.store));
+      trendDailyAnalytics.forEach((row) => row.store && seen.add(row.store));
+      importedAds.forEach((row) => row.store && seen.add(row.store));
+      adRowsArray().forEach((row) => row.store && seen.add(row.store));
+      (Array.isArray(storeAnalyticsRows) ? storeAnalyticsRows : []).forEach((row) => row.store && seen.add(row.store));
+      (Array.isArray(analyticsProductRows) ? analyticsProductRows : []).forEach((row) => row.store && seen.add(row.store));
+      storeGroups.forEach((group) => (group.stores || []).forEach((name) => seen.add(name)));
+      const stale = [...seen].filter((name) => isFrontendRemovedStoreName(name) || (valid.size && !valid.has(name)));
+      stale.forEach((name) => purgeStoreData(name));
+      const selectionValid = (value) => value === "all" || (!isFrontendRemovedStoreName(value) && valid.has(value)) || (String(value).startsWith("group:") && storeGroups.some((group) => `group:${group.id}` === value));
+      if (!selectionValid(selectedStore)) selectedStore = "all";
+      if (!selectionValid(chartStore)) chartStore = "all";
+      if ($("adStoreSelect") && !selectionValid($("adStoreSelect").value || "all")) $("adStoreSelect").value = "all";
+      if (!selectionValid(analyticsStoreValue)) analyticsStoreValue = "all";
+      if (storeOverviewGroup !== "all" && !storeGroups.some((group) => group.id === storeOverviewGroup)) storeOverviewGroup = "all";
+      if (stale.length || apiConfigs.length !== apiCount) save();
+      return Boolean(stale.length || apiConfigs.length !== apiCount);
     }
 
     function renderChartControls() {
@@ -1355,6 +1451,7 @@ const initialProducts = [
         if (force) params.set("force", "1");
         const resp = await apiRequest(`/api/analytics/products?${params.toString()}`);
         analyticsProductRows = Array.isArray(resp) ? resp : (Array.isArray(resp?.result) ? resp.result : []);
+        syncStoresWithConfiguredStores();
         if ($("analyticsStatus")) $("analyticsStatus").textContent = `已加载 ${analyticsProductRows.length} 个SKU(${from} 至 ${to})`;
       } catch (e) {
         analyticsProductRows = [];
@@ -1366,7 +1463,11 @@ const initialProducts = [
     function renderAnalyticsStoreFilter() {
       const select = $("analyticsStoreFilter");
       if (!select) return;
-      const stores = [...new Set(analyticsProductRows.map((r) => r.store).filter(Boolean))].sort();
+      const configured = configuredStoreNameSet();
+      const stores = [...new Set(analyticsProductRows.map((r) => r.store).filter(Boolean))]
+        .filter((name) => !isFrontendRemovedStoreName(name))
+        .filter((name) => !configured.size || configured.has(name))
+        .sort();
       const current = analyticsStoreValue;
       const validValues = new Set(["all", ...stores, ...storeGroups.map((group) => `group:${group.id}`)]);
       const groupOptions = storeGroups.length
@@ -1385,7 +1486,8 @@ const initialProducts = [
       const summary = $("analyticsSummary");
       if (!body) return;
       const kw = analyticsSkuValue.trim().toLowerCase();
-      let rows = analyticsProductRows.slice();
+      const configured = configuredStoreNameSet();
+      let rows = analyticsProductRows.filter((row) => !isFrontendRemovedStoreName(row.store) && (!configured.size || configured.has(row.store)));
       if (String(analyticsStoreValue).startsWith("group:")) {
         const groupStores = storesInGroup(analyticsStoreValue.slice("group:".length));
         rows = rows.filter((r) => groupStores.includes(r.store));
@@ -2771,15 +2873,25 @@ const initialProducts = [
       if (!$("inventoryStore")) return;
       try {
         const data = await apiRequest("/api/listing/stores");
-        const runtimeStores = (data.stores || []).filter((store) => normalizePlatform(store.platform) === "Ozon");
-        const byIndex = new Map(runtimeStores.map((store) => [Number(store.index || 0), store]));
+        const configuredOzon = apiConfigs.filter((store) => normalizePlatform(store.platform) === "Ozon");
+        const configuredNames = new Set(configuredOzon.map((store) => store.name).filter(Boolean));
+        const runtimeStores = (data.stores || [])
+          .filter((store) => normalizePlatform(store.platform) === "Ozon")
+          .filter((store) => !isFrontendRemovedStoreName(store.name))
+          .filter((store) => !configuredNames.size || configuredNames.has(store.name));
+        const configuredByName = new Map(configuredOzon.map((store) => [store.name, store]).filter(([name]) => Boolean(name)));
+        const byName = new Map(runtimeStores.map((store) => {
+          const configured = configuredByName.get(store.name);
+          return [store.name || `index:${Number(store.index || 0)}`, { ...store, index: configured ? Number(configured.index || 0) : Number(store.index || 0) }];
+        }));
         apiConfigs
           .filter((store) => normalizePlatform(store.platform) === "Ozon")
           .forEach((store) => {
             const index = Number(store.index || 0);
-            if (!byIndex.has(index)) byIndex.set(index, { index, platform: "Ozon", name: store.name || `Ozon 店铺 ${index + 1}`, pendingRuntime: true });
+            const key = store.name || `index:${index}`;
+            if (!byName.has(key)) byName.set(key, { index, platform: "Ozon", name: store.name || `Ozon 店铺 ${index + 1}`, pendingRuntime: true });
           });
-        inventoryStores = [...byIndex.values()].sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
+        inventoryStores = [...byName.values()].sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
       } catch (error) {
         inventoryStores = apiConfigs
           .filter((store) => normalizePlatform(store.platform) === "Ozon")
@@ -3058,9 +3170,20 @@ const initialProducts = [
         }
       }
       if (storeName) purgeStoreData(storeName);
-      apiConfigs = apiConfigs.filter((entry) => entry.id !== id);
+      if (backendEnabled && cloudDelete) {
+        try {
+          await reloadApiConfigs();
+        } catch {
+          apiConfigs = apiConfigs.filter((entry) => entry.id !== id);
+          syncStoresWithConfiguredStores();
+        }
+      } else {
+        apiConfigs = apiConfigs.filter((entry) => entry.id !== id);
+        syncStoresWithConfiguredStores();
+      }
       if (String(selectedStore) === storeName) selectedStore = "all";
       renderAll();
+      loadInventoryStores();
     };
 
     function renderStoreGroups() {
@@ -3881,6 +4004,7 @@ const initialProducts = [
       if (!backendEnabled) return apiConfigs;
       const backendIntegrations = await apiRequest("/api/integrations");
       apiConfigs = sanitizeApiConfigs(backendIntegrations);
+      syncStoresWithConfiguredStores();
       return apiConfigs;
     }
 
@@ -4330,6 +4454,12 @@ const initialProducts = [
         } catch {
           apiConfigs = sanitizeApiConfigs(JSON.parse(localStorage.getItem(apiConfigKey) || "[]"));
         }
+      }
+      syncStoresWithConfiguredStores();
+      if (backendEnabled && localStorage.getItem(removedStoreRemoteCleanupKey) !== "1") {
+        apiRequest("/api/cache/sales-trend/clean")
+          .then(() => localStorage.setItem(removedStoreRemoteCleanupKey, "1"))
+          .catch((error) => console.warn("[cache] sales trend clean failed:", error.message || error));
       }
       initCostScope();
       resetCostForm();
