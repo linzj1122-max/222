@@ -154,10 +154,12 @@ const initialProducts = [
     let trendOrders = JSON.parse(localStorage.getItem(trendOrdersKey) || "[]");
     let competitors = JSON.parse(localStorage.getItem(competitorKey) || "[]");
     function sanitizeApiConfig(item = {}) {
+      const index = Number(item.index);
       return {
         id: item.id || crypto.randomUUID(),
         name: item.name || "未命名店铺",
         platform: normalizePlatform(item.platform || "Ozon"),
+        ...(Number.isFinite(index) ? { index } : {}),
         clientId: item.clientId ? String(item.clientId) : "",
         createdAt: item.createdAt || "",
         source: item.source || (String(item.id || "").includes("-env-") ? "env" : "local"),
@@ -556,6 +558,7 @@ const initialProducts = [
 
     async function apiRequest(path, options = {}) {
       const response = await fetch(path, {
+        cache: "no-store",
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         ...options
       });
@@ -2882,12 +2885,18 @@ const initialProducts = [
         const configuredByName = new Map(configuredOzon.map((store) => [store.name, store]).filter(([name]) => Boolean(name)));
         const byName = new Map(runtimeStores.map((store) => {
           const configured = configuredByName.get(store.name);
-          return [store.name || `index:${Number(store.index || 0)}`, { ...store, index: configured ? Number(configured.index || 0) : Number(store.index || 0) }];
+          const runtimeIndex = Number(store.index);
+          const configuredIndex = Number(configured?.index);
+          const index = Number.isFinite(runtimeIndex)
+            ? runtimeIndex
+            : (Number.isFinite(configuredIndex) ? configuredIndex : 0);
+          return [store.name || `index:${index}`, { ...configured, ...store, index }];
         }));
         apiConfigs
           .filter((store) => normalizePlatform(store.platform) === "Ozon")
-          .forEach((store) => {
-            const index = Number(store.index || 0);
+          .forEach((store, fallbackIndex) => {
+            const configuredIndex = Number(store.index);
+            const index = Number.isFinite(configuredIndex) ? configuredIndex : fallbackIndex;
             const key = store.name || `index:${index}`;
             if (!byName.has(key)) byName.set(key, { index, platform: "Ozon", name: store.name || `Ozon 店铺 ${index + 1}`, pendingRuntime: true });
           });
