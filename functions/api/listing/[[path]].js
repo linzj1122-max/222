@@ -563,12 +563,13 @@ function storeList(env) {
 // 解析店铺凭证:安全模式下只从 Cloudflare 环境变量/Secrets 读取。
 function resolveStore(env, headers, platform, storeIndex) {
   const pf = String(platform || "Ozon").toLowerCase();
+  const targetIndex = Number(storeIndex);
   if (pf === "wb") {
     const stores = wbStores(env);
-    return stores.find((store) => Number(store.index) === Number(storeIndex)) || stores[storeIndex] || stores[0] || null;
+    return stores.find((store) => Number(store.index) === targetIndex) || null;
   }
   const stores = ozonStores(env);
-  return stores.find((store) => Number(store.index) === Number(storeIndex)) || stores[storeIndex] || stores[0] || null;
+  return stores.find((store) => Number(store.index) === targetIndex) || null;
 }
 
 // ---------- 类目抓取 ----------

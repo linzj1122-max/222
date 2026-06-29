@@ -178,6 +178,7 @@ const initialProducts = [
     let inventoryRows = [];
     let inventorySelected = new Set();
     let inventoryLoading = false;
+    let inventoryLoadSeq = 0;
     let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
@@ -2922,6 +2923,7 @@ const initialProducts = [
     async function loadInventoryStoreData() {
       const select = $("inventoryStore");
       if (!select || select.value === "") {
+        inventoryLoadSeq += 1;
         inventoryRows = [];
         inventoryWarehouses = [];
         renderInventoryWarehouses();
@@ -2929,12 +2931,25 @@ const initialProducts = [
         setInventoryStatus("请先配置 Ozon 店铺。");
         return;
       }
+      const requestId = ++inventoryLoadSeq;
+      const storeIndex = String(select.value);
+      const store = inventoryStores.find((item) => String(item.index || 0) === storeIndex) || null;
       inventorySelected = new Set();
+      inventoryRows = [];
+      inventoryWarehouses = [];
+      renderInventoryWarehouses();
+      renderInventoryRows();
+      if (store?.pendingRuntime) {
+        setInventoryLoading(false);
+        setInventoryStatus(`店铺「${store.name || storeIndex}」已保存到 Cloudflare，等待部署完成后才能加载库存。请稍后刷新页面。`);
+        return;
+      }
       setInventoryLoading(true);
-      setInventoryStatus("正在加载整店商品库存...");
+      setInventoryStatus(`正在加载「${store?.name || `店铺 ${Number(storeIndex) + 1}`}」商品库存...`);
       try {
-        const params = new URLSearchParams({ platform: "Ozon", storeIndex: select.value });
+        const params = new URLSearchParams({ platform: "Ozon", storeIndex });
         const data = await apiRequest(`/api/listing/inventory?${params.toString()}`);
+        if (requestId !== inventoryLoadSeq || String(select.value) !== storeIndex) return;
         if (!data.ok) throw new Error(data.error || "库存加载失败");
         inventoryRows = data.rows || [];
         inventoryWarehouses = data.warehouses || [];
@@ -2945,15 +2960,16 @@ const initialProducts = [
         }
         renderInventoryRows();
         const warning = data.warning ? ` ${data.warning}` : "";
-        setInventoryStatus(`已加载 ${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。${warning}`);
+        setInventoryStatus(`已加载「${data.store || store?.name || storeIndex}」${Number(data.productCount || 0)} 个商品、${inventoryRows.length} 行库存。${warning}`);
       } catch (error) {
+        if (requestId !== inventoryLoadSeq || String(select.value) !== storeIndex) return;
         inventoryRows = [];
         inventoryWarehouses = [];
         renderInventoryWarehouses();
         renderInventoryRows();
         setInventoryStatus("库存加载失败：" + (error.message || error));
       } finally {
-        setInventoryLoading(false);
+        if (requestId === inventoryLoadSeq && String(select.value) === storeIndex) setInventoryLoading(false);
       }
     }
 
