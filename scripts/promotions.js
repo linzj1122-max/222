@@ -203,6 +203,7 @@
                   <th><input id="promoSelectAll" type="checkbox" /></th>
                   <th>商品</th>
                   <th>当前价</th>
+                  <th>已报名价</th>
                   <th>活动价</th>
                   <th>建议/上限</th>
                   <th>库存</th>
@@ -310,6 +311,10 @@
     return amount(importedMap.get(productKey(row))?.actionPrice || row.actionPrice || row.maxActionPrice || row.currentPrice || row.price);
   }
 
+  function productEnrolledPrice(row) {
+    return amount(row.enrolledActionPrice || row.enrolled_action_price || (row.participating ? row.actionPrice : 0));
+  }
+
   function renderProducts() {
     const body = $("promoProductRows");
     if (!body) return;
@@ -326,7 +331,7 @@
         : "请选择活动并加载候选商品。";
     }
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="7" class="muted-cell">没有匹配的商品。</td></tr>`;
+      body.innerHTML = `<tr><td colspan="8" class="muted-cell">没有匹配的商品。</td></tr>`;
       return;
     }
     body.innerHTML = rows.map((row) => {
@@ -336,11 +341,13 @@
       const title = row.name || row.title || row.offerId || row.sku || `Product ${row.productId}`;
       const hint = [row.offerId ? `Offer: ${row.offerId}` : "", row.sku ? `SKU: ${row.sku}` : "", row.productId ? `Product: ${row.productId}` : ""].filter(Boolean).join(" · ");
       const suggestion = [row.minActionPrice ? `最低 ${rub(row.minActionPrice)}` : "", row.maxActionPrice ? `上限 ${rub(row.maxActionPrice)}` : ""].filter(Boolean).join(" / ") || "—";
+      const enrolledPrice = productEnrolledPrice(row);
       return `
         <tr>
           <td><input class="promo-row-check" type="checkbox" value="${escapeHtml(key)}" ${checked} /></td>
           <td><strong>${escapeHtml(title)}</strong><div class="sku">${escapeHtml(hint || key)}</div></td>
           <td class="money">${row.currentPrice || row.price ? rub(row.currentPrice || row.price) : "—"}</td>
+          <td class="money">${enrolledPrice ? rub(enrolledPrice) : (row.participating ? "待返回" : "—")}</td>
           <td><input class="promo-price-input" data-promo-price="${escapeHtml(key)}" type="number" step="0.01" min="0" value="${productDefaultPrice(row) || ""}" placeholder="必填" /></td>
           <td>${escapeHtml(suggestion)}</td>
           <td><input class="promo-stock-input" data-promo-stock="${escapeHtml(key)}" type="number" step="1" min="0" value="${amount(imported?.stock || row.stock || "") || ""}" placeholder="可选" /></td>
@@ -423,7 +430,15 @@
     const okCount = data.successCount ?? data.successProductIds?.length ?? 0;
     const failCount = data.errorCount ?? data.errors?.length ?? 0;
     setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。`, failCount === 0);
-    setStatus("提交完成，可重新加载商品核对活动状态。");
+    if (okCount > 0) {
+      const includeActive = $("promoIncludeActive");
+      if (includeActive) includeActive.checked = true;
+      setStatus("报名完成，正在重新加载已报名商品和活动价...");
+      await loadProducts();
+      setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。已刷新已报名价。`, failCount === 0);
+    } else {
+      setStatus("提交完成，可重新加载商品核对活动状态。");
+    }
   }
 
   async function deactivateSelected() {

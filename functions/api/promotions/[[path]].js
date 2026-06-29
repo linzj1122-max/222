@@ -271,6 +271,10 @@ function normalizeProduct(row = {}, participating = false) {
   const actionPrice = amount(row.action_price || row.actionPrice || row.discount_price || row.discountPrice);
   const maxActionPrice = amount(row.max_action_price || row.maxActionPrice || row.max_discount_price || row.price_for_action);
   const minActionPrice = amount(row.min_action_price || row.minActionPrice);
+  const isParticipating = Boolean(participating || row.participating || row.is_participating || row.is_active);
+  const enrolledActionPrice = isParticipating
+    ? actionPrice
+    : amount(row.enrolled_action_price || row.enrolledActionPrice || row.participating_price || row.participatingPrice);
   return {
     productId: Number(productId) || String(productId || ""),
     offerId: String(row.offer_id || row.offerId || row.article || ""),
@@ -278,11 +282,12 @@ function normalizeProduct(row = {}, participating = false) {
     name: String(row.name || row.title || row.product_name || ""),
     currentPrice,
     actionPrice,
+    enrolledActionPrice,
     maxActionPrice,
     minActionPrice,
     stock: amount(row.stock || row.stock_count || row.quantity || row.available_stock_count),
     status: String(row.status || row.state || ""),
-    participating: Boolean(participating || row.participating || row.is_participating || row.is_active),
+    participating: isParticipating,
     raw: row,
   };
 }
