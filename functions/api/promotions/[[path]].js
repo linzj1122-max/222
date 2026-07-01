@@ -689,18 +689,61 @@ function chunk(list, size = 100) {
   return chunks;
 }
 
-function collectActivationResult(payload, fallbackProducts) {
-  const successProductIds = [
-    ...(Array.isArray(payload?.result?.product_ids) ? payload.result.product_ids : []),
-    ...(Array.isArray(payload?.result?.products) ? payload.result.products.map((item) => item.product_id || item.id || item) : []),
+function productIdFromResult(item) {
+  return Number(item?.product_id || item?.productId || item?.id || item || 0) || 0;
+}
+
+function errorText(item) {
+  return String(item?.message || item?.error || item?.reason || item?.description || item?.code || "").trim();
+}
+
+function collectActivationResult(payload, fallbackProducts, options = {}) {
+  const result = payload?.result && typeof payload.result === "object" ? payload.result : payload || {};
+  const acceptedWholeBatch = payload?.result === true || result?.success === true || Boolean(result?.task_id || result?.taskId || result?.job_id || result?.operation_id);
+  const explicitSuccess = [
+    ...(Array.isArray(result?.product_ids) ? result.product_ids : []),
+    ...(Array.isArray(result?.success_product_ids) ? result.success_product_ids : []),
+    ...(Array.isArray(result?.added_product_ids) ? result.added_product_ids : []),
+    ...(Array.isArray(result?.activated_product_ids) ? result.activated_product_ids : []),
+    ...(Array.isArray(result?.success) ? result.success : []),
     ...(Array.isArray(payload?.product_ids) ? payload.product_ids : []),
-  ].map(Number).filter(Boolean);
-  const errors = [
-    ...(Array.isArray(payload?.result?.errors) ? payload.result.errors : []),
-    ...(Array.isArray(payload?.errors) ? payload.errors : []),
+  ].map(productIdFromResult).filter(Boolean);
+  const productRows = [
+    ...(Array.isArray(result?.products) ? result.products : []),
+    ...(Array.isArray(result?.items) ? result.items : []),
   ];
+  const errors = [
+    ...(Array.isArray(result?.errors) ? result.errors : []),
+    ...(Array.isArray(result?.rejected) ? result.rejected : []),
+    ...(Array.isArray(result?.failed) ? result.failed : []),
+    ...(Array.isArray(result?.failed_products) ? result.failed_products : []),
+    ...(Array.isArray(payload?.errors) ? payload.errors : []),
+  ].map((item) => ({
+    product_id: productIdFromResult(item),
+    message: errorText(item) || "Ozon 未接受该商品。",
+    raw: item,
+  }));
+  productRows.forEach((item) => {
+    const message = errorText(item);
+    const status = String(item?.status || item?.state || "").toLowerCase();
+    if (message || ["error", "failed", "rejected"].includes(status)) {
+      errors.push({ product_id: productIdFromResult(item), message: message || "Ozon 未接受该商品。", raw: item });
+    } else {
+      const id = productIdFromResult(item);
+      if (id) explicitSuccess.push(id);
+    }
+  });
+  const rejectedIds = new Set(errors.map((item) => Number(item.product_id || 0)).filter(Boolean));
+  let successProductIds = [...new Set(explicitSuccess)].filter((id) => !rejectedIds.has(id));
+  if (!successProductIds.length && !errors.length && (acceptedWholeBatch || options.allowEmptySuccess)) {
+    successProductIds = fallbackProducts.map((item) => productIdFromResult(item)).filter(Boolean);
+  }
   if (!successProductIds.length && !errors.length) {
-    successProductIds.push(...fallbackProducts.map((item) => Number(item.product_id || item.productId || 0)).filter(Boolean));
+    fallbackProducts.forEach((item) => errors.push({
+      product_id: productIdFromResult(item),
+      message: "Ozon 返回 200，但没有返回成功商品。已按失败处理，请在后台核对活动要求或商品是否满足报名条件。",
+      raw: payload,
+    }));
   }
   return { successProductIds, errors };
 }
@@ -716,18 +759,37 @@ async function activateProducts(store, actionId, products) {
 
   const successProductIds = [];
   const errors = [];
+  const endpoints = [
+    "/v1/seller-actions/products/add",
+    "/v1/actions/products/activate",
+  ];
   for (const part of chunk(normalized, 100)) {
     const body = {
       action_id: Number(actionId) || actionId,
       products: part.map((item) => ({ product_id: item.product_id, action_price: item.action_price })),
     };
-    try {
-      const payload = await ozonRequest(store, "/v1/actions/products/activate", body);
-      const parsed = collectActivationResult(payload, part);
-      successProductIds.push(...parsed.successProductIds);
-      errors.push(...parsed.errors);
-    } catch (error) {
-      part.forEach((item) => errors.push({ product_id: item.product_id, message: error.message || String(error) }));
+    let accepted = false;
+    const endpointErrors = [];
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await ozonRequest(store, endpoint, body);
+        const parsed = collectActivationResult(payload, part);
+        if (parsed.successProductIds.length) {
+          successProductIds.push(...parsed.successProductIds);
+          errors.push(...parsed.errors);
+          accepted = true;
+          break;
+        }
+        endpointErrors.push(...parsed.errors.map((item) => ({ ...item, endpoint })));
+      } catch (error) {
+        endpointErrors.push({ message: `Ozon ${endpoint}: ${error.message || String(error)}` });
+      }
+    }
+    if (!accepted) {
+      part.forEach((item) => {
+        const related = endpointErrors.find((error) => Number(error.product_id || 0) === item.product_id) || endpointErrors[0];
+        errors.push({ product_id: item.product_id, message: related?.message || "Ozon 未返回报名成功。", raw: related?.raw });
+      });
     }
   }
   return {
@@ -735,6 +797,7 @@ async function activateProducts(store, actionId, products) {
     completed: errors.length === 0,
     successProductIds: [...new Set(successProductIds)],
     successCount: new Set(successProductIds).size,
+    submittedPrices: Object.fromEntries(normalized.map((item) => [String(item.product_id), item.action_price])),
     errors,
     errorCount: errors.length,
   };
@@ -754,7 +817,7 @@ async function deactivateProducts(store, actionId, productIds) {
         action_id: Number(actionId) || actionId,
         product_ids: part,
       });
-      const parsed = collectActivationResult(payload, part.map((id) => ({ product_id: id })));
+      const parsed = collectActivationResult(payload, part.map((id) => ({ product_id: id })), { allowEmptySuccess: true });
       successProductIds.push(...(parsed.successProductIds.length ? parsed.successProductIds : part));
       errors.push(...parsed.errors);
     } catch (error) {

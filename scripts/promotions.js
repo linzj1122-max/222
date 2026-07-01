@@ -25,7 +25,7 @@
     const n = Number(String(v ?? "").replace(/\s+/g, "").replace(",", ".").replace(/[^\d.-]/g, ""));
     return Number.isFinite(n) ? n : 0;
   };
-  const rub = (v) => `₽${Number(v || 0).toFixed(2)}`;
+  const cny = (v) => `¥${Number(v || 0).toFixed(2)}`;
 
   let stores = [];
   let actions = [];
@@ -162,7 +162,7 @@
           <input class="search" id="promoSearch" placeholder="搜索 Product ID / Offer ID / SKU / 商品名" />
         </div>
         <div class="promo-bulkbar">
-          <label class="inline-select">活动价
+          <label class="inline-select">活动价 RMB
             <input id="promoBulkPrice" type="number" step="0.01" min="0" placeholder="批量填入" />
           </label>
           <button class="secondary" id="promoApplyBulkPrice" type="button">填入选中</button>
@@ -176,10 +176,10 @@
               <tr>
                 <th><input id="promoSelectAll" type="checkbox" /></th>
                 <th>商品</th>
-                <th>当前价</th>
-                <th>已报名价</th>
-                <th>活动价</th>
-                <th>建议/上限</th>
+                <th>当前价 RMB</th>
+                <th>已报名价 RMB</th>
+                <th>活动价 RMB</th>
+                <th>建议/上限 RMB</th>
                 <th>状态</th>
               </tr>
             </thead>
@@ -298,7 +298,7 @@
       const checked = selectedProducts.has(key) ? "checked" : "";
       const title = row.name || row.title || row.offerId || row.sku || `Product ${row.productId}`;
       const hint = [row.offerId ? `Offer: ${row.offerId}` : "", row.sku ? `SKU: ${row.sku}` : "", row.productId ? `Product: ${row.productId}` : ""].filter(Boolean).join(" · ");
-      const suggestion = [row.minActionPrice ? `最低 ${rub(row.minActionPrice)}` : "", row.maxActionPrice ? `上限 ${rub(row.maxActionPrice)}` : ""].filter(Boolean).join(" / ") || "—";
+      const suggestion = [row.minActionPrice ? `最低 ${cny(row.minActionPrice)}` : "", row.maxActionPrice ? `上限 ${cny(row.maxActionPrice)}` : ""].filter(Boolean).join(" / ") || "—";
       const enrolledPrice = productEnrolledPrice(row);
       const imageUrl = productImage(row);
       const image = imageUrl
@@ -308,8 +308,8 @@
         <tr>
           <td><input class="promo-row-check" type="checkbox" value="${escapeHtml(key)}" ${checked} /></td>
           <td><div class="promo-product">${image}<div class="promo-product-copy"><strong class="promo-product-name" title="${escapeHtml(title)}">${escapeHtml(title)}</strong><div class="sku">${escapeHtml(hint || key)}</div></div></div></td>
-          <td class="money">${row.currentPrice || row.price ? rub(row.currentPrice || row.price) : "—"}</td>
-          <td class="money">${enrolledPrice ? rub(enrolledPrice) : (row.participating ? "待返回" : "—")}</td>
+          <td class="money">${row.currentPrice || row.price ? cny(row.currentPrice || row.price) : "—"}</td>
+          <td class="money">${enrolledPrice ? cny(enrolledPrice) : (row.participating ? "待返回" : "—")}</td>
           <td><input class="promo-price-input" data-promo-price="${escapeHtml(key)}" type="number" step="0.01" min="0" value="${productDefaultPrice(row) || ""}" placeholder="必填" /></td>
           <td>${escapeHtml(suggestion)}</td>
           <td><span class="scope-chip">${escapeHtml(row.status || (row.participating ? "已报名" : (row.candidate ? "未报名" : "店铺商品")))}</span></td>
@@ -416,13 +416,30 @@
     });
     const okCount = data.successCount ?? data.successProductIds?.length ?? 0;
     const failCount = data.errorCount ?? data.errors?.length ?? 0;
-    setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。`, failCount === 0);
+    const errorText = (data.errors || []).slice(0, 3).map((item) => `${item.product_id || ""} ${item.message || ""}`.trim()).filter(Boolean).join("；");
+    setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。${errorText ? "失败原因：" + errorText : ""}`, failCount === 0);
     if (okCount > 0) {
+      const priceById = data.submittedPrices || {};
+      const successIds = new Set((data.successProductIds || []).map((id) => String(id)));
+      products = products.map((row) => {
+        const productId = String(row.productId || row.product_id || row.id || "");
+        if (!successIds.has(productId)) return row;
+        const price = amount(priceById[productId]);
+        return {
+          ...row,
+          participating: true,
+          candidate: true,
+          enrolledActionPrice: price || row.enrolledActionPrice,
+          actionPrice: price || row.actionPrice,
+          status: "已报名",
+        };
+      });
+      renderProducts();
       setStatus("报名完成，正在重新加载已报名商品和活动价...");
       await loadProducts();
-      setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。已刷新已报名价。`, failCount === 0);
+      setResult(`报名完成：成功 ${okCount} 个，失败 ${failCount} 个。${errorText ? "失败原因：" + errorText : "已刷新已报名价。"}`, failCount === 0);
     } else {
-      setStatus("提交完成，可重新加载商品核对活动状态。");
+      setStatus(errorText || "Ozon 没有返回报名成功，请检查活动要求、商品资格或后台提示。", "fail");
     }
   }
 
