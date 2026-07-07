@@ -14,6 +14,8 @@
   const STORAGE_KEY = "ozon_wb_promotions_state_v1";
 
   const $ = (id) => document.getElementById(id);
+  const byDataAttr = (name, value) =>
+    Array.from(document.querySelectorAll(`[${name}]`)).find((el) => el.getAttribute(name) === String(value)) || null;
   const escapeHtml = (v) =>
     String(v ?? "")
       .replaceAll("&", "&amp;")
@@ -394,7 +396,7 @@
     const rows = products.filter((row) => selectedProducts.has(productKey(row)));
     return rows.map((row) => {
       const key = productKey(row);
-      const price = amount(document.querySelector(`[data-promo-price="${CSS.escape(key)}"]`)?.value);
+      const price = amount(byDataAttr("data-promo-price", key)?.value);
       return {
         product_id: Number(row.productId || row.product_id || row.id || 0),
         offer_id: row.offerId || row.offer_id || "",
@@ -474,7 +476,7 @@
     if (price <= 0) return setStatus("请填写活动价。", "fail");
     selectedProducts.forEach((key) => {
       if (price > 0) {
-        const input = document.querySelector(`[data-promo-price="${CSS.escape(key)}"]`);
+        const input = byDataAttr("data-promo-price", key);
         if (input) input.value = price;
       }
     });

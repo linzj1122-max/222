@@ -25,7 +25,7 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
   const uid = () =>
-    (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+    (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
   const nowIso = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

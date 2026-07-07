@@ -22,7 +22,7 @@
 
   // ---- 局部工具 ----
   const $ = (id) => document.getElementById(id);
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+  const uid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
   const nowIso = () => new Date().toISOString().slice(0, 19);
   const escapeHtml = (v) =>
     String(v ?? "")

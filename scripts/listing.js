@@ -44,7 +44,9 @@
 
   // ---- 局部工具（避免污染全局） ----
   const $ = (id) => document.getElementById(id);
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+  const uid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+  const byDataAttr = (root, selector, name, value) =>
+    Array.from(root.querySelectorAll(selector)).find((el) => el.getAttribute(name) === String(value)) || null;
   const nowIso = () => new Date().toISOString().slice(0, 19);
   const escapeHtml = (v) =>
     String(v ?? "")
@@ -1046,7 +1048,7 @@
     box.querySelectorAll("[data-attr-filter]").forEach((input) => {
       input.addEventListener("input", () => {
         const id = input.getAttribute("data-attr-filter");
-        const select = box.querySelector(`select[data-attr-id="${CSS.escape(id)}"]`);
+        const select = byDataAttr(box, "select[data-attr-id]", "data-attr-id", id);
         const attr = currentAttributes.find((item) => String(item.id) === String(id));
         if (!select || !attr) return;
         const selected = new Set([...select.selectedOptions].map((o) => o.value));
@@ -1957,7 +1959,7 @@
   async function checkPublishStatus(draftId) {
     const d = drafts.find((x) => x.id === draftId);
     if (!d) return;
-    const btn = document.querySelector(`[data-draft-check-status="${CSS.escape(draftId)}"]`);
+    const btn = byDataAttr(document, "[data-draft-check-status]", "data-draft-check-status", draftId);
     if (btn) { btn.disabled = true; btn.textContent = "检测中…"; }
     try {
       const apiStoreIndex = Number(d.apiStoreIndex ?? currentApiStoreIndex(d.storeIndex || 0));

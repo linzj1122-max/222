@@ -1,3 +1,5 @@
+const uid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+
 const initialProducts = [
       {code:"HS", sku:"3555785455", name:"电动按摩器", purchase:28, domestic:5, firstFreight:4.18, lastMile:4, rate:11.5, platform:"Ozon"},
       {code:"HX", sku:"3592078186", name:"电动按摩器", purchase:37, domestic:5, firstFreight:6.27, lastMile:4, rate:11.5, platform:"Ozon"},
@@ -14,7 +16,7 @@ const initialProducts = [
       {code:"QB-60", sku:"4509788886", name:"水泵", purchase:70.5, domestic:12, firstFreight:43.2, lastMile:5, rate:11.5, platform:"Ozon"},
       {code:"PK-750", sku:"4509718786", name:"水泵", purchase:104.5, domestic:12, firstFreight:76.61, lastMile:7, rate:11.5, platform:"Ozon"},
       {code:"GP-130", sku:"4509770907", name:"水泵", purchase:104.5, domestic:12, firstFreight:141.86, lastMile:10, rate:11.5, platform:"Ozon"}
-    ].map((item) => ({...item, id: crypto.randomUUID()}));
+    ].map((item) => ({...item, id: uid()}));
 
     const productKey = "ozon_wb_products_v3";
     const orderKey = "ozon_wb_orders_v1";
@@ -156,7 +158,7 @@ const initialProducts = [
     function sanitizeApiConfig(item = {}) {
       const index = Number(item.index);
       return {
-        id: item.id || crypto.randomUUID(),
+        id: item.id || uid(),
         name: item.name || "未命名店铺",
         platform: normalizePlatform(item.platform || "Ozon"),
         ...(Number.isFinite(index) ? { index } : {}),
@@ -2163,7 +2165,7 @@ const initialProducts = [
           if (!sku) return null;
           const rowDate = parseAdDate(adCell(row, headerMap, ["日期", "Date", "День", "Дата"])) || period.to;
           return {
-            id: crypto.randomUUID(), fileName: file.name, source: "xlsx", store, date: rowDate, dateFrom: rowDate, dateTo: rowDate, reportFrom: period.from, reportTo: period.to, sku,
+            id: uid(), fileName: file.name, source: "xlsx", store, date: rowDate, dateFrom: rowDate, dateTo: rowDate, reportFrom: period.from, reportTo: period.to, sku,
             name: String(adCell(row, headerMap, ["\u5546\u54C1\u540D\u79F0"]) || "").trim(),
             tool: String(adCell(row, headerMap, ["\u5DE5\u5177"]) || "").trim(),
             placement: String(adCell(row, headerMap, ["\u6295\u653E\u4F4D\u7F6E"]) || "").trim(),
@@ -3303,7 +3305,7 @@ const initialProducts = [
 
     function readGroupForm() {
       return {
-        id: $("editGroupId").value || crypto.randomUUID(),
+        id: $("editGroupId").value || uid(),
         name: $("groupName").value.trim(),
         owner: $("groupOwner").value.trim(),
         note: $("groupNote").value.trim(),
@@ -3391,7 +3393,7 @@ const initialProducts = [
         picked[input.dataset.costField] = Number(input.value || 0);
       });
       return ensureProductScope({
-        id: $("editId").value || crypto.randomUUID(),
+        id: $("editId").value || uid(),
         code: $("code").value.trim(),
         sku: $("sku").value.trim(),
         name: $("name").value.trim(),
@@ -3739,7 +3741,7 @@ const initialProducts = [
           const key = `${item.platform}|${item.mode}|${item.fulfillment}|${item.sku}`;
           const existing = byKey.get(key);
           if (existing) { Object.assign(existing, item, { id: existing.id }); updated += 1; }
-          else { const fresh = { ...item, id: crypto.randomUUID() }; products.unshift(fresh); byKey.set(key, fresh); added += 1; }
+          else { const fresh = { ...item, id: uid() }; products.unshift(fresh); byKey.set(key, fresh); added += 1; }
         }
         save();
         renderAll();
@@ -3866,7 +3868,7 @@ const initialProducts = [
       const key = feeScopeKey(platform, mode, fulfillment);
       platformFees = platformFees.filter((b) => feeScopeKey(b.platform, b.mode, b.fulfillment) !== key);
       platformFees.unshift({
-        id: crypto.randomUUID(),
+        id: uid(),
         platform, mode, fulfillment,
         models: parsed.models || {},
         defaultModel: parsed.defaultModel || null,
@@ -4005,7 +4007,7 @@ const initialProducts = [
         competitors = [existing, ...competitors.filter((item) => item.id !== existing.id)];
       } else {
         competitors.unshift({
-          id: crypto.randomUUID(),
+          id: uid(),
           url,
           productId: fetched.productId,
           history: [record]
@@ -4167,7 +4169,7 @@ const initialProducts = [
           if (index >= 0) apiConfigs[index] = sanitizeApiConfig({ ...apiConfigs[index], ...payload });
         } else {
           apiConfigs.unshift(sanitizeApiConfig({
-            id: crypto.randomUUID(),
+            id: uid(),
             ...payload,
             createdAt: new Date().toISOString()
           }));
