@@ -8,6 +8,7 @@
 - Ozon / Wildberries 店铺接入与商品刊登
 - AI 文案、商品图片和相似商品辅助
 - Ozon 促销活动管理
+- Ozon 关键词 Top 100、指定商品排名和销量坑产估算（需要 MPStats Analytics API Token）
 - 多账号登录、Cloudflare KV 缓存和店铺配置管理
 
 ## 目录

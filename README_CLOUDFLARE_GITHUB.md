@@ -92,6 +92,14 @@ OZON_ADS_1_CLIENT_ID=xxxxxxxx-xxxx@advertising.performance.ozon.ru
 OZON_ADS_1_CLIENT_SECRET=Performance Client Secret
 ```
 
+Ozon 关键词排名和坑产分析（MPStats 外部分析 API）：
+
+```text
+MPSTATS_API_TOKEN=MPStats Analytics API Token
+```
+
+该值必须保存为 Cloudflare Secret。没有配置时，关键词排名页面只显示配置提示，不会返回模拟数据。
+
 AI 刊登功能：
 
 ```text

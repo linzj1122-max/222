@@ -52,6 +52,84 @@
   --radius-xl: 20px;
 }
 
+/* Ozon keyword ranking */
+.ranking-search-panel { padding: 22px; }
+.ranking-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) 170px auto;
+  align-items: end;
+  gap: 14px;
+}
+.ranking-form label { margin: 0; }
+.ranking-form button { min-height: 44px; white-space: nowrap; }
+.ranking-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ranking-summary .metric strong { font-size: clamp(22px, 2vw, 32px); }
+.ranking-thresholds {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(145px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.ranking-threshold-card {
+  display: grid;
+  gap: 7px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+.ranking-threshold-card > span,
+.ranking-threshold-card small { color: var(--ink-3); }
+.ranking-threshold-card > strong { color: var(--ink-1); font-size: 18px; }
+.ranking-threshold-card b { color: var(--brand); }
+.ranking-table-toolbar { align-items: end; }
+.ranking-table-actions { display: flex; gap: 10px; align-items: center; }
+.ranking-table-actions input { min-width: 270px; }
+.ranking-table-wrap { max-height: 720px; }
+.ranking-table { min-width: 1180px; }
+.ranking-table thead th { position: sticky; top: 0; z-index: 2; }
+.ranking-table td:first-child { width: 82px; }
+.ranking-rank { display: block; font-size: 17px; }
+.ranking-own-badge {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #075d44;
+  background: #c8f5e4;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.ranking-own-row { background: rgba(31, 174, 125, 0.09); }
+.ranking-product-cell { display: flex; gap: 10px; align-items: center; min-width: 330px; }
+.ranking-product-cell > div { display: grid; gap: 5px; }
+.ranking-product-cell a { color: var(--ink-1); font-weight: 650; line-height: 1.35; }
+.ranking-product-cell small,
+.ranking-table td > small { display: block; margin-top: 4px; color: var(--ink-3); }
+.ranking-product-image {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.ranking-old-price { text-decoration: line-through; }
+
+@media (max-width: 1180px) {
+  .ranking-form { grid-template-columns: 1fr 1fr; }
+  .ranking-thresholds { grid-template-columns: repeat(3, minmax(145px, 1fr)); }
+}
+@media (max-width: 760px) {
+  .ranking-form,
+  .ranking-summary,
+  .ranking-thresholds { grid-template-columns: 1fr; }
+  .ranking-table-toolbar,
+  .ranking-table-actions { align-items: stretch; flex-direction: column; }
+  .ranking-table-actions input { min-width: 0; width: 100%; }
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -139,6 +217,7 @@ nav {
 .tab-btn[data-tab="ads"]         { order: 40; }
 .tab-btn[data-tab="analytics"]   { order: 45; }
 .tab-btn[data-tab="aiStudio"]    { order: 48; }
+.tab-btn[data-tab="ozonRanking"] { order: 49; }
 .tab-btn[data-tab="competitors"] { order: 50; }
 .tab-btn[data-tab="settings"]    { order: 90; margin-top: 10px; }
 

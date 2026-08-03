@@ -52,6 +52,13 @@ const env = { ...process.env, LISTING_CACHE: createMemoryKv() };
 
 const routeModules = [
   {
+    prefix: "/api/ozon-ranking/",
+    modulePath: path.join(root, "functions", "api", "ozon-ranking", "[[path]].js"),
+    params(urlPath) {
+      return { path: urlPath.slice("/api/ozon-ranking/".length).split("/").filter(Boolean) };
+    },
+  },
+  {
     prefix: "/api/listing/",
     modulePath: path.join(root, "functions", "api", "listing", "[[path]].js"),
     params(urlPath) {
