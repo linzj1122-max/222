@@ -1,90 +1,131 @@
-# Cloudflare Pages + GitHub 部署说明
+# GitHub SSH + Cloudflare Pages 自动部署
 
-这个项目建议用 Cloudflare Pages 连接 GitHub 部署。以后修改代码后，只需要推送到 GitHub，Cloudflare 会自动重新部署。
-
-## GitHub 上传内容
-
-把整个项目上传到一个 GitHub 仓库即可，关键目录是：
-
-- `app/`：网站前端页面
-- `functions/`：Cloudflare Pages Functions 后端 API
-
-Netlify 相关文件已经不再作为部署入口使用。
-
-## Cloudflare Pages 设置
-
-在 Cloudflare Dashboard：
-
-1. 进入 `Workers & Pages`
-2. 选择 `Create application`
-3. 选择 `Pages`
-4. 选择 `Connect to Git`
-5. 授权并选择你的 GitHub 仓库
-
-构建设置填写：
+## 工作流
 
 ```text
+本地修改 -> Git commit -> SSH push 到 GitHub main -> Cloudflare Pages 自动部署
+```
+
+Cloudflare 连接 GitHub 后，每次 `main` 分支收到新提交都会自动部署。不需要在 GitHub 保存 Cloudflare API Token。
+
+## 1. 首次配置 GitHub SSH
+
+准备一个已创建的 GitHub 仓库，取得 SSH 地址，例如：
+
+```text
+git@github.com:your-name/your-repo.git
+```
+
+在项目根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-github-ssh.ps1 `
+  -Repository "git@github.com:your-name/your-repo.git" `
+  -GitUserName "你的 GitHub 名称" `
+  -GitUserEmail "你的 GitHub 邮箱"
+```
+
+脚本会：
+
+1. 在用户 `.ssh` 目录生成该项目专用的 Ed25519 密钥（已有则复用）；
+2. 初始化 `main` 分支、配置 SSH remote 和自动推送钩子；
+3. 显示公钥。
+
+把显示的整行公钥添加到 GitHub：`Settings -> SSH and GPG keys -> New SSH key`。私钥绝不能上传到 GitHub、Cloudflare或聊天窗口。
+
+添加公钥后，执行首次发布：
+
+```powershell
+.\scripts\publish.ps1 -Message "Initial import"
+```
+
+以后每次更新只需执行：
+
+```powershell
+.\scripts\publish.ps1 -Message "说明本次修改"
+```
+
+脚本会自动暂存、提交并通过 SSH 推送。普通的 `git commit` 也会触发项目内的 `post-commit` 钩子自动推送；如果推送失败，本地提交仍会保留，可修复网络或权限后运行 `git push origin main`。
+
+## 2. Cloudflare Pages 连接 GitHub
+
+在 Cloudflare Dashboard 中进入 `Workers & Pages -> Create -> Pages -> Connect to Git`，选择上述仓库。
+
+构建配置：
+
+```text
+Production branch: main
 Framework preset: None
-Build command: 留空
-Build output directory: app
+Build command: exit 0
+Build output directory: .
 Root directory: 留空
 ```
 
-Cloudflare 会从项目根目录读取 `functions/` 目录，作为 `/api/*` 后端接口。
+重要：本项目没有 `app/` 目录。`index.html` 和 `functions/` 都位于根目录，因此发布目录必须是项目根目录。Cloudflare 对不需要构建的静态站点推荐使用 `exit 0`，以正常启用 Pages Functions。
 
-## 环境变量
+## 3. Cloudflare 环境变量与 Secret
 
-部署后进入：
-
-`Settings -> Environment variables`
-
-添加以下变量：
+至少配置登录账号和独立会话密钥：
 
 ```text
-OZON_STORE_1_NAME=ИП Никитина Н.С.1
-OZON_STORE_1_CLIENT_ID=4897866
-OZON_STORE_1_API_KEY=第一个店铺的 Seller API Key
+CREATOR_USERNAME=管理员账号
+CREATOR_PASSWORD=管理员密码
+AUTH_SESSION_SECRET=至少 32 字节的高强度随机值
 ```
 
-> `OZON_STORE_*` 对应 `api-seller.ozon.ru`，用于订单、产品成本、自然分析数据。
-> 多店铺按 `OZON_STORE_2_*`、`OZON_STORE_3_*` 递增（最多到 `OZON_STORE_10_*`），
-> 或用单个 JSON 变量 `OZON_STORES=[{"name":"...","clientId":"...","apiKey":"..."}]` 批量配置。
-
-### 广告费用模块（Performance API）
-
-广告费用走的是另一套 API（`api-performance.ozon.ru`），需要单独的 OAuth2 凭证，
-**和店铺 Seller API Key 不是同一个东西**。请在 Ozon Performance / 推广后台申请后添加：
+店铺 Seller API：
 
 ```text
-OZON_ADS_1_NAME=ИП Никитина Н.С.1
+OZON_STORE_1_NAME=店铺名称
+OZON_STORE_1_CLIENT_ID=Seller Client ID
+OZON_STORE_1_API_KEY=Seller API Key
+
+WB_STORE_1_NAME=店铺名称
+WB_STORE_1_API_TOKEN=Wildberries API Token
+```
+
+Ozon Performance 广告 API（与 Seller API 凭证不同）：
+
+```text
+OZON_ADS_1_NAME=账号名称
 OZON_ADS_1_CLIENT_ID=xxxxxxxx-xxxx@advertising.performance.ozon.ru
-OZON_ADS_1_CLIENT_SECRET=对应的 client_secret
+OZON_ADS_1_CLIENT_SECRET=Performance Client Secret
 ```
 
-> 多个广告账号按 `OZON_ADS_2_*`、`OZON_ADS_3_*` 递增（最多到 `OZON_ADS_10_*`）。
-> 配置后 `/api/debug` 里 `ads.enabled` 会变为 `true`，`/api/ads/daily-products` 才会返回真实广告数据。
-> 首次拉取可能需要点一次"刷新 API 广告数据"按钮（带 `create=1`）来创建异步报表任务。
-
-保存环境变量后，重新部署一次。
-
-## 部署后检查
-
-依次打开：
+AI 刊登功能：
 
 ```text
-/api/health
-/api/debug
-/api/products
-/api/orders
+OPENAI_API_KEY=API Key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_IMAGE_MODEL=gpt-image-1
+OPENAI_TEXT_MODEL=gpt-4o-mini
 ```
 
-正常情况下：
+如需网页内增删店铺/员工，还要配置：
 
-- `/api/health` 返回服务正常
-- `/api/debug` 中 `ozon.storeCount` 应该是 `2`
-- `/api/products` 返回产品成本表
-- `/api/orders` 返回真实 Ozon 订单
+```text
+CLOUDFLARE_ACCOUNT_ID=Cloudflare Account ID
+CLOUDFLARE_PAGES_PROJECT_NAME=Pages 项目名
+CLOUDFLARE_API_TOKEN=仅具备所需 Pages 编辑权限的 Token
+```
 
-广告 API 已接入（走 Performance API 的 OAuth2 + 异步报表）。
-配置好 `OZON_ADS_*` 环境变量后，`/api/ads/daily-products` 会返回真实广告数据；
-首次拉取可能需要带 `?create=1` 触发一次异步报表任务，之后会缓存。
+敏感值应在 Cloudflare 中使用 Secret 类型。不要把真实值写入本项目。
+
+可选：创建 KV namespace，并以 `LISTING_CACHE` 绑定到 Pages 项目，用于跨请求缓存。
+
+## 4. 部署验证
+
+部署完成后先检查：
+
+```text
+https://你的域名/api/health
+```
+
+应返回 `ok: true`。登录后再检查 `/api/debug`、订单、商品和广告页面。Cloudflare Dashboard 的 Deployments 页面应能看到对应 GitHub commit。
+
+## 常见问题
+
+- `Permission denied (publickey)`：公钥尚未添加到正确的 GitHub 账号，或该账号没有仓库写权限。
+- GitHub 已更新但 Cloudflare 未部署：确认 Pages 连接的是同一仓库和 `main` 分支。
+- 页面存在但 `/api/*` 404：确认输出目录是 `.`，并且仓库根目录中存在 `functions/`。
+- 登录后频繁失效：确认所有部署环境使用固定且独立的 `AUTH_SESSION_SECRET`。

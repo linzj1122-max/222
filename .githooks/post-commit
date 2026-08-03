@@ -1,0 +1,19 @@
+#!/bin/sh
+
+if [ "$SKIP_AUTO_PUSH" = "1" ]; then
+  exit 0
+fi
+
+branch="$(git branch --show-current)"
+if [ -z "$branch" ]; then
+  echo "Auto-push skipped: detached HEAD."
+  exit 0
+fi
+
+if ! git remote get-url origin >/dev/null 2>&1; then
+  echo "Auto-push skipped: origin is not configured."
+  exit 0
+fi
+
+echo "Auto-push: origin/$branch"
+git push origin "HEAD:$branch"

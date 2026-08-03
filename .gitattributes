@@ -1,0 +1,7 @@
+* text=auto
+
+# Git hooks run through a POSIX shell even on Git for Windows.
+.githooks/* text eol=lf
+
+# Keep PowerShell scripts native on Windows.
+*.ps1 text eol=crlf

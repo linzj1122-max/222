@@ -1,7 +1,28 @@
-id_ed25519
-id_ed25519.pub
+# Private keys and local SSH state
+id_*
+*.pem
+*.key
 known_hosts
+.ssh/
+
+# Local secrets and Cloudflare state
+.env
+.env.*
+!.env.example
+.dev.vars
+.wrangler/
+
+# Editors and local tooling
 .trae/
 .vscode/
 clone/
 superpowers/
+
+# Internal notes and business source material (not used at runtime)
+CODE_WIKI.md
+眼部润肤液评价素材.md
+
+# OS and logs
+.DS_Store
+Thumbs.db
+*.log
