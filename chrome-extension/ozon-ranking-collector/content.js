@@ -13,6 +13,13 @@
     return normalized && Number.isFinite(parsed) ? parsed : null;
   };
 
+  function reviewCountFromText(value) {
+    const source = String(value ?? "").replace(/[\u00a0\u202f]/g, " ");
+    const matches = Array.from(source.matchAll(/(?<![\d.,])(\d{1,3}(?:\s\d{3})*|\d+)\s+отзыв(?:а|ов)?(?=\s|$|[^\p{L}])/giu));
+    if (!matches.length) return null;
+    return number(matches[matches.length - 1][1]);
+  }
+
   function findMpstatsTable() {
     return Array.from(document.querySelectorAll("table")).find((table) => {
       const header = Array.from(table.querySelectorAll("th")).map(text).join("|");
@@ -24,6 +31,20 @@
     return headers.findIndex((header) => header.includes(expected));
   }
 
+  function reviewCountNearLink(link, productId) {
+    let node = link;
+    for (let depth = 0; depth < 9 && node?.parentElement; depth += 1) {
+      node = node.parentElement;
+      const linkedIds = new Set(Array.from(node.querySelectorAll('a[href*="/product/"]')).map((item) => (
+        String(item.href || "").match(/\/product\/[^?#]*-(\d{5,20})(?:\/|\?|#|$)/i)?.[1] || ""
+      )).filter(Boolean));
+      if (linkedIds.size > 2 || (linkedIds.size && !linkedIds.has(productId))) continue;
+      const reviews = reviewCountFromText(text(node));
+      if (reviews !== null) return reviews;
+    }
+    return null;
+  }
+
   function productLinkMap() {
     const map = new Map();
     Array.from(document.querySelectorAll('a[href*="/product/"]')).forEach((link) => {
@@ -32,7 +53,12 @@
       const id = match[1];
       const title = text(link);
       const previous = map.get(id);
-      if (!previous || title.length > previous.name.length) map.set(id, { url: link.href, name: title });
+      const reviews = reviewCountNearLink(link, id);
+      map.set(id, {
+        url: link.href || previous?.url || "",
+        name: title.length > String(previous?.name || "").length ? title : previous?.name || title,
+        reviews: reviews ?? previous?.reviews ?? null,
+      });
     });
     return map;
   }
@@ -74,7 +100,7 @@
         revenue30: number(cell(indices.revenue)),
         sales30: number(cell(indices.sales)),
         rating: number(cell(indices.rating)),
-        reviews: number(cell(indices.reviews)),
+        reviews: link.reviews ?? number(cell(indices.reviews)),
         promotion: cell(indices.promotion),
         sponsored: /Внешняя реклама/i.test(firstCell),
       };
@@ -222,6 +248,11 @@
     const data = response.data || {};
     progress(`已保存到控制中心：${data.resultCount} 个商品${data.ownRank ? `，自己的排名 #${data.ownRank}` : ""}。`, "ok");
     return data;
+  }
+
+  if (typeof chrome === "undefined") {
+    globalThis.__OZON_RANKING_COLLECTOR_TEST__ = { reviewCountFromText };
+    return;
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

@@ -290,26 +290,24 @@ function normalizeBrowserProduct(raw, fallbackRank) {
   };
 }
 
-function median(values) {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+function mean(values) {
+  const samples = values.filter(Number.isFinite);
+  if (!samples.length) return null;
+  return samples.reduce((total, value) => total + value, 0) / samples.length;
 }
 
 function thresholdAt(products, requestedRank, ownSales) {
   const effectiveRank = Math.min(requestedRank, products.length);
-  const start = Math.max(0, effectiveRank - 5);
-  const end = Math.min(products.length, effectiveRank + 4);
-  const samples = products.slice(start, end).map((item) => item.sales).filter(Number.isFinite);
-  const monthly = median(samples);
+  const samples = products.slice(0, effectiveRank).map((item) => item.sales).filter(Number.isFinite);
+  const monthly = mean(samples);
   if (monthly === null) {
-    return { targetRank: requestedRank, monthlyOrders: null, dailyOrders: null, additionalMonthlyOrders: null, additionalDailyOrders: null, sampleSize: 0 };
+    return { targetRank: requestedRank, referenceRank: effectiveRank, monthlyOrders: null, dailyOrders: null, additionalMonthlyOrders: null, additionalDailyOrders: null, sampleSize: 0 };
   }
   const monthlyOrders = Math.max(0, Math.ceil(monthly));
   const additionalMonthlyOrders = Number.isFinite(ownSales) ? Math.max(0, monthlyOrders - ownSales) : null;
   return {
     targetRank: requestedRank,
+    referenceRank: effectiveRank,
     monthlyOrders,
     dailyOrders: Math.ceil(monthlyOrders / DEFAULT_DAYS),
     additionalMonthlyOrders,
@@ -734,8 +732,8 @@ async function analyzeSnapshot(env, rawSnapshot, input = {}) {
     },
     methodology: {
       ranking: "Top 100 来自当前 Chrome 中 Ozon 搜索页的 MPStats 插件表格；自己的排名优先采用 Ozon Seller API 关键词数据。",
-      threshold: "坑产为目标名次附近最多 9 个商品的 30 天订单量中位数，再换算为日单量。",
-      caveat: "排名会受广告、转化、评价、价格、库存、配送时效、地区和个性化搜索影响；坑产是运营估算，不是 Ozon 官方承诺。",
+      threshold: "销量维度门槛为目标范围内前 N 名商品的 30 天订单量算术平均值，再换算为日单量。",
+      caveat: "排名会受广告投入、转化、评价数量与质量、价格、库存、配送时效、地区和个性化搜索等多方面影响；这里仅按销量单维度估算，不是 Ozon 官方排名公式或承诺。",
     },
   };
   result.history = await updateHistory(env, result);

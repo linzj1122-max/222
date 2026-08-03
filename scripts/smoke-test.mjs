@@ -27,6 +27,19 @@ for (const file of sourceFiles) {
 }
 
 const hashtagCore = await import("../chrome-extension/ozon-hashtag-collector/background.js");
+await import(`../chrome-extension/ozon-ranking-collector/content.js?review-parser=${Date.now()}`);
+const reviewParser = globalThis.__OZON_RANKING_COLLECTOR_TEST__?.reviewCountFromText;
+const reviewFixtures = [
+  ["4.9 1952 отзыва", 1952],
+  ["5.0 1 594 отзывов", 1594],
+  ["4.8 103 отзыва", 103],
+  ["4.9 4\u202f937 отзывов", 4937],
+];
+const parsedReviewFixtures = reviewFixtures.map(([value, expected]) => ({ expected, actual: reviewParser?.(value) }));
+if (!reviewParser || parsedReviewFixtures.some(({ expected, actual }) => actual !== expected)) {
+  throw new Error(`Ozon ranking collector did not preserve full review counts with Russian thousands formatting: ${JSON.stringify(parsedReviewFixtures)}`);
+}
+delete globalThis.__OZON_RANKING_COLLECTOR_TEST__;
 const xiaomiDetail = hashtagCore.extractProductTags(`
   <script type="application/ld+json">{"@type":"Product","name":"Headphones","brand":{"@type":"Brand","name":"Xiaomi"}}</script>
   <div style="color:#fff"><a>#беспроводные_наушники</a><a>#xiaomi</a><a>#наушники_xiaomi</a><a>#шумоподавление</a></div>
@@ -169,7 +182,7 @@ const products = Array.from({ length: 12 }, (_, index) => ({
   price: 1000 + index,
   rating: 4.8,
   reviews: 100 + index,
-  sales30: 300 - (index * 10),
+  sales30: [1894, 1, 101][index] ?? 300 - (index * 10),
   revenue30: 250000 + index,
 }));
 const hashtagProducts = [
@@ -270,6 +283,10 @@ try {
   }
   if (!searchPayload.thresholds.some((item) => item.targetRank === 10 && item.monthlyOrders > 0)) {
     throw new Error("Ozon ranking API did not calculate a Top 10 sales threshold.");
+  }
+  const top3Threshold = searchPayload.thresholds.find((item) => item.targetRank === 3);
+  if (top3Threshold?.monthlyOrders !== 666 || top3Threshold?.sampleSize !== 3 || top3Threshold?.referenceRank !== 3) {
+    throw new Error("Ozon ranking API did not use the arithmetic mean of the Top 3 products for the sales-only threshold.");
   }
   if (searchPayload.products.some((item, index, rows) => index > 0 && rows[index - 1].rank > item.rank)) {
     throw new Error("Ozon ranking API did not return products in ascending rank order.");

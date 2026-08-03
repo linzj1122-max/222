@@ -127,8 +127,8 @@
       <section class="panel" id="rankingThresholdPanel" hidden>
         <div class="toolbar">
           <div>
-            <h3>目标排名坑产估算</h3>
-            <p class="section-note">门槛采用目标名次附近最多 9 个商品的周期销量中位数。它是运营参考值，不是 Ozon 官方排名公式。</p>
+            <h3>目标排名销量门槛估算</h3>
+            <p class="section-note">按目标范围内前 N 名商品的 30 天订单量算术平均值估算。这里只计算销量维度；广告、评价、转化、价格等因素同样会影响排名。</p>
           </div>
           <span class="scope-chip" id="rankingConfidence">置信度：--</span>
         </div>
@@ -526,15 +526,23 @@
     const box = $("rankingThresholds");
     if (!panel || !box || !result) return;
     $("rankingConfidence").textContent = `置信度：${confidenceLabel(result.diagnostics?.confidence)}`;
-    box.innerHTML = (result.thresholds || []).map((item) => `
-      <article class="ranking-threshold-card">
-        <span>目标 Top ${number(item.targetRank)}</span>
-        <strong>${item.monthlyOrders === null ? "--" : `${number(item.monthlyOrders)} 单 / 30天`}</strong>
-        <div>建议日单：<b>${number(item.dailyOrders)}</b></div>
-        <div>相比当前还差：<b>${number(item.additionalMonthlyOrders)} 单</b></div>
-        <small>附近有效样本 ${number(item.sampleSize)} 个</small>
-      </article>
-    `).join("");
+    box.innerHTML = (result.thresholds || []).map((item) => {
+      const gap = item.additionalMonthlyOrders;
+      const gapText = gap === null || gap === undefined
+        ? "未提供自己的销量"
+        : Number(gap) > 0
+          ? `销量维度还差：<b>${number(gap)} 单 / 30天</b>`
+          : "销量维度：<b>已达参考均值</b>（排名仍受其他因素影响）";
+      return `
+        <article class="ranking-threshold-card">
+          <span>目标 Top ${number(item.targetRank)}</span>
+          <strong>${item.monthlyOrders === null ? "--" : `${number(item.monthlyOrders)} 单 / 30天`}</strong>
+          <div>建议日单：<b>${number(item.dailyOrders)}</b></div>
+          <div>${gapText}</div>
+          <small>前 ${number(item.referenceRank || item.targetRank)} 名有效销量 ${number(item.sampleSize)} 个 · 算术平均</small>
+        </article>
+      `;
+    }).join("");
     panel.hidden = false;
   }
 
