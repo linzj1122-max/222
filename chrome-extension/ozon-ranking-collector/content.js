@@ -120,7 +120,7 @@
   async function upload(config) {
     const products = await collectRows();
     if (!products.length) throw new Error("未找到 MPStats 搜索结果表。请等待页面中的 MPStats 表格显示后再试。");
-    progress(`读取完成，正在上传 ${products.length} 个商品…`);
+    progress(`读取完成，正在发送 ${products.length} 个商品到控制中心…`);
     const endpoint = `${String(config.dashboardUrl || "").replace(/\/+$/, "")}/api/ozon-ranking/collector/snapshot`;
     const response = await fetch(endpoint, {
       method: "POST",
@@ -131,7 +131,6 @@
       body: JSON.stringify({
         keyword: config.keyword,
         productId: config.productId,
-        storeIndex: config.storeIndex,
         products,
         searchUrl: location.href,
         generatedAt: new Date().toISOString(),
@@ -139,7 +138,7 @@
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) throw new Error(data.error || `控制中心返回 HTTP ${response.status}`);
-    progress(`上传成功：${data.resultCount} 个商品${data.ownRank ? `，自己的排名 #${data.ownRank}` : ""}。`, "ok");
+    progress(`已保存到控制中心：${data.resultCount} 个商品${data.ownRank ? `，自己的排名 #${data.ownRank}` : ""}。`, "ok");
     return data;
   }
 

@@ -25,7 +25,6 @@
       token: $("token").value.trim(),
       keyword: $("keyword").value.trim(),
       productId: $("productId").value.trim(),
-      storeIndex: Number($("storeIndex").value || 0),
     };
   }
 
@@ -45,7 +44,6 @@
     $("dashboardUrl").value = parsed.dashboardUrl;
     $("token").value = parsed.token;
     if (parsed.productId) $("productId").value = parsed.productId;
-    if (parsed.storeIndex !== undefined) $("storeIndex").value = String(parsed.storeIndex);
     await saveConfig(false);
     setStatus("控制中心配置已粘贴并保存。", "ok");
   }
@@ -75,12 +73,18 @@
     $("collect").disabled = true;
     setStatus("正在滚动页面并读取 MPStats 表格，请不要切换或关闭当前标签页…");
     try {
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: "OZON_RANKING_COLLECT",
-        config,
-      });
+      const message = { type: "OZON_RANKING_COLLECT", config };
+      let response;
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, message);
+      } catch (error) {
+        if (!/Receiving end does not exist|Could not establish connection/i.test(error?.message || "")) throw error;
+        setStatus("正在连接当前 Ozon 页面…");
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+        response = await chrome.tabs.sendMessage(tab.id, message);
+      }
       if (!response?.ok) throw new Error(response?.error || "采集失败。");
-      setStatus(`上传完成：${response.resultCount} 个商品${response.ownRank ? `，自己的排名 #${response.ownRank}` : ""}。`, "ok");
+      setStatus(`已保存到控制中心：${response.resultCount} 个商品${response.ownRank ? `，自己的排名 #${response.ownRank}` : ""}。`, "ok");
     } finally {
       $("collect").disabled = false;
     }
@@ -91,12 +95,11 @@
   }
 
   async function init() {
-    const saved = await chrome.storage.local.get(["dashboardUrl", "token", "keyword", "productId", "storeIndex"]);
+    const saved = await chrome.storage.local.get(["dashboardUrl", "token", "keyword", "productId"]);
     $("dashboardUrl").value = saved.dashboardUrl || DEFAULT_DASHBOARD;
     $("token").value = saved.token || "";
     $("keyword").value = saved.keyword || "";
     $("productId").value = saved.productId || "";
-    $("storeIndex").value = String(saved.storeIndex ?? 0);
     if (saved.token) setStatus("连接配置已就绪。打开 Ozon 搜索页后即可采集。", "ok");
   }
 

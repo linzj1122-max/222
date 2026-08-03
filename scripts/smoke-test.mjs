@@ -84,6 +84,9 @@ const rankingEnv = {
   OZON_STORE_1_NAME: "Smoke Ozon",
   OZON_STORE_1_CLIENT_ID: "smoke-client-id",
   OZON_STORE_1_API_KEY: "smoke-api-key",
+  OZON_STORE_2_NAME: "Smoke Ozon 2",
+  OZON_STORE_2_CLIENT_ID: "smoke-client-id-2",
+  OZON_STORE_2_API_KEY: "smoke-api-key-2",
   LISTING_CACHE: createMemoryKv(),
 };
 const pairResponse = await rankingApi.onRequest({
@@ -114,12 +117,13 @@ const products = Array.from({ length: 12 }, (_, index) => ({
 }));
 
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async (input) => {
+globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   if (url.origin === "https://api-seller.ozon.ru" && url.pathname === "/v1/analytics/product-queries/details") {
+    const clientId = init.headers?.["client-id"];
     return new Response(JSON.stringify({
       analytics_period: { date_from: "2026-07-01", date_to: "2026-07-30" },
-      queries: [{
+      queries: clientId === "smoke-client-id-2" ? [{
         query: keyword,
         sku: 100005,
         position: 6,
@@ -130,8 +134,8 @@ globalThis.fetch = async (input) => {
         unique_view_users: 321,
         view_conversion: 0.026,
         query_index: 0.75,
-      }],
-      total: 1,
+      }] : [],
+      total: clientId === "smoke-client-id-2" ? 1 : 0,
     }), { status: 200, headers: { "content-type": "application/json" } });
   }
   return new Response(JSON.stringify({ error: "Mock route not found" }), { status: 404 });
@@ -144,7 +148,7 @@ try {
         "content-type": "application/json",
         authorization: `Collector ${pairPayload.token}`,
       },
-      body: JSON.stringify({ keyword, productId: "100005", storeIndex: 0, products }),
+      body: JSON.stringify({ keyword, productId: "100005", products }),
     }),
     env: rankingEnv,
     params: { path: ["collector", "snapshot"] },
@@ -161,7 +165,7 @@ try {
         "content-type": "application/json",
         authorization: `Bearer ${loginPayload.token}`,
       },
-      body: JSON.stringify({ keyword, productId: "100005", storeIndex: 0 }),
+      body: JSON.stringify({ keyword, productId: "100005" }),
     }),
     env: rankingEnv,
     params: { path: ["search"] },
@@ -178,6 +182,9 @@ try {
   }
   if (searchPayload.official.orders !== 22 || searchPayload.official.uniqueSearchUsers !== 12345) {
     throw new Error("Ozon ranking API did not merge Seller API keyword metrics.");
+  }
+  if (searchPayload.official.storeName !== "Smoke Ozon 2") {
+    throw new Error("Ozon ranking API did not automatically find the Product ID across stores.");
   }
 } finally {
   globalThis.fetch = originalFetch;

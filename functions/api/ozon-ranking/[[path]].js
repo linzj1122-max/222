@@ -180,15 +180,6 @@ function ozonStores(env) {
   return stores;
 }
 
-function publicStores(env) {
-  return ozonStores(env).map((store, index) => ({ index, name: store.name, platform: "Ozon" }));
-}
-
-function resolveStore(env, storeIndex) {
-  const stores = ozonStores(env);
-  return stores[Number(storeIndex || 0)] || stores[0] || null;
-}
-
 async function ozonRequest(store, endpoint, body) {
   const response = await fetch(`https://api-seller.ozon.ru${endpoint}`, {
     method: "POST",
@@ -216,38 +207,54 @@ async function ozonRequest(store, endpoint, body) {
 async function officialKeywordMetrics(env, input) {
   const productId = extractProductId(input.productId || input.productUrl || "");
   if (!productId) return { available: false, found: false, reason: "未填写自己的 Product ID" };
-  const store = resolveStore(env, input.storeIndex);
-  if (!store) return { available: false, found: false, reason: "系统尚未配置 Ozon Seller API 店铺" };
+  const stores = ozonStores(env);
+  if (!stores.length) return { available: false, found: false, reason: "系统尚未配置 Ozon Seller API" };
   const days = Math.min(30, Math.max(7, Math.round(finiteNumber(input.days, DEFAULT_DAYS))));
   const range = reportRange(days, 3);
-  const payload = await ozonRequest(store, "/v1/analytics/product-queries/details", {
-    date_from: `${range.d1}T00:00:00.000Z`,
-    date_to: `${range.d2}T23:59:59.999Z`,
-    limit_by_sku: 1000,
-    page: 0,
-    page_size: 1000,
-    skus: [productId],
-    sort_by: "BY_SEARCHES",
-    sort_dir: "DESCENDING",
-  });
-  const queries = Array.isArray(payload?.queries) ? payload.queries : [];
   const wanted = normalizeKeyword(input.keyword);
-  const exact = queries.find((row) => normalizeKeyword(row.query) === wanted) || null;
-  return {
-    available: true,
-    found: Boolean(exact),
-    storeName: store.name,
-    range: payload?.analytics_period || range,
-    position: optionalNumber(exact?.position),
-    orders: optionalNumber(exact?.order_count),
-    gmv: optionalNumber(exact?.gmv),
-    currency: compactText(exact?.currency || "RUB", 10),
-    uniqueSearchUsers: optionalNumber(exact?.unique_search_users),
-    uniqueViewUsers: optionalNumber(exact?.unique_view_users),
-    viewConversion: optionalNumber(exact?.view_conversion),
-    queryIndex: optionalNumber(exact?.query_index),
-    totalQueries: finiteNumber(payload?.total, queries.length),
-  };
+  let firstSuccessful = null;
+  const errors = [];
+  for (const store of stores) {
+    try {
+      const payload = await ozonRequest(store, "/v1/analytics/product-queries/details", {
+        date_from: `${range.d1}T00:00:00.000Z`,
+        date_to: `${range.d2}T23:59:59.999Z`,
+        limit_by_sku: 1000,
+        page: 0,
+        page_size: 1000,
+        skus: [productId],
+        sort_by: "BY_SEARCHES",
+        sort_dir: "DESCENDING",
+      });
+      const queries = Array.isArray(payload?.queries) ? payload.queries : [];
+      const exact = queries.find((row) => normalizeKeyword(row.query) === wanted) || null;
+      const metrics = {
+        available: true,
+        found: Boolean(exact),
+        storeName: store.name,
+        range: payload?.analytics_period || range,
+        position: optionalNumber(exact?.position),
+        orders: optionalNumber(exact?.order_count),
+        gmv: optionalNumber(exact?.gmv),
+        currency: compactText(exact?.currency || "RUB", 10),
+        uniqueSearchUsers: optionalNumber(exact?.unique_search_users),
+        uniqueViewUsers: optionalNumber(exact?.unique_view_users),
+        viewConversion: optionalNumber(exact?.view_conversion),
+        queryIndex: optionalNumber(exact?.query_index),
+        totalQueries: finiteNumber(payload?.total, queries.length),
+        storesChecked: stores.length,
+      };
+      if (metrics.found) return metrics;
+      if (!firstSuccessful) firstSuccessful = metrics;
+    } catch (error) {
+      errors.push(`${store.name}：${error.message || String(error)}`);
+    }
+  }
+  if (firstSuccessful) return firstSuccessful;
+  const error = new Error(errors.join("；") || "无法读取 Ozon Seller API 关键词数据。");
+  error.status = 503;
+  error.code = "OZON_SELLER_API_ERROR";
+  throw error;
 }
 
 function normalizeBrowserProduct(raw, fallbackRank) {
@@ -388,12 +395,11 @@ async function updateHistory(env, result) {
 async function analyzeSnapshot(env, rawSnapshot, input = {}) {
   const snapshot = validateSnapshot(rawSnapshot);
   const productId = extractProductId(input.productId || rawSnapshot.productId || "");
-  const storeIndex = finiteNumber(input.storeIndex ?? rawSnapshot.storeIndex, 0);
   const ownProduct = productId ? snapshot.products.find((row) => row.productId === productId) || null : null;
   let official = { available: false, found: false, reason: "未填写自己的 Product ID" };
   if (productId) {
     try {
-      official = await officialKeywordMetrics(env, { keyword: snapshot.keyword, productId, storeIndex, days: DEFAULT_DAYS });
+      official = await officialKeywordMetrics(env, { keyword: snapshot.keyword, productId, days: DEFAULT_DAYS });
     } catch (error) {
       official = { available: true, found: false, error: error.message || String(error) };
     }
@@ -450,7 +456,6 @@ async function saveAndAnalyzeSnapshot(env, input) {
   const stored = {
     ...snapshot,
     productId: extractProductId(input.productId || ""),
-    storeIndex: finiteNumber(input.storeIndex, 0),
   };
   await kvPut(env, `ozon-ranking:browser:${keywordKey(snapshot.keyword)}`, stored);
   const result = await analyzeSnapshot(env, stored, input);
@@ -517,9 +522,6 @@ export async function onRequest({ request, env, params }) {
   if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
 
   try {
-    if (path === "stores" && request.method === "GET") {
-      return json({ ok: true, stores: publicStores(env) });
-    }
     if (path === "collector/pair" && request.method === "POST") {
       return json({ ok: true, ...(await issueCollectorToken(auth.user, env)) });
     }

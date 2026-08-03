@@ -13,7 +13,6 @@
     .replaceAll("'", "&#039;");
 
   let result = null;
-  let stores = [];
   let collectorToken = "";
   let state = {};
   try { state = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {}; } catch { state = {}; }
@@ -36,9 +35,6 @@
           <label>我的 Product ID / 链接
             <input id="rankingProductId" placeholder="可选，例如：1786874757" />
           </label>
-          <label>Ozon 店铺
-            <select id="rankingStore"><option value="0">正在读取店铺…</option></select>
-          </label>
           <button class="primary" id="rankingSearchBtn" type="submit">读取最新 Top 100</button>
         </form>
         <div id="rankingStatus" class="table-status">先用 Chrome 采集器抓取 Ozon 搜索页，再在这里读取最新 Top 100。</div>
@@ -48,7 +44,7 @@
         <div class="toolbar">
           <div>
             <h3>Chrome 采集器</h3>
-            <p class="section-note">采集器读取 Ozon 页面上 MPStats 插件已经显示的排名和 30 天销量，不需要 MPStats Analytics API Token。</p>
+            <p class="section-note">采集器只读取 Ozon 页面上 MPStats 已显示的排名和 30 天销量并发送到本控制中心，不会向 Ozon 店铺写入数据。</p>
           </div>
           <button class="secondary" id="rankingOpenOzon" type="button">打开关键词搜索页</button>
         </div>
@@ -146,7 +142,7 @@
     document.querySelector(`[data-tab="${TAB_ID}"]`)?.classList.add("active");
     $(TAB_ID)?.classList.add("active");
     if ($("pageTitle")) $("pageTitle").textContent = "Ozon 关键词排名";
-    Promise.all([checkProvider(), loadStores()]).catch(() => {});
+    checkProvider().catch(() => {});
   }
 
   async function readJson(response) {
@@ -288,18 +284,6 @@
     return health;
   }
 
-  async function loadStores() {
-    const payload = await apiRequest(API("stores"));
-    stores = Array.isArray(payload.stores) ? payload.stores : [];
-    const select = $("rankingStore");
-    if (!select) return;
-    const selected = String(state.storeIndex ?? 0);
-    select.innerHTML = stores.length
-      ? stores.map((store) => `<option value="${store.index}">${escapeHtml(store.name)}</option>`).join("")
-      : '<option value="0">未配置 Ozon Seller API 店铺</option>';
-    select.value = stores.some((store) => String(store.index) === selected) ? selected : "0";
-  }
-
   async function pairCollector() {
     const button = $("rankingPairCollector");
     if (button) button.disabled = true;
@@ -325,7 +309,6 @@
     return JSON.stringify({
       dashboardUrl: location.origin,
       token: collectorToken || $("rankingCollectorToken")?.value || "",
-      storeIndex: Number($("rankingStore")?.value || 0),
       productId: String($("rankingProductId")?.value || "").trim(),
     }, null, 2);
   }
@@ -364,15 +347,14 @@
     event.preventDefault();
     const keyword = String($("rankingKeyword")?.value || "").trim();
     const productId = String($("rankingProductId")?.value || "").trim();
-    const storeIndex = Number($("rankingStore")?.value || 0);
-    state = { keyword, productId, storeIndex };
+    state = { keyword, productId };
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
     setBusy(true);
     setStatus("正在读取 Chrome 最新快照，并用 Ozon Seller API 校验自己的关键词数据…");
     try {
       result = await apiRequest(API("search"), {
         method: "POST",
-        body: JSON.stringify({ keyword, productId, storeIndex }),
+        body: JSON.stringify({ keyword, productId }),
       });
       renderResult();
       const partial = result.diagnostics?.partialErrors?.length || 0;
@@ -390,10 +372,6 @@
     $("rankingPairCollector")?.addEventListener("click", pairCollector);
     $("rankingCopyCollector")?.addEventListener("click", () => copyCollectorConfig().catch((error) => setStatus(error.message || String(error), "fail")));
     $("rankingOpenOzon")?.addEventListener("click", openOzonSearch);
-    $("rankingStore")?.addEventListener("change", () => {
-      state.storeIndex = Number($("rankingStore").value || 0);
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
-    });
   }
 
   function init() {
@@ -402,7 +380,6 @@
     if ($("rankingProductId")) $("rankingProductId").value = state.productId || "";
     if ($("rankingCollectorUrl")) $("rankingCollectorUrl").value = location.origin;
     bindEvents();
-    if (!document.body.classList.contains("auth-locked")) loadStores().catch(() => {});
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

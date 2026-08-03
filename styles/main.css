@@ -56,7 +56,7 @@
 .ranking-search-panel { padding: 22px; }
 .ranking-form {
   display: grid;
-  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) 170px auto;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) auto;
   align-items: end;
   gap: 14px;
 }
