@@ -16,6 +16,7 @@ function walk(directory) {
 const sourceFiles = [
   ...walk(path.join(root, "functions")),
   ...walk(path.join(root, "scripts")).filter((file) => !file.includes(`${path.sep}vendor${path.sep}`)),
+  ...walk(path.join(root, "chrome-extension")),
 ];
 
 for (const file of sourceFiles) {

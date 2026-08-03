@@ -2,6 +2,8 @@
   "use strict";
 
   const REQUIRED_HEADERS = ["Место в поисковой выдаче", "SKU", "Заказы за 30 дней, шт."];
+  const PLUGIN_LOAD_WAIT_MS = 4000;
+  const PLUGIN_EXTRA_WAIT_MS = 2000;
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const text = (element) => String(element?.textContent || "").replace(/\s+/g, " ").trim();
@@ -97,24 +99,67 @@
     if (tone) setTimeout(() => box.remove(), 8000);
   }
 
-  async function collectRows() {
-    window.scrollTo({ top: 0, behavior: "auto" });
-    await wait(600);
-    let best = parseTable();
-    let stableRounds = 0;
-    for (let round = 0; round < 24 && best.length < 100 && stableRounds < 5; round += 1) {
-      progress(`正在加载 Ozon 搜索结果：已读取 ${best.length} 个商品…`);
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
-      await wait(1300);
-      const next = parseTable();
-      if (next.length > best.length) {
-        best = next;
-        stableRounds = 0;
-      } else {
-        stableRounds += 1;
+  function mergeProducts(target, products) {
+    const before = target.size;
+    products.forEach((product) => {
+      const previous = target.get(product.productId);
+      if (!previous) {
+        target.set(product.productId, product);
+        return;
+      }
+      target.set(product.productId, {
+        ...previous,
+        ...Object.fromEntries(Object.entries(product).filter(([, value]) => value !== null && value !== "")),
+      });
+    });
+    return target.size > before;
+  }
+
+  async function waitForInitialTable(timeoutMs = 30000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const products = parseTable();
+      if (products.length) {
+        progress(`已发现 MPStats 表格，等待约 ${PLUGIN_LOAD_WAIT_MS / 1000} 秒加载完整数据…`);
+        await wait(PLUGIN_LOAD_WAIT_MS);
+        return parseTable().length ? parseTable() : products;
+      }
+      progress("正在等待 MPStats 排名和销量表格加载…");
+      await wait(1000);
+    }
+    return [];
+  }
+
+  async function collectAfterScroll(collected) {
+    await wait(PLUGIN_LOAD_WAIT_MS);
+    let grew = mergeProducts(collected, parseTable());
+    const deadline = Date.now() + PLUGIN_EXTRA_WAIT_MS;
+    while (Date.now() < deadline) {
+      await wait(500);
+      if (mergeProducts(collected, parseTable())) {
+        grew = true;
+        await wait(1000);
+        mergeProducts(collected, parseTable());
+        break;
       }
     }
-    return best.slice(0, 100);
+    return grew;
+  }
+
+  async function collectRows() {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    await wait(800);
+    const collected = new Map();
+    mergeProducts(collected, await waitForInitialTable());
+    if (!collected.size) return [];
+    let stableRounds = 0;
+    for (let round = 0; round < 18 && collected.size < 100 && stableRounds < 3; round += 1) {
+      progress(`正在分段加载 Ozon 和 MPStats 数据：已读取 ${collected.size} 个商品…`);
+      window.scrollBy({ top: Math.max(1200, Math.round(window.innerHeight * 1.8)), behavior: "smooth" });
+      const grew = await collectAfterScroll(collected);
+      stableRounds = grew ? 0 : stableRounds + 1;
+    }
+    return Array.from(collected.values()).sort((a, b) => a.rank - b.rank).slice(0, 100);
   }
 
   async function upload(config) {
@@ -122,22 +167,20 @@
     if (!products.length) throw new Error("未找到 MPStats 搜索结果表。请等待页面中的 MPStats 表格显示后再试。");
     progress(`读取完成，正在发送 ${products.length} 个商品到控制中心…`);
     const endpoint = `${String(config.dashboardUrl || "").replace(/\/+$/, "")}/api/ozon-ranking/collector/snapshot`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Collector ${config.token}`,
-      },
-      body: JSON.stringify({
+    const response = await chrome.runtime.sendMessage({
+      type: "OZON_RANKING_UPLOAD",
+      endpoint,
+      token: config.token,
+      payload: {
         keyword: config.keyword,
         productId: config.productId,
         products,
         searchUrl: location.href,
         generatedAt: new Date().toISOString(),
-      }),
+      },
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) throw new Error(data.error || `控制中心返回 HTTP ${response.status}`);
+    if (!response?.ok) throw new Error(response?.error || "无法把数据发送到控制中心。");
+    const data = response.data || {};
     progress(`已保存到控制中心：${data.resultCount} 个商品${data.ownRank ? `，自己的排名 #${data.ownRank}` : ""}。`, "ok");
     return data;
   }
