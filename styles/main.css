@@ -62,6 +62,21 @@
 }
 .ranking-form label { margin: 0; }
 .ranking-form button { min-height: 44px; white-space: nowrap; }
+.ranking-collector-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.15fr);
+  gap: 22px;
+  margin-top: 16px;
+}
+.ranking-collector-grid ol { margin: 10px 0 0; padding-left: 22px; color: var(--ink-2); line-height: 1.8; }
+.ranking-collector-grid code { color: var(--brand-dark); overflow-wrap: anywhere; }
+.ranking-pair-box {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.48);
+}
+.ranking-pair-box textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .ranking-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ranking-summary .metric strong { font-size: clamp(22px, 2vw, 32px); }
 .ranking-thresholds {
@@ -100,6 +115,15 @@
   font-size: 11px;
   white-space: nowrap;
 }
+.ranking-ad-badge {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #7b5013;
+  background: #f8e6b7;
+  font-size: 11px;
+}
 .ranking-own-row { background: rgba(31, 174, 125, 0.09); }
 .ranking-product-cell { display: flex; gap: 10px; align-items: center; min-width: 330px; }
 .ranking-product-cell > div { display: grid; gap: 5px; }
@@ -119,6 +143,7 @@
 
 @media (max-width: 1180px) {
   .ranking-form { grid-template-columns: 1fr 1fr; }
+  .ranking-collector-grid { grid-template-columns: 1fr; }
   .ranking-thresholds { grid-template-columns: repeat(3, minmax(145px, 1fr)); }
 }
 @media (max-width: 760px) {

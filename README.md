@@ -8,7 +8,7 @@
 - Ozon / Wildberries 店铺接入与商品刊登
 - AI 文案、商品图片和相似商品辅助
 - Ozon 促销活动管理
-- Ozon 关键词 Top 100、指定商品排名和销量坑产估算（需要 MPStats Analytics API Token）
+- Ozon 关键词 Top 100、指定商品排名和销量坑产估算（Chrome 采集器 + Ozon Seller API，无需 MPStats API Token）
 - 多账号登录、Cloudflare KV 缓存和店铺配置管理
 
 ## 目录
@@ -18,6 +18,7 @@
 - `scripts/dev-server.mjs`：本地零依赖开发服务器
 - `scripts/publish.ps1`：提交并通过 SSH 推送到 GitHub
 - `scripts/setup-github-ssh.ps1`：首次配置 Git、SSH 和自动推送
+- `chrome-extension/ozon-ranking-collector/`：读取 Ozon 搜索页 MPStats 表格的本地 Chrome 采集器
 
 ## 本地运行
 

@@ -65,84 +65,116 @@ if (loginResponse.status !== 200 || !loginPayload.token) {
   throw new Error("Smoke-test login did not return a session token.");
 }
 const rankingApi = await import("../functions/api/ozon-ranking/[[path]].js");
-const unconfiguredResponse = await rankingApi.onRequest({
-  request: new Request("http://127.0.0.1/api/ozon-ranking/search", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${loginPayload.token}`,
+function createMemoryKv() {
+  const values = new Map();
+  return {
+    async get(key, type) {
+      const value = values.get(key);
+      if (value === undefined) return null;
+      return type === "json" ? JSON.parse(value) : value;
     },
-    body: JSON.stringify({ keyword: "сыворотка для глаз", limit: 100 }),
-  }),
-  env: authEnv,
-  params: { path: ["search"] },
-});
-const unconfiguredPayload = await unconfiguredResponse.json();
-if (unconfiguredResponse.status !== 503 || unconfiguredPayload.code !== "DATA_SOURCE_NOT_CONFIGURED") {
-  throw new Error("Ozon ranking API must fail clearly when MPSTATS_API_TOKEN is not configured.");
+    async put(key, value) {
+      values.set(key, value);
+    },
+  };
 }
+
+const rankingEnv = {
+  ...authEnv,
+  OZON_STORE_1_NAME: "Smoke Ozon",
+  OZON_STORE_1_CLIENT_ID: "smoke-client-id",
+  OZON_STORE_1_API_KEY: "smoke-api-key",
+  LISTING_CACHE: createMemoryKv(),
+};
+const pairResponse = await rankingApi.onRequest({
+  request: new Request("http://127.0.0.1/api/ozon-ranking/collector/pair", {
+    method: "POST",
+    headers: { authorization: `Bearer ${loginPayload.token}` },
+  }),
+  env: rankingEnv,
+  params: { path: ["collector", "pair"] },
+});
+const pairPayload = await pairResponse.json();
+if (pairResponse.status !== 200 || !pairPayload.token) {
+  throw new Error("Ozon ranking collector pairing did not return a token.");
+}
+
+const keyword = "сыворотка для глаз";
+const products = Array.from({ length: 12 }, (_, index) => ({
+  rank: index + 1,
+  productId: String(100000 + index),
+  name: `Mock Ozon product ${index + 1}`,
+  url: `https://www.ozon.ru/product/mock-${100000 + index}/`,
+  brand: "Mock brand",
+  price: 1000 + index,
+  rating: 4.8,
+  reviews: 100 + index,
+  sales30: 300 - (index * 10),
+  revenue30: 250000 + index,
+}));
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input) => {
   const url = new URL(String(input));
-  if (url.pathname.endsWith("/items")) {
+  if (url.origin === "https://api-seller.ozon.ru" && url.pathname === "/v1/analytics/product-queries/details") {
     return new Response(JSON.stringify({
-      total: 12,
-      data: Array.from({ length: 12 }, (_, index) => ({
-        id: 100000 + index,
-        name: `Mock Ozon product ${index + 1}`,
-        thumb: `https://example.test/${index + 1}.jpg`,
-      })),
+      analytics_period: { date_from: "2026-07-01", date_to: "2026-07-30" },
+      queries: [{
+        query: keyword,
+        sku: 100005,
+        position: 6,
+        order_count: 22,
+        gmv: 22000,
+        currency: "RUB",
+        unique_search_users: 12345,
+        unique_view_users: 321,
+        view_conversion: 0.026,
+        query_index: 0.75,
+      }],
+      total: 1,
     }), { status: 200, headers: { "content-type": "application/json" } });
-  }
-  const detailMatch = url.pathname.match(/\/items\/(\d+)\/full$/);
-  if (detailMatch) {
-    const id = Number(detailMatch[1]);
-    const rank = id - 99999;
-    return new Response(JSON.stringify({
-      id,
-      name: `Mock Ozon product ${rank}`,
-      link: `https://www.ozon.ru/context/detail/id/${id}/`,
-      price: { final_price: 99900 + rank * 100 },
-      rating: 4.8,
-      comments: 100 + rank,
-      seller: { name: "Mock seller" },
-      period_stats: { sales: 300 - rank * 10, revenue: 2500000 },
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  }
-  if (/\/items\/\d+\/keywords$/.test(url.pathname)) {
-    return new Response(JSON.stringify([{ query: "сыворотка для глаз", avg_position: 6, positions: [6] }]), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }
-  if (url.pathname.endsWith("/keywords/frequency")) {
-    return new Response(JSON.stringify([{ date: "2026-08-02", frequency: 12345 }]), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
   }
   return new Response(JSON.stringify({ error: "Mock route not found" }), { status: 404 });
 };
 try {
-  const configuredResponse = await rankingApi.onRequest({
+  const uploadResponse = await rankingApi.onRequest({
+    request: new Request("http://127.0.0.1/api/ozon-ranking/collector/snapshot", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Collector ${pairPayload.token}`,
+      },
+      body: JSON.stringify({ keyword, productId: "100005", storeIndex: 0, products }),
+    }),
+    env: rankingEnv,
+    params: { path: ["collector", "snapshot"] },
+  });
+  const uploadPayload = await uploadResponse.json();
+  if (uploadResponse.status !== 200 || uploadPayload.resultCount !== 12 || uploadPayload.ownRank !== 6) {
+    throw new Error("Ozon ranking collector did not store and normalize the browser snapshot correctly.");
+  }
+
+  const searchResponse = await rankingApi.onRequest({
     request: new Request("http://127.0.0.1/api/ozon-ranking/search", {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${loginPayload.token}`,
       },
-      body: JSON.stringify({ keyword: "сыворотка для глаз", productId: "100005", limit: 100, days: 30 }),
+      body: JSON.stringify({ keyword, productId: "100005", storeIndex: 0 }),
     }),
-    env: { ...authEnv, MPSTATS_API_TOKEN: "mock-token", MPSTATS_BASE_URL: "https://mpstats.example.test/api" },
+    env: rankingEnv,
     params: { path: ["search"] },
   });
-  const configuredPayload = await configuredResponse.json();
-  if (configuredResponse.status !== 200 || configuredPayload.resultCount !== 12 || configuredPayload.ownRank !== 6) {
-    throw new Error("Ozon ranking API did not normalize the mocked Top 100 response correctly.");
+  const searchPayload = await searchResponse.json();
+  if (searchResponse.status !== 200 || searchPayload.resultCount !== 12 || searchPayload.ownRank !== 6) {
+    throw new Error("Ozon ranking API did not read the latest Chrome snapshot correctly.");
   }
-  if (!configuredPayload.thresholds.some((item) => item.targetRank === 10 && item.monthlyOrders > 0)) {
+  if (!searchPayload.thresholds.some((item) => item.targetRank === 10 && item.monthlyOrders > 0)) {
     throw new Error("Ozon ranking API did not calculate a Top 10 sales threshold.");
+  }
+  if (searchPayload.official.orders !== 22 || searchPayload.official.uniqueSearchUsers !== 12345) {
+    throw new Error("Ozon ranking API did not merge Seller API keyword metrics.");
   }
 } finally {
   globalThis.fetch = originalFetch;

@@ -1,8 +1,9 @@
-/* Ozon keyword ranking and sales-threshold analysis backed by MPStats Analytics. */
+/* Ozon keyword ranking from the MPStats Chrome overlay + official Ozon Seller API. */
 
-const MPSTATS_BASE_URL = "https://mpstats.io/api/analytics/v1/oz";
 const DEFAULT_DAYS = 30;
 const MAX_RESULTS = 100;
+const COLLECTOR_TTL_SECONDS = 90 * 24 * 60 * 60;
+const SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -21,6 +22,10 @@ function base64UrlEncodeBytes(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlEncodeText(value) {
+  return base64UrlEncodeBytes(new TextEncoder().encode(String(value || "")));
 }
 
 function base64UrlDecodeText(value) {
@@ -51,61 +56,81 @@ async function hmacSha256(secret, data) {
   return base64UrlEncodeBytes(new Uint8Array(signature));
 }
 
-function authTokenFromRequest(request) {
+function sessionTokenFromRequest(request) {
   const header = request.headers.get("authorization") || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (match) return match[1].trim();
+  const bearer = header.match(/^Bearer\s+(.+)$/i);
+  if (bearer) return bearer[1].trim();
   const cookie = request.headers.get("cookie") || "";
-  const cookieMatch = cookie.match(/(?:^|;\s*)cc_session=([^;]+)/);
-  return cookieMatch ? decodeURIComponent(cookieMatch[1]) : "";
+  const match = cookie.match(/(?:^|;\s*)cc_session=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+async function verifySignedToken(token, env, expectedPrefix = "") {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3 || (expectedPrefix && parts[0] !== expectedPrefix)) return null;
+  const expected = await hmacSha256(authSecret(env), `${parts[0]}.${parts[1]}`);
+  if (expected !== parts[2]) return null;
+  let payload = null;
+  try { payload = JSON.parse(base64UrlDecodeText(parts[1])); } catch { payload = null; }
+  if (!payload?.sub || Number(payload.exp || 0) <= Math.floor(Date.now() / 1000)) return null;
+  return payload;
 }
 
 async function verifyAuth(request, env) {
-  const token = authTokenFromRequest(request);
-  if (!token) return { ok: false, status: 401, error: "请先登录。" };
-  const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false, status: 401, error: "登录已失效，请重新登录。" };
-  const expected = await hmacSha256(authSecret(env), `${parts[0]}.${parts[1]}`);
-  if (expected !== parts[2]) return { ok: false, status: 401, error: "登录已失效，请重新登录。" };
-  let payload = null;
-  try { payload = JSON.parse(base64UrlDecodeText(parts[1])); } catch { payload = null; }
-  if (!payload?.sub || Number(payload.exp || 0) <= Math.floor(Date.now() / 1000)) {
-    return { ok: false, status: 401, error: "登录已过期，请重新登录。" };
-  }
+  const payload = await verifySignedToken(sessionTokenFromRequest(request), env);
+  if (!payload) return { ok: false, status: 401, error: "请先登录或重新登录。" };
   return { ok: true, user: { username: String(payload.sub), role: String(payload.role || "member") } };
 }
 
-function configuredToken(env) {
-  return String(env.MPSTATS_API_TOKEN || env.MPSTATS_TOKEN || "").trim();
+async function issueCollectorToken(user, env) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    sub: String(user.username || "collector"),
+    role: "ozon-ranking-collector",
+    iat: now,
+    exp: now + COLLECTOR_TTL_SECONDS,
+  };
+  const encoded = base64UrlEncodeText(JSON.stringify(payload));
+  const input = `collector.${encoded}`;
+  return { token: `${input}.${await hmacSha256(authSecret(env), input)}`, expiresAt: new Date(payload.exp * 1000).toISOString() };
+}
+
+async function verifyCollector(request, env) {
+  const header = request.headers.get("authorization") || "";
+  const match = header.match(/^Collector\s+(.+)$/i);
+  if (!match) return null;
+  const payload = await verifySignedToken(match[1].trim(), env, "collector");
+  return payload?.role === "ozon-ranking-collector" ? payload : null;
 }
 
 function compactText(value, maxLength = 200) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function finiteNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
 function optionalNumber(value) {
   if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "string") {
+    const normalized = value.replace(/\s+/g, "").replace(",", ".").replace(/[^\d.-]/g, "");
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
-function rubles(value) {
+function finiteNumber(value, fallback = 0) {
   const number = optionalNumber(value);
-  return number === null ? null : Math.round(number) / 100;
+  return number === null ? fallback : number;
 }
 
 function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function reportRange(days) {
+function reportRange(days, delayDays = 0) {
   const end = new Date();
-  end.setUTCDate(end.getUTCDate() - 1);
+  end.setUTCDate(end.getUTCDate() - Math.max(0, delayDays));
   const start = new Date(end);
   start.setUTCDate(start.getUTCDate() - Math.max(1, days - 1));
   return { d1: formatDate(start), d2: formatDate(end) };
@@ -115,112 +140,142 @@ function normalizeKeyword(value) {
   return compactText(value, 120).toLocaleLowerCase("ru-RU").replace(/\s+/g, " ");
 }
 
+function keywordKey(value) {
+  return encodeURIComponent(normalizeKeyword(value)).slice(0, 180);
+}
+
 function extractProductId(value) {
   const text = String(value || "").trim();
   if (!text) return "";
   if (/^\d{5,20}$/.test(text)) return text;
-  const matches = [...text.matchAll(/(?:detail\/id\/|product\/|sku[=/:-]?)(\d{5,20})/gi)];
-  return matches[0]?.[1] || "";
+  const direct = text.match(/(?:detail\/id\/|sku[=/:-]?)(\d{5,20})/i);
+  if (direct) return direct[1];
+  const product = text.match(/\/product\/[^?#]*-(\d{5,20})(?:\/|\?|#|$)/i);
+  return product?.[1] || "";
 }
 
-async function mpstatsRequest(env, pathname, options = {}) {
-  const token = configuredToken(env);
-  if (!token) {
-    const error = new Error("尚未配置 MPSTATS_API_TOKEN，无法获取真实 Ozon 排名数据。");
-    error.code = "DATA_SOURCE_NOT_CONFIGURED";
-    error.status = 503;
-    throw error;
+function ozonStores(env) {
+  const stores = [];
+  for (let index = 1; index <= 10; index += 1) {
+    const name = env[`OZON_STORE_${index}_NAME`];
+    const clientId = env[`OZON_STORE_${index}_CLIENT_ID`];
+    const apiKey = env[`OZON_STORE_${index}_API_KEY`];
+    if (clientId && apiKey) stores.push({ name: name || `Ozon 店铺 ${index}`, clientId, apiKey });
   }
-  const base = String(env.MPSTATS_BASE_URL || MPSTATS_BASE_URL).replace(/\/+$/, "");
-  const url = new URL(`${base}/${String(pathname || "").replace(/^\/+/, "")}`);
-  Object.entries(options.query || {}).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
-  });
-  const response = await fetch(url, {
-    method: options.method || "GET",
+  if (env.OZON_STORES) {
+    try {
+      const parsed = JSON.parse(env.OZON_STORES);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item, index) => {
+          if (item.clientId && item.apiKey) stores.push({ name: item.name || `Ozon 店铺 ${index + 1}`, clientId: item.clientId, apiKey: item.apiKey });
+        });
+      }
+    } catch {
+      // Invalid JSON is ignored to match the main API behavior.
+    }
+  }
+  if (env.OZON_CLIENT_ID && env.OZON_API_KEY) {
+    stores.push({ name: env.OZON_STORE_NAME || "Ozon 店铺", clientId: env.OZON_CLIENT_ID, apiKey: env.OZON_API_KEY });
+  }
+  return stores;
+}
+
+function publicStores(env) {
+  return ozonStores(env).map((store, index) => ({ index, name: store.name, platform: "Ozon" }));
+}
+
+function resolveStore(env, storeIndex) {
+  const stores = ozonStores(env);
+  return stores[Number(storeIndex || 0)] || stores[0] || null;
+}
+
+async function ozonRequest(store, endpoint, body) {
+  const response = await fetch(`https://api-seller.ozon.ru${endpoint}`, {
+    method: "POST",
     headers: {
-      accept: "application/json",
       "content-type": "application/json",
-      "X-Mpstats-TOKEN": token,
+      "accept-language": "zh-CN,zh;q=0.9,ru;q=0.7,en;q=0.6",
+      "client-id": store.clientId,
+      "api-key": store.apiKey,
     },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: JSON.stringify(body || {}),
   });
   const text = await response.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
   if (!response.ok) {
-    const upstreamMessage = compactText(data?.message || data?.error || text, 240);
-    const error = new Error(`MPStats 请求失败（HTTP ${response.status}）${upstreamMessage ? `：${upstreamMessage}` : ""}`);
-    error.code = response.status === 401 || response.status === 403 ? "MPSTATS_AUTH_FAILED" : "MPSTATS_UPSTREAM_ERROR";
+    const message = compactText(payload?.message || payload?.error?.message || payload?.error || text, 300);
+    const error = new Error(`Ozon Seller API ${response.status}${message ? `：${message}` : ""}`);
     error.status = response.status === 401 || response.status === 403 ? 502 : 503;
+    error.code = "OZON_SELLER_API_ERROR";
     throw error;
   }
-  return data;
+  return payload || {};
 }
 
-function itemList(payload) {
-  if (Array.isArray(payload)) return payload;
-  for (const key of ["data", "items", "result", "products"]) {
-    if (Array.isArray(payload?.[key])) return payload[key];
-  }
-  return [];
-}
-
-function productIdOf(item) {
-  return String(item?.id || item?.sku || item?.product_id || item?.productId || "").trim();
-}
-
-function normalizeProduct(listItem, detail, rank, days) {
-  const source = detail && typeof detail === "object" ? detail : {};
-  const period = source.period_stats || source.periodStats || listItem?.period_stats || {};
-  const price = source.price && typeof source.price === "object" ? source.price : {};
-  const seller = source.seller && typeof source.seller === "object" ? source.seller : listItem?.seller || {};
-  const brand = source.brand && typeof source.brand === "object"
-    ? source.brand.name
-    : source.brand || (typeof listItem?.brand === "object" ? listItem.brand.name : listItem?.brand);
-  const id = productIdOf(source) || productIdOf(listItem);
-  const monthlySales = optionalNumber(period.sales ?? source.sales ?? listItem?.sales);
-  const revenue = rubles(period.revenue ?? source.revenue ?? listItem?.revenue);
-  const finalPriceRaw = price.final_price ?? price.ozon_card_price ?? source.final_price ?? listItem?.final_price;
-  const regularPriceRaw = price.price ?? source.price_value ?? listItem?.price;
-  const image = source.photo?.list?.[0]?.m || source.photo?.list?.[0]?.t || source.thumb_middle || source.thumb || listItem?.thumb_middle || listItem?.thumb || "";
+async function officialKeywordMetrics(env, input) {
+  const productId = extractProductId(input.productId || input.productUrl || "");
+  if (!productId) return { available: false, found: false, reason: "未填写自己的 Product ID" };
+  const store = resolveStore(env, input.storeIndex);
+  if (!store) return { available: false, found: false, reason: "系统尚未配置 Ozon Seller API 店铺" };
+  const days = Math.min(30, Math.max(7, Math.round(finiteNumber(input.days, DEFAULT_DAYS))));
+  const range = reportRange(days, 3);
+  const payload = await ozonRequest(store, "/v1/analytics/product-queries/details", {
+    date_from: `${range.d1}T00:00:00.000Z`,
+    date_to: `${range.d2}T23:59:59.999Z`,
+    limit_by_sku: 1000,
+    page: 0,
+    page_size: 1000,
+    skus: [productId],
+    sort_by: "BY_SEARCHES",
+    sort_dir: "DESCENDING",
+  });
+  const queries = Array.isArray(payload?.queries) ? payload.queries : [];
+  const wanted = normalizeKeyword(input.keyword);
+  const exact = queries.find((row) => normalizeKeyword(row.query) === wanted) || null;
   return {
-    rank,
-    productId: id,
-    name: compactText(source.name || listItem?.name || `Ozon ${id}`, 300),
-    url: compactText(source.link || source.url || listItem?.url || `https://www.ozon.ru/context/detail/id/${id}/`, 500),
-    image: compactText(image, 500),
-    brand: compactText(brand, 160),
-    seller: compactText(seller?.name || seller, 200),
-    price: rubles(finalPriceRaw ?? regularPriceRaw),
-    regularPrice: rubles(regularPriceRaw),
-    rating: optionalNumber(source.rating ?? listItem?.rating),
-    reviews: optionalNumber(source.comments ?? source.reviews ?? listItem?.comments ?? listItem?.reviews),
-    sales: monthlySales,
-    dailySales: monthlySales === null ? null : Number((monthlySales / days).toFixed(2)),
-    revenue,
-    stock: optionalNumber(source.balance ?? listItem?.balance),
-    deliveryScheme: compactText(source.delivery_scheme || listItem?.delivery_scheme, 40),
-    detailReady: Boolean(detail),
-    updatedAt: compactText(source.updated || listItem?.updated, 40),
+    available: true,
+    found: Boolean(exact),
+    storeName: store.name,
+    range: payload?.analytics_period || range,
+    position: optionalNumber(exact?.position),
+    orders: optionalNumber(exact?.order_count),
+    gmv: optionalNumber(exact?.gmv),
+    currency: compactText(exact?.currency || "RUB", 10),
+    uniqueSearchUsers: optionalNumber(exact?.unique_search_users),
+    uniqueViewUsers: optionalNumber(exact?.unique_view_users),
+    viewConversion: optionalNumber(exact?.view_conversion),
+    queryIndex: optionalNumber(exact?.query_index),
+    totalQueries: finiteNumber(payload?.total, queries.length),
   };
 }
 
-async function mapWithConcurrency(items, concurrency, mapper) {
-  const output = new Array(items.length);
-  let cursor = 0;
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor++;
-      try {
-        output[index] = await mapper(items[index], index);
-      } catch (error) {
-        output[index] = { __error: error.message || String(error) };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length || 1) }, () => worker()));
-  return output;
+function normalizeBrowserProduct(raw, fallbackRank) {
+  const productId = extractProductId(raw?.productId || raw?.sku || raw?.url || "");
+  if (!productId) return null;
+  const rank = Math.max(1, Math.round(finiteNumber(raw?.rank, fallbackRank)));
+  const sales = optionalNumber(raw?.sales ?? raw?.sales30);
+  return {
+    rank,
+    productId,
+    name: compactText(raw?.name || `Ozon ${productId}`, 300),
+    url: compactText(raw?.url || `https://www.ozon.ru/context/detail/id/${productId}/`, 500),
+    image: compactText(raw?.image, 500),
+    brand: compactText(raw?.brand, 160),
+    seller: compactText(raw?.seller, 200),
+    price: optionalNumber(raw?.price),
+    regularPrice: optionalNumber(raw?.regularPrice),
+    rating: optionalNumber(raw?.rating),
+    reviews: optionalNumber(raw?.reviews),
+    sales,
+    dailySales: sales === null ? null : Number((sales / DEFAULT_DAYS).toFixed(2)),
+    revenue: optionalNumber(raw?.revenue ?? raw?.revenue30),
+    stock: optionalNumber(raw?.stock),
+    promotion: compactText(raw?.promotion, 120),
+    sponsored: Boolean(raw?.sponsored),
+    detailReady: sales !== null,
+    updatedAt: compactText(raw?.updatedAt, 40),
+  };
 }
 
 function median(values) {
@@ -230,47 +285,180 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-function thresholdAt(products, targetRank, ownSales, days) {
-  const start = Math.max(0, targetRank - 5);
-  const end = Math.min(products.length, targetRank + 4);
-  const neighborhood = products.slice(start, end).map((item) => item.sales).filter(Number.isFinite);
-  const monthly = median(neighborhood);
+function thresholdAt(products, requestedRank, ownSales) {
+  const effectiveRank = Math.min(requestedRank, products.length);
+  const start = Math.max(0, effectiveRank - 5);
+  const end = Math.min(products.length, effectiveRank + 4);
+  const samples = products.slice(start, end).map((item) => item.sales).filter(Number.isFinite);
+  const monthly = median(samples);
   if (monthly === null) {
-    return { targetRank, monthlyOrders: null, dailyOrders: null, additionalMonthlyOrders: null, additionalDailyOrders: null, sampleSize: 0 };
+    return { targetRank: requestedRank, monthlyOrders: null, dailyOrders: null, additionalMonthlyOrders: null, additionalDailyOrders: null, sampleSize: 0 };
   }
   const monthlyOrders = Math.max(0, Math.ceil(monthly));
   const additionalMonthlyOrders = Number.isFinite(ownSales) ? Math.max(0, monthlyOrders - ownSales) : null;
   return {
-    targetRank,
+    targetRank: requestedRank,
     monthlyOrders,
-    dailyOrders: Math.max(0, Math.ceil(monthlyOrders / days)),
+    dailyOrders: Math.ceil(monthlyOrders / DEFAULT_DAYS),
     additionalMonthlyOrders,
-    additionalDailyOrders: additionalMonthlyOrders === null ? null : Math.max(0, Math.ceil(additionalMonthlyOrders / days)),
-    sampleSize: neighborhood.length,
+    additionalDailyOrders: additionalMonthlyOrders === null ? null : Math.ceil(additionalMonthlyOrders / DEFAULT_DAYS),
+    sampleSize: samples.length,
   };
 }
 
-function keywordPosition(payload, keyword) {
-  const rows = itemList(payload);
-  const wanted = normalizeKeyword(keyword);
-  const exact = rows.find((row) => normalizeKeyword(row.query || row.keyword) === wanted);
-  if (!exact) return { current: null, average: null, frequency: null };
-  const positions = Array.isArray(exact.positions) ? exact.positions.map(optionalNumber).filter(Number.isFinite) : [];
+function safeSearchUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return /(^|\.)ozon\.ru$/i.test(url.hostname) ? url.toString().slice(0, 1000) : "";
+  } catch {
+    return "";
+  }
+}
+
+function validateSnapshot(input) {
+  const keyword = compactText(input.keyword, 120);
+  if (keyword.length < 2) {
+    const error = new Error("采集快照缺少有效关键词。");
+    error.status = 400;
+    error.code = "INVALID_KEYWORD";
+    throw error;
+  }
+  const source = Array.isArray(input.products) ? input.products : [];
+  const seen = new Set();
+  const products = source
+    .slice(0, MAX_RESULTS * 2)
+    .map((row, index) => normalizeBrowserProduct(row, index + 1))
+    .filter((row) => {
+      if (!row || seen.has(row.productId)) return false;
+      seen.add(row.productId);
+      return true;
+    })
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, MAX_RESULTS);
+  if (!products.length) {
+    const error = new Error("未在页面中读到 MPStats 搜索结果表。请确认 MPStats 插件已显示“搜索结果”表格后重试。");
+    error.status = 400;
+    error.code = "EMPTY_BROWSER_SNAPSHOT";
+    throw error;
+  }
   return {
-    current: positions.length ? positions[positions.length - 1] : optionalNumber(exact.position),
-    average: optionalNumber(exact.avg_position ?? exact.average_position),
-    frequency: optionalNumber(exact.count ?? exact.frequency),
+    keyword,
+    products,
+    searchUrl: safeSearchUrl(input.searchUrl),
+    generatedAt: input.generatedAt && !Number.isNaN(Date.parse(input.generatedAt)) ? new Date(input.generatedAt).toISOString() : new Date().toISOString(),
   };
 }
 
-function latestFrequency(payload) {
-  const rows = itemList(payload);
-  if (!rows.length) return null;
-  const sorted = [...rows].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-  return optionalNumber(sorted[0]?.frequency ?? sorted[0]?.count);
+async function kvGet(env, key) {
+  if (!env.LISTING_CACHE?.get) return null;
+  return env.LISTING_CACHE.get(key, "json");
 }
 
-async function analyzeKeyword(env, input) {
+async function kvPut(env, key, value, ttl = SNAPSHOT_TTL_SECONDS) {
+  if (!env.LISTING_CACHE?.put) {
+    const error = new Error("Chrome 自动采集需要 Cloudflare KV 绑定 LISTING_CACHE。");
+    error.status = 503;
+    error.code = "KV_NOT_CONFIGURED";
+    throw error;
+  }
+  await env.LISTING_CACHE.put(key, JSON.stringify(value), { expirationTtl: ttl });
+}
+
+async function updateHistory(env, result) {
+  if (!env.LISTING_CACHE?.get || !env.LISTING_CACHE?.put || !result.productId) return [];
+  const key = `ozon-ranking:history:${keywordKey(result.keyword)}:${result.productId}`;
+  const history = await kvGet(env, key) || [];
+  const observation = {
+    date: result.generatedAt.slice(0, 10),
+    generatedAt: result.generatedAt,
+    rank: result.ownRank,
+    sales30: result.ownProduct?.sales ?? null,
+    officialOrders: result.official?.orders ?? null,
+    officialGmv: result.official?.gmv ?? null,
+    searchUsers: result.official?.uniqueSearchUsers ?? null,
+    viewConversion: result.official?.viewConversion ?? null,
+  };
+  const merged = [...history.filter((row) => row.date !== observation.date), observation]
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-90);
+  await kvPut(env, key, merged, SNAPSHOT_TTL_SECONDS * 4);
+  return merged;
+}
+
+async function analyzeSnapshot(env, rawSnapshot, input = {}) {
+  const snapshot = validateSnapshot(rawSnapshot);
+  const productId = extractProductId(input.productId || rawSnapshot.productId || "");
+  const storeIndex = finiteNumber(input.storeIndex ?? rawSnapshot.storeIndex, 0);
+  const ownProduct = productId ? snapshot.products.find((row) => row.productId === productId) || null : null;
+  let official = { available: false, found: false, reason: "未填写自己的 Product ID" };
+  if (productId) {
+    try {
+      official = await officialKeywordMetrics(env, { keyword: snapshot.keyword, productId, storeIndex, days: DEFAULT_DAYS });
+    } catch (error) {
+      official = { available: true, found: false, error: error.message || String(error) };
+    }
+  }
+  const ownRank = official.position ?? ownProduct?.rank ?? null;
+  if (ownProduct) ownProduct.rank = ownRank ?? ownProduct.rank;
+  const ownSales = optionalNumber(ownProduct?.sales);
+  const thresholds = [3, 10, 20, 50, 100]
+    .filter((rank) => rank <= snapshot.products.length || rank === 100)
+    .map((rank) => thresholdAt(snapshot.products, rank, ownSales));
+  const salesCoverage = snapshot.products.length
+    ? snapshot.products.filter((item) => Number.isFinite(item.sales)).length / snapshot.products.length
+    : 0;
+  const confidence = snapshot.products.length >= 50 && salesCoverage >= 0.9
+    ? "high"
+    : snapshot.products.length >= 16 && salesCoverage >= 0.7 ? "medium" : "low";
+  const result = {
+    ok: true,
+    source: "chrome-mpstats-overlay+ozon-seller-api",
+    keyword: snapshot.keyword,
+    productId: productId || null,
+    range: reportRange(DEFAULT_DAYS, 1),
+    days: DEFAULT_DAYS,
+    generatedAt: snapshot.generatedAt,
+    frequency: official.uniqueSearchUsers ?? null,
+    totalAvailable: snapshot.products.length,
+    resultCount: snapshot.products.length,
+    ownRank,
+    ownAverageRank: official.position ?? null,
+    ownProduct,
+    official,
+    thresholds,
+    products: snapshot.products,
+    searchUrl: snapshot.searchUrl,
+    diagnostics: {
+      detailCoverage: 1,
+      salesCoverage: Number(salesCoverage.toFixed(3)),
+      confidence,
+      partialErrors: official.error ? [{ productId, error: official.error }] : [],
+    },
+    methodology: {
+      ranking: "Top 100 来自当前 Chrome 中 Ozon 搜索页的 MPStats 插件表格；自己的排名优先采用 Ozon Seller API 关键词数据。",
+      threshold: "坑产为目标名次附近最多 9 个商品的 30 天订单量中位数，再换算为日单量。",
+      caveat: "排名会受广告、转化、评价、价格、库存、配送时效、地区和个性化搜索影响；坑产是运营估算，不是 Ozon 官方承诺。",
+    },
+  };
+  result.history = await updateHistory(env, result);
+  return result;
+}
+
+async function saveAndAnalyzeSnapshot(env, input) {
+  const snapshot = validateSnapshot(input);
+  const stored = {
+    ...snapshot,
+    productId: extractProductId(input.productId || ""),
+    storeIndex: finiteNumber(input.storeIndex, 0),
+  };
+  await kvPut(env, `ozon-ranking:browser:${keywordKey(snapshot.keyword)}`, stored);
+  const result = await analyzeSnapshot(env, stored, input);
+  const resultKey = `ozon-ranking:latest:${keywordKey(snapshot.keyword)}:${result.productId || "none"}`;
+  await kvPut(env, resultKey, result);
+  return result;
+}
+
+async function analyzeLatestSnapshot(env, input) {
   const keyword = compactText(input.keyword, 120);
   if (keyword.length < 2) {
     const error = new Error("请输入至少 2 个字符的 Ozon 关键词。");
@@ -278,149 +466,76 @@ async function analyzeKeyword(env, input) {
     error.code = "INVALID_KEYWORD";
     throw error;
   }
-  const requestedProductId = input.productId || input.productUrl || input.ownProductId || "";
-  const productId = extractProductId(requestedProductId);
-  if (requestedProductId && !productId) {
-    const error = new Error("商品 ID 无效，请输入 Ozon Product ID 或完整商品链接。");
-    error.status = 400;
-    error.code = "INVALID_PRODUCT_ID";
-    throw error;
-  }
-  const days = Math.min(90, Math.max(7, Math.round(finiteNumber(input.days, DEFAULT_DAYS))));
-  const limit = Math.min(MAX_RESULTS, Math.max(10, Math.round(finiteNumber(input.limit, MAX_RESULTS))));
-  const range = reportRange(days);
-  const listPayload = await mpstatsRequest(env, "items", {
-    method: "POST",
-    query: { keyword, d1: range.d1, d2: range.d2, startRow: 0, endRow: limit },
-    body: {},
-  });
-  const baseItems = itemList(listPayload).slice(0, limit).filter((item) => productIdOf(item));
-  if (!baseItems.length) {
-    const error = new Error("该关键词没有返回商品数据，请检查关键词或 MPStats Ozon Analytics 权限。");
+  const snapshot = await kvGet(env, `ozon-ranking:browser:${keywordKey(keyword)}`);
+  if (!snapshot) {
+    const error = new Error("还没有这个关键词的 Chrome 快照。请先在 Ozon 搜索页运行“Ozon 排名采集器”。");
     error.status = 404;
-    error.code = "NO_RESULTS";
+    error.code = "BROWSER_SNAPSHOT_REQUIRED";
     throw error;
   }
-
-  const detailResults = await mapWithConcurrency(baseItems, 8, (item) =>
-    mpstatsRequest(env, `items/${encodeURIComponent(productIdOf(item))}/full`, { query: range })
-  );
-  const detailErrors = [];
-  const products = baseItems.map((item, index) => {
-    const result = detailResults[index];
-    if (result?.__error) detailErrors.push({ productId: productIdOf(item), error: result.__error });
-    return normalizeProduct(item, result?.__error ? null : result, index + 1, days);
-  });
-
-  let ownProduct = productId ? products.find((item) => item.productId === productId) || null : null;
-  if (productId && !ownProduct) {
-    try {
-      const detail = await mpstatsRequest(env, `items/${encodeURIComponent(productId)}/full`, { query: range });
-      ownProduct = normalizeProduct({ id: productId }, detail, null, days);
-    } catch (error) {
-      detailErrors.push({ productId, error: error.message || String(error) });
-    }
-  }
-
-  let position = { current: null, average: null, frequency: null };
-  if (productId) {
-    try {
-      const oneDay = { d1: range.d2, d2: range.d2 };
-      let keywordPayload = await mpstatsRequest(env, `items/${encodeURIComponent(productId)}/keywords`, { query: oneDay });
-      position = keywordPosition(keywordPayload, keyword);
-      if (position.current === null && position.average === null) {
-        keywordPayload = await mpstatsRequest(env, `items/${encodeURIComponent(productId)}/keywords`, { query: range });
-        position = keywordPosition(keywordPayload, keyword);
-      }
-    } catch (error) {
-      detailErrors.push({ productId, error: `关键词排名：${error.message || String(error)}` });
-    }
-  }
-
-  let frequency = position.frequency;
-  try {
-    const frequencyPayload = await mpstatsRequest(env, "keywords/frequency", { query: { keyword } });
-    frequency = latestFrequency(frequencyPayload) ?? frequency;
-  } catch (error) {
-    detailErrors.push({ productId: "keyword", error: `搜索频率：${error.message || String(error)}` });
-  }
-
-  const listRank = productId ? products.find((item) => item.productId === productId)?.rank ?? null : null;
-  const ownRank = position.current ?? listRank;
-  if (ownProduct) ownProduct.rank = ownRank;
-  const ownSales = optionalNumber(ownProduct?.sales);
-  const thresholds = [3, 10, 20, 50, 100]
-    .filter((rank) => rank <= products.length || rank === 100)
-    .map((rank) => thresholdAt(products, Math.min(rank, products.length), ownSales, days))
-    .map((item, index) => ({ ...item, targetRank: [3, 10, 20, 50, 100].filter((rank) => rank <= products.length || rank === 100)[index] }));
-  const detailCoverage = products.length ? products.filter((item) => item.detailReady).length / products.length : 0;
-  const salesCoverage = products.length ? products.filter((item) => Number.isFinite(item.sales)).length / products.length : 0;
-  const confidence = detailCoverage >= 0.9 && salesCoverage >= 0.8 ? "high" : detailCoverage >= 0.6 && salesCoverage >= 0.5 ? "medium" : "low";
-
-  const result = {
-    ok: true,
-    source: "mpstats-ozon-analytics",
-    keyword,
-    productId: productId || null,
-    range,
-    days,
-    generatedAt: new Date().toISOString(),
-    frequency,
-    totalAvailable: finiteNumber(listPayload?.total, products.length),
-    resultCount: products.length,
-    ownRank,
-    ownAverageRank: position.average,
-    ownProduct,
-    thresholds,
-    products,
-    diagnostics: {
-      detailCoverage: Number(detailCoverage.toFixed(3)),
-      salesCoverage: Number(salesCoverage.toFixed(3)),
-      confidence,
-      partialErrors: detailErrors.slice(0, 20),
-    },
-    methodology: {
-      ranking: "Top 100 按 MPStats 关键词商品列表的返回顺序编号；指定商品优先采用 MPStats 商品关键词位置接口。",
-      threshold: "坑产为目标名次附近最多 9 个商品在所选周期销量的中位数，不代表 Ozon 官方承诺排名。",
-      caveat: "Ozon 排名还会受到广告、点击转化、评价、价格、库存、配送时效和个性化搜索等因素影响。",
-    },
-  };
-
-  if (env.LISTING_CACHE?.put) {
-    const key = `ozon-ranking:latest:${encodeURIComponent(normalizeKeyword(keyword)).slice(0, 180)}:${productId || "none"}`;
-    await env.LISTING_CACHE.put(key, JSON.stringify(result), { expirationTtl: 7 * 24 * 60 * 60 }).catch(() => {});
-  }
+  const result = await analyzeSnapshot(env, snapshot, input);
+  await kvPut(env, `ozon-ranking:latest:${keywordKey(keyword)}:${result.productId || "none"}`, result);
   return result;
+}
+
+async function authorizeSnapshotUpload(request, env) {
+  const collector = await verifyCollector(request, env);
+  if (collector) return { ok: true, user: { username: collector.sub, role: collector.role } };
+  return verifyAuth(request, env);
 }
 
 export async function onRequest({ request, env, params }) {
   if (request.method === "OPTIONS") return json({}, 204);
   const path = Array.isArray(params.path) ? params.path.join("/") : String(params.path || "");
+
   if (path === "health") {
     return json({
       ok: true,
       service: "ozon-keyword-ranking-api",
-      provider: "mpstats-ozon-analytics",
-      configured: Boolean(configuredToken(env)),
+      provider: "chrome-mpstats-overlay+ozon-seller-api",
+      configured: ozonStores(env).length > 0,
+      storeCount: ozonStores(env).length,
+      snapshotStorageConfigured: Boolean(env.LISTING_CACHE?.get && env.LISTING_CACHE?.put),
       maxResults: MAX_RESULTS,
     });
+  }
+
+  if (path === "collector/snapshot" && request.method === "POST") {
+    const collectorAuth = await authorizeSnapshotUpload(request, env);
+    if (!collectorAuth.ok) return json({ ok: false, error: collectorAuth.error }, collectorAuth.status);
+    try {
+      const input = await request.json().catch(() => ({}));
+      const result = await saveAndAnalyzeSnapshot(env, input);
+      return json({ ...result, collector: { accepted: true, user: collectorAuth.user.username } });
+    } catch (error) {
+      return json({ ok: false, code: error.code || "SNAPSHOT_ERROR", error: error.message || String(error) }, Number(error.status || 500));
+    }
   }
 
   const auth = await verifyAuth(request, env);
   if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
 
   try {
+    if (path === "stores" && request.method === "GET") {
+      return json({ ok: true, stores: publicStores(env) });
+    }
+    if (path === "collector/pair" && request.method === "POST") {
+      return json({ ok: true, ...(await issueCollectorToken(auth.user, env)) });
+    }
     if (path === "search" && request.method === "POST") {
       const input = await request.json().catch(() => ({}));
-      return json(await analyzeKeyword(env, input));
+      return json(await analyzeLatestSnapshot(env, input));
+    }
+    if (path === "official" && request.method === "POST") {
+      const input = await request.json().catch(() => ({}));
+      return json({ ok: true, official: await officialKeywordMetrics(env, input) });
     }
     if (path === "latest" && request.method === "GET") {
       const url = new URL(request.url);
-      const keyword = normalizeKeyword(url.searchParams.get("keyword"));
+      const keyword = compactText(url.searchParams.get("keyword"), 120);
       const productId = extractProductId(url.searchParams.get("productId")) || "none";
       if (!keyword) return json({ ok: false, error: "缺少 keyword。" }, 400);
-      const key = `ozon-ranking:latest:${encodeURIComponent(keyword).slice(0, 180)}:${productId}`;
-      const result = await env.LISTING_CACHE?.get?.(key, "json");
+      const result = await kvGet(env, `ozon-ranking:latest:${keywordKey(keyword)}:${productId}`);
       return result ? json(result) : json({ ok: false, error: "没有找到历史快照。" }, 404);
     }
     return json({ ok: false, error: "Not found", path }, 404);

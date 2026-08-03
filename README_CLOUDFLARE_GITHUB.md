@@ -92,13 +92,9 @@ OZON_ADS_1_CLIENT_ID=xxxxxxxx-xxxx@advertising.performance.ozon.ru
 OZON_ADS_1_CLIENT_SECRET=Performance Client Secret
 ```
 
-Ozon 关键词排名和坑产分析（MPStats 外部分析 API）：
+Ozon 关键词排名和坑产分析不需要 `MPSTATS_API_TOKEN`。它使用本项目的 Chrome 采集器读取 Ozon 搜索页中 MPStats 插件已经显示的 Top 商品和 30 天销量，再用上面的 Ozon Seller API 凭证补充自己的关键词排名、订单和搜索人数。
 
-```text
-MPSTATS_API_TOKEN=MPStats Analytics API Token
-```
-
-该值必须保存为 Cloudflare Secret。没有配置时，关键词排名页面只显示配置提示，不会返回模拟数据。
+首次安装采集器：Chrome 打开 `chrome://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，加载 `chrome-extension/ozon-ranking-collector` 文件夹。然后登录控制中心的“关键词排名”页面生成连接 Token，并粘贴到扩展。
 
 AI 刊登功能：
 
@@ -119,7 +115,7 @@ CLOUDFLARE_API_TOKEN=仅具备所需 Pages 编辑权限的 Token
 
 敏感值应在 Cloudflare 中使用 Secret 类型。不要把真实值写入本项目。
 
-可选：创建 KV namespace，并以 `LISTING_CACHE` 绑定到 Pages 项目，用于跨请求缓存。
+创建 KV namespace，并以 `LISTING_CACHE` 绑定到 Pages 项目。商品刊登功能可把它作为缓存使用；Chrome 关键词采集器必须使用该绑定保存 Top 100 快照和排名历史。
 
 ## 4. 部署验证
 
