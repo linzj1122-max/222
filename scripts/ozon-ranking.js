@@ -89,12 +89,11 @@
       <section class="panel" id="rankingResultsPanel" hidden>
         <div class="toolbar ranking-table-toolbar">
           <div>
-            <h3>关键词商品 Top 100</h3>
+            <h3>关键词商品 Top 100（排名升序）</h3>
             <p class="section-note" id="rankingMethod"></p>
           </div>
           <div class="ranking-table-actions">
             <input id="rankingFilter" type="search" placeholder="筛选 ID / 商品 / 品牌 / 店铺" />
-            <button class="secondary" id="rankingExport" type="button">导出 CSV</button>
           </div>
         </div>
         <div class="table-wrap ranking-table-wrap">
@@ -242,8 +241,9 @@
 
   function filteredProducts() {
     const query = String($("rankingFilter")?.value || "").trim().toLowerCase();
-    if (!query) return result?.products || [];
-    return (result?.products || []).filter((item) =>
+    const products = [...(result?.products || [])].sort((a, b) => Number(a.rank) - Number(b.rank));
+    if (!query) return products;
+    return products.filter((item) =>
       [item.productId, item.name, item.brand, item.seller].join(" ").toLowerCase().includes(query)
     );
   }
@@ -276,25 +276,6 @@
     renderThresholds();
     renderRows();
     $("rankingMethod").textContent = `${result.methodology?.ranking || ""} ${result.methodology?.threshold || ""}`.trim();
-  }
-
-  function csvCell(value) {
-    return `"${String(value ?? "").replaceAll('"', '""')}"`;
-  }
-
-  function exportCsv() {
-    if (!result?.products?.length) return;
-    const headers = ["排名", "Product ID", "链接", "商品", "品牌", "卖家", "价格RUB", "评分", "评价数", "30天销量", "日均单量", "销售额RUB", "广告"];
-    const lines = [headers, ...result.products.map((item) => [
-      item.rank, item.productId, item.url, item.name, item.brand, item.seller, item.price,
-      item.rating, item.reviews, item.sales, item.dailySales, item.revenue, item.sponsored ? "是" : "否",
-    ])].map((row) => row.map(csvCell).join(","));
-    const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const anchor = document.createElement("a");
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = `ozon-ranking-${result.keyword}-${result.generatedAt.slice(0, 10)}.csv`;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
   }
 
   async function checkProvider() {
@@ -406,7 +387,6 @@
   function bindEvents() {
     $("rankingForm")?.addEventListener("submit", search);
     $("rankingFilter")?.addEventListener("input", renderRows);
-    $("rankingExport")?.addEventListener("click", exportCsv);
     $("rankingPairCollector")?.addEventListener("click", pairCollector);
     $("rankingCopyCollector")?.addEventListener("click", () => copyCollectorConfig().catch((error) => setStatus(error.message || String(error), "fail")));
     $("rankingOpenOzon")?.addEventListener("click", openOzonSearch);

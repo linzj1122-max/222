@@ -98,6 +98,8 @@
   }
 
   async function collectRows() {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    await wait(600);
     let best = parseTable();
     let stableRounds = 0;
     for (let round = 0; round < 24 && best.length < 100 && stableRounds < 5; round += 1) {

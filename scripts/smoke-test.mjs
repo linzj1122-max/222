@@ -173,6 +173,9 @@ try {
   if (!searchPayload.thresholds.some((item) => item.targetRank === 10 && item.monthlyOrders > 0)) {
     throw new Error("Ozon ranking API did not calculate a Top 10 sales threshold.");
   }
+  if (searchPayload.products.some((item, index, rows) => index > 0 && rows[index - 1].rank > item.rank)) {
+    throw new Error("Ozon ranking API did not return products in ascending rank order.");
+  }
   if (searchPayload.official.orders !== 22 || searchPayload.official.uniqueSearchUsers !== 12345) {
     throw new Error("Ozon ranking API did not merge Seller API keyword metrics.");
   }

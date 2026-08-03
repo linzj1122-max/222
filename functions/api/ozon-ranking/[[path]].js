@@ -400,6 +400,7 @@ async function analyzeSnapshot(env, rawSnapshot, input = {}) {
   }
   const ownRank = official.position ?? ownProduct?.rank ?? null;
   if (ownProduct) ownProduct.rank = ownRank ?? ownProduct.rank;
+  snapshot.products.sort((a, b) => a.rank - b.rank);
   const ownSales = optionalNumber(ownProduct?.sales);
   const thresholds = [3, 10, 20, 50, 100]
     .filter((rank) => rank <= snapshot.products.length || rank === 100)
