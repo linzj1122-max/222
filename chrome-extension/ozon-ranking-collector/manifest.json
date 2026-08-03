@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ozon 排名采集器",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "读取 Ozon 搜索页上的 MPStats 排名和30天销量表，并发送到运营控制中心。",
   "permissions": ["activeTab", "storage", "tabs", "clipboardRead", "scripting"],
   "host_permissions": [
@@ -22,6 +22,11 @@
     {
       "matches": ["https://www.ozon.ru/*", "https://ozon.ru/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.pages.dev/*", "http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["bridge.js"],
       "run_at": "document_idle"
     }
   ]

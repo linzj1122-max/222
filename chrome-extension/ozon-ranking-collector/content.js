@@ -81,6 +81,28 @@
     }).filter(Boolean).sort((a, b) => a.rank - b.rank).slice(0, 100);
   }
 
+  function parseQuickTable() {
+    const table = findMpstatsTable();
+    if (!table) return [];
+    const headers = Array.from(table.querySelectorAll("th")).map(text);
+    const rankIndex = headerIndex(headers, "Место в поисковой выдаче");
+    const skuIndex = headerIndex(headers, "SKU");
+    const seen = new Set();
+    return Array.from(table.querySelectorAll("tbody tr")).map((row, index) => {
+      const cells = Array.from(row.querySelectorAll("td"));
+      const rankText = rankIndex >= 0 ? text(cells[rankIndex]) : "";
+      const skuText = skuIndex >= 0 ? text(cells[skuIndex]) : "";
+      const productId = skuText.match(/\d{5,20}/)?.[0] || "";
+      if (!productId || seen.has(productId)) return null;
+      seen.add(productId);
+      return {
+        rank: number(rankText) || index + 1,
+        productId,
+        sponsored: /Внешняя реклама/i.test(rankText),
+      };
+    }).filter(Boolean).sort((a, b) => a.rank - b.rank).slice(0, 50);
+  }
+
   function progress(message, tone = "") {
     let box = document.getElementById("ozon-ranking-collector-progress");
     if (!box) {
@@ -115,14 +137,15 @@
     return target.size > before;
   }
 
-  async function waitForInitialTable(timeoutMs = 30000) {
+  async function waitForInitialTable(parser = parseTable, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const products = parseTable();
+      const products = parser();
       if (products.length) {
         progress(`已发现 MPStats 表格，等待约 ${PLUGIN_LOAD_WAIT_MS / 1000} 秒加载完整数据…`);
         await wait(PLUGIN_LOAD_WAIT_MS);
-        return parseTable().length ? parseTable() : products;
+        const latest = parser();
+        return latest.length ? latest : products;
       }
       progress("正在等待 MPStats 排名和销量表格加载…");
       await wait(1000);
@@ -130,36 +153,52 @@
     return [];
   }
 
-  async function collectAfterScroll(collected) {
+  async function collectAfterScroll(collected, parser = parseTable) {
     await wait(PLUGIN_LOAD_WAIT_MS);
-    let grew = mergeProducts(collected, parseTable());
+    let grew = mergeProducts(collected, parser());
     const deadline = Date.now() + PLUGIN_EXTRA_WAIT_MS;
     while (Date.now() < deadline) {
       await wait(500);
-      if (mergeProducts(collected, parseTable())) {
+      if (mergeProducts(collected, parser())) {
         grew = true;
         await wait(1000);
-        mergeProducts(collected, parseTable());
+        mergeProducts(collected, parser());
         break;
       }
     }
     return grew;
   }
 
-  async function collectRows() {
+  async function collectRows({ limit = 100, parser = parseTable, targetProductId = "" } = {}) {
     window.scrollTo({ top: 0, behavior: "auto" });
     await wait(800);
     const collected = new Map();
-    mergeProducts(collected, await waitForInitialTable());
+    mergeProducts(collected, await waitForInitialTable(parser));
     if (!collected.size) return [];
     let stableRounds = 0;
-    for (let round = 0; round < 18 && collected.size < 100 && stableRounds < 3; round += 1) {
+    for (let round = 0; round < 18 && collected.size < limit && stableRounds < 3 && !collected.has(targetProductId); round += 1) {
       progress(`正在分段加载 Ozon 和 MPStats 数据：已读取 ${collected.size} 个商品…`);
       window.scrollBy({ top: Math.max(1200, Math.round(window.innerHeight * 1.8)), behavior: "smooth" });
-      const grew = await collectAfterScroll(collected);
+      const grew = await collectAfterScroll(collected, parser);
       stableRounds = grew ? 0 : stableRounds + 1;
     }
-    return Array.from(collected.values()).sort((a, b) => a.rank - b.rank).slice(0, 100);
+    return Array.from(collected.values()).sort((a, b) => a.rank - b.rank).slice(0, limit);
+  }
+
+  async function collectQuickRank(config) {
+    const productId = String(config.productId || "").match(/\d{5,20}/)?.[0] || "";
+    if (!productId) throw new Error("快速排名任务缺少有效 Product ID。");
+    progress(`正在快速检查“${config.keyword || "关键词"}”前 50 名…`);
+    const products = await collectRows({ limit: 50, parser: parseQuickTable, targetProductId: productId });
+    if (!products.length) throw new Error("未找到 MPStats 搜索结果表。请确认 Ozon 和 MPStats 已正常加载。");
+    const own = products.find((item) => item.productId === productId) || null;
+    progress(own ? `已找到自己的商品：#${own.rank}` : `已检查 ${products.length} 名，未找到自己的 Product ID。`, "ok");
+    return {
+      rank: own?.rank || null,
+      status: own ? "found" : products.length >= 50 ? "outside50" : "incomplete",
+      resultCount: products.length,
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   async function upload(config) {
@@ -186,13 +225,24 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "OZON_RANKING_COLLECT") return false;
-    upload(message.config || {})
-      .then((data) => sendResponse({ ok: true, resultCount: data.resultCount, ownRank: data.ownRank }))
-      .catch((error) => {
-        progress(error.message || String(error), "fail");
-        sendResponse({ ok: false, error: error.message || String(error) });
-      });
-    return true;
+    if (message?.type === "OZON_RANKING_COLLECT") {
+      upload(message.config || {})
+        .then((data) => sendResponse({ ok: true, resultCount: data.resultCount, ownRank: data.ownRank }))
+        .catch((error) => {
+          progress(error.message || String(error), "fail");
+          sendResponse({ ok: false, error: error.message || String(error) });
+        });
+      return true;
+    }
+    if (message?.type === "OZON_QUICK_RANK_COLLECT") {
+      collectQuickRank(message.task || {})
+        .then((data) => sendResponse({ ok: true, ...data }))
+        .catch((error) => {
+          progress(error.message || String(error), "fail");
+          sendResponse({ ok: false, error: error.message || String(error) });
+        });
+      return true;
+    }
+    return false;
   });
 })();

@@ -53,6 +53,72 @@
 }
 
 /* Ozon keyword ranking */
+.ranking-watch-panel { padding: 22px; }
+.ranking-watch-toolbar { align-items: flex-start; }
+.ranking-watch-toolbar-actions,
+.ranking-watch-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ranking-watch-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) auto auto;
+  align-items: end;
+  gap: 12px;
+  margin: 18px 0 4px;
+}
+.ranking-watch-form label { margin: 0; }
+.ranking-watch-form button { min-height: 44px; white-space: nowrap; }
+.ranking-watch-table-wrap { margin-top: 14px; max-height: 560px; }
+.ranking-watch-table { min-width: 1080px; }
+.ranking-watch-table thead th { position: sticky; top: 0; z-index: 2; }
+.ranking-watch-table th:first-child,
+.ranking-watch-table td:first-child { width: 42px; text-align: center; }
+.ranking-watch-table td > small,
+.ranking-watch-table td button + small { display: block; margin-top: 4px; color: var(--ink-3); }
+.ranking-watch-keyword,
+.ranking-watch-history-link {
+  border: 0;
+  padding: 0;
+  color: var(--brand-dark);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-weight: 750;
+  text-align: left;
+}
+.ranking-watch-keyword:hover,
+.ranking-watch-history-link:hover { color: var(--accent-sage); transform: none; box-shadow: none; }
+.ranking-watch-rank { font-size: 18px; white-space: nowrap; }
+.ranking-watch-change { font-weight: 750; white-space: nowrap; }
+.ranking-watch-change.up { color: var(--green); }
+.ranking-watch-change.down { color: var(--red); }
+.ranking-watch-change.flat { color: var(--ink-3); }
+.ranking-watch-error { max-width: 210px; color: var(--red) !important; overflow-wrap: anywhere; }
+.ranking-watch-actions button { padding: 7px 10px; min-height: 34px; font-size: 12px; }
+.ranking-watch-history {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-1);
+}
+.ranking-watch-history h4 { margin: 0; }
+.ranking-watch-history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.ranking-watch-history-grid > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.ranking-watch-history-grid span { color: var(--ink-3); font-size: 12px; }
+.ranking-watch-history-grid strong { color: var(--ink-1); }
+.ranking-section-heading { margin-bottom: 16px; }
+.ranking-section-heading h3 { margin-bottom: 2px; }
 .ranking-search-panel { padding: 22px; }
 .ranking-form {
   display: grid;
@@ -189,18 +255,22 @@
 .ranking-all-tag em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--brand-dark); font-style: normal; font-weight: 700; }
 
 @media (max-width: 1180px) {
+  .ranking-watch-form { grid-template-columns: 1fr 1fr; }
   .ranking-form { grid-template-columns: 1fr 1fr; }
   .ranking-collector-grid { grid-template-columns: 1fr; }
   .ranking-thresholds { grid-template-columns: repeat(3, minmax(145px, 1fr)); }
 }
 @media (max-width: 760px) {
+  .ranking-watch-form,
   .ranking-form,
   .ranking-summary,
   .ranking-thresholds { grid-template-columns: 1fr; }
   .ranking-table-toolbar,
   .ranking-table-actions,
   .ranking-hashtag-toolbar,
-  .ranking-hashtag-actions { align-items: stretch; flex-direction: column; }
+  .ranking-hashtag-actions,
+  .ranking-watch-toolbar,
+  .ranking-watch-toolbar-actions { align-items: stretch; flex-direction: column; }
   .ranking-table-actions input { min-width: 0; width: 100%; }
 }
 

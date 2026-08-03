@@ -4,6 +4,9 @@ const DEFAULT_DAYS = 30;
 const MAX_RESULTS = 100;
 const HASHTAG_LINK_LIMIT = 50;
 const HASHTAG_TRANSLATION_LIMIT = 400;
+const QUICK_RANK_LIMIT = 50;
+const WATCHLIST_LIMIT = 100;
+const WATCH_HISTORY_LIMIT = 90;
 const COLLECTOR_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -526,6 +529,137 @@ async function kvPut(env, key, value, ttl = SNAPSHOT_TTL_SECONDS) {
   await env.LISTING_CACHE.put(key, JSON.stringify(value), { expirationTtl: ttl });
 }
 
+function watchlistKey(username) {
+  return `ozon-ranking:watchlist:${encodeURIComponent(compactText(username, 120)).slice(0, 180)}`;
+}
+
+async function readWatchlist(env, username) {
+  const value = await kvGet(env, watchlistKey(username));
+  return Array.isArray(value) ? value.slice(0, WATCHLIST_LIMIT) : [];
+}
+
+async function writeWatchlist(env, username, items) {
+  if (!env.LISTING_CACHE?.put) {
+    const error = new Error("关键词监控需要 Cloudflare KV 绑定 LISTING_CACHE。");
+    error.status = 503;
+    error.code = "KV_NOT_CONFIGURED";
+    throw error;
+  }
+  await env.LISTING_CACHE.put(watchlistKey(username), JSON.stringify(items.slice(0, WATCHLIST_LIMIT)));
+}
+
+function newWatchId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function saveWatchItem(env, username, input) {
+  const keyword = compactText(input.keyword, 120);
+  const productId = extractProductId(input.productId || input.productUrl || "");
+  if (keyword.length < 2) {
+    const error = new Error("请输入至少 2 个字符的 Ozon 关键词。");
+    error.status = 400;
+    error.code = "INVALID_KEYWORD";
+    throw error;
+  }
+  if (!productId) {
+    const error = new Error("请输入有效的 Ozon Product ID 或商品链接。");
+    error.status = 400;
+    error.code = "INVALID_PRODUCT_ID";
+    throw error;
+  }
+  const items = await readWatchlist(env, username);
+  const id = compactText(input.id, 80);
+  const index = id ? items.findIndex((item) => item.id === id) : -1;
+  const duplicate = items.find((item, itemIndex) => itemIndex !== index
+    && normalizeKeyword(item.keyword) === normalizeKeyword(keyword)
+    && String(item.productId) === productId);
+  if (duplicate) {
+    const error = new Error("这个关键词和 Product ID 已经在监控清单中。");
+    error.status = 409;
+    error.code = "WATCH_ITEM_EXISTS";
+    throw error;
+  }
+  const now = new Date().toISOString();
+  if (index >= 0) {
+    const previous = items[index];
+    const changed = normalizeKeyword(previous.keyword) !== normalizeKeyword(keyword) || String(previous.productId) !== productId;
+    items[index] = {
+      ...previous,
+      keyword,
+      productId,
+      updatedAt: now,
+      ...(changed ? {
+        lastRank: null, previousRank: null, lastCheckedAt: null, status: "never",
+        lastError: "", resultCount: 0, history: [],
+      } : {}),
+    };
+  } else {
+    if (items.length >= WATCHLIST_LIMIT) {
+      const error = new Error(`最多保存 ${WATCHLIST_LIMIT} 个关键词监控任务。`);
+      error.status = 400;
+      error.code = "WATCHLIST_LIMIT";
+      throw error;
+    }
+    items.push({
+      id: newWatchId(), keyword, productId, createdAt: now, updatedAt: now,
+      lastRank: null, previousRank: null, lastCheckedAt: null, status: "never",
+      lastError: "", resultCount: 0, history: [],
+    });
+  }
+  await writeWatchlist(env, username, items);
+  return { ok: true, item: index >= 0 ? items[index] : items[items.length - 1], items };
+}
+
+async function deleteWatchItem(env, username, input) {
+  const id = compactText(input.id, 80);
+  const items = await readWatchlist(env, username);
+  const filtered = items.filter((item) => item.id !== id);
+  if (filtered.length === items.length) {
+    const error = new Error("没有找到要删除的关键词。");
+    error.status = 404;
+    error.code = "WATCH_ITEM_NOT_FOUND";
+    throw error;
+  }
+  await writeWatchlist(env, username, filtered);
+  return { ok: true, items: filtered };
+}
+
+async function saveQuickRank(env, username, input) {
+  const id = compactText(input.id, 80);
+  const items = await readWatchlist(env, username);
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) {
+    const error = new Error("关键词监控任务不存在或不属于当前账号。");
+    error.status = 404;
+    error.code = "WATCH_ITEM_NOT_FOUND";
+    throw error;
+  }
+  const checkedAt = input.checkedAt && !Number.isNaN(Date.parse(input.checkedAt))
+    ? new Date(input.checkedAt).toISOString() : new Date().toISOString();
+  const rankValue = optionalNumber(input.rank);
+  const rank = rankValue !== null && rankValue >= 1 && rankValue <= QUICK_RANK_LIMIT ? Math.round(rankValue) : null;
+  const status = rank ? "found" : input.status === "error" ? "error" : "outside50";
+  const history = Array.isArray(items[index].history) ? items[index].history : [];
+  const date = checkedAt.slice(0, 10);
+  const previousObservation = [...history].reverse().find((row) => row.date !== date) || null;
+  const observation = {
+    date, checkedAt, rank, status,
+    resultCount: Math.min(QUICK_RANK_LIMIT, Math.max(0, Math.round(finiteNumber(input.resultCount, 0)))),
+  };
+  const mergedHistory = [...history.filter((row) => row.date !== date), observation]
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-WATCH_HISTORY_LIMIT);
+  items[index] = {
+    ...items[index], lastRank: rank, previousRank: optionalNumber(previousObservation?.rank),
+    lastCheckedAt: checkedAt, status,
+    lastError: status === "error" ? compactText(input.error || "快速排名采集失败。", 240) : "",
+    resultCount: observation.resultCount, history: mergedHistory, updatedAt: checkedAt,
+  };
+  await writeWatchlist(env, username, items);
+  return { ok: true, item: items[index] };
+}
+
 async function updateHistory(env, result) {
   if (!env.LISTING_CACHE?.get || !env.LISTING_CACHE?.put || !result.productId) return [];
   const key = `ozon-ranking:history:${keywordKey(result.keyword)}:${result.productId}`;
@@ -707,6 +841,8 @@ export async function onRequest({ request, env, params }) {
       maxResults: MAX_RESULTS,
       hashtagLinkLimit: HASHTAG_LINK_LIMIT,
       translationConfigured: Boolean(env.OPENAI_API_KEY),
+      quickRankLimit: QUICK_RANK_LIMIT,
+      watchlistLimit: WATCHLIST_LIMIT,
     });
   }
 
@@ -734,12 +870,32 @@ export async function onRequest({ request, env, params }) {
     }
   }
 
+  if (path === "collector/rank" && request.method === "POST") {
+    const collectorAuth = await authorizeSnapshotUpload(request, env);
+    if (!collectorAuth.ok) return json({ ok: false, error: collectorAuth.error }, collectorAuth.status);
+    try {
+      const input = await request.json().catch(() => ({}));
+      return json(await saveQuickRank(env, collectorAuth.user.username, input));
+    } catch (error) {
+      return json({ ok: false, code: error.code || "QUICK_RANK_ERROR", error: error.message || String(error) }, Number(error.status || 500));
+    }
+  }
+
   const auth = await verifyAuth(request, env);
   if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
 
   try {
     if (path === "collector/pair" && request.method === "POST") {
       return json({ ok: true, ...(await issueCollectorToken(auth.user, env)) });
+    }
+    if (path === "watchlist" && request.method === "GET") {
+      return json({ ok: true, items: await readWatchlist(env, auth.user.username), rankLimit: QUICK_RANK_LIMIT });
+    }
+    if (path === "watchlist/save" && request.method === "POST") {
+      return json(await saveWatchItem(env, auth.user.username, await request.json().catch(() => ({}))));
+    }
+    if (path === "watchlist/delete" && request.method === "POST") {
+      return json(await deleteWatchItem(env, auth.user.username, await request.json().catch(() => ({}))));
     }
     if (path === "search" && request.method === "POST") {
       const input = await request.json().catch(() => ({}));

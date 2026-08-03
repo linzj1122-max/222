@@ -14,6 +14,11 @@
 
   let result = null;
   let collectorToken = "";
+  let watchItems = [];
+  let watchEditingId = "";
+  let watchBusy = false;
+  let watchRequestId = "";
+  let watchBridgeReady = false;
   let state = {};
   try { state = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {}; } catch { state = {}; }
 
@@ -27,7 +32,54 @@
         <span class="live-chip"><span></span>Chrome + Seller API</span>
       </section>
 
+      <section class="panel ranking-watch-panel" id="rankingWatchPanel">
+        <div class="toolbar ranking-watch-toolbar">
+          <div>
+            <h3>每日关键词排名监控</h3>
+            <p class="section-note">保存关键词和自己的 Product ID；快速采集只检查前 50 名，完整分析仍保留在本页下方。</p>
+          </div>
+          <div class="ranking-watch-toolbar-actions">
+            <button class="secondary" id="rankingWatchSelectAll" type="button">全选</button>
+            <button class="primary" id="rankingWatchCollectSelected" type="button">抓取选中关键词</button>
+          </div>
+        </div>
+        <form id="rankingWatchForm" class="ranking-watch-form">
+          <input id="rankingWatchId" type="hidden" />
+          <label>关键词
+            <input id="rankingWatchKeyword" required minlength="2" maxlength="120" placeholder="例如：пила аккумуляторная" />
+          </label>
+          <label>我的 Product ID / 链接
+            <input id="rankingWatchProductId" required placeholder="例如：2732733487" />
+          </label>
+          <button class="primary" id="rankingWatchSave" type="submit">保存关键词</button>
+          <button class="secondary" id="rankingWatchCancel" type="button" hidden>取消修改</button>
+        </form>
+        <div id="rankingWatchStatus" class="table-status">添加关键词后，点击关键词或勾选多个任务即可抓取最新排名。</div>
+        <div class="table-wrap ranking-watch-table-wrap">
+          <table class="ranking-watch-table">
+            <thead>
+              <tr>
+                <th><input id="rankingWatchCheckAll" type="checkbox" aria-label="勾选全部关键词" /></th>
+                <th>关键词</th>
+                <th>我的 Product ID</th>
+                <th>最新排名</th>
+                <th>较昨日</th>
+                <th>抓取时间</th>
+                <th>7 日记录</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="rankingWatchRows"><tr><td colspan="8" class="muted-cell">正在读取关键词清单…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="rankingWatchHistory" class="ranking-watch-history" hidden></div>
+      </section>
+
       <section class="panel ranking-search-panel">
+        <div class="ranking-section-heading">
+          <h3>完整关键词分析</h3>
+          <p class="section-note">保留原有 Top 100、30 天销量、俄文标签和坑产分析；这里读取最近一次完整采集结果。</p>
+        </div>
         <form id="rankingForm" class="ranking-form">
           <label>Ozon 关键词
             <input id="rankingKeyword" required minlength="2" maxlength="120" placeholder="例如：сыворотка для глаз" />
@@ -167,7 +219,8 @@
     document.querySelector(`[data-tab="${TAB_ID}"]`)?.classList.add("active");
     $(TAB_ID)?.classList.add("active");
     if ($("pageTitle")) $("pageTitle").textContent = "Ozon 关键词排名";
-    checkProvider().catch(() => {});
+    Promise.all([checkProvider(), loadWatchlist()]).catch(() => {});
+    pingRankingBridge();
   }
 
   async function readJson(response) {
@@ -205,6 +258,231 @@
     if (!button) return;
     button.disabled = busy;
     button.textContent = busy ? "正在读取并计算…" : "读取最新 Top 100";
+  }
+
+  function setWatchStatus(message, tone = "") {
+    const element = $("rankingWatchStatus");
+    if (!element) return;
+    element.textContent = message;
+    element.className = `table-status ${tone}`.trim();
+  }
+
+  function formatWatchTime(value) {
+    if (!value || Number.isNaN(Date.parse(value))) return "尚未抓取";
+    return new Date(value).toLocaleString("zh-CN", {
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    });
+  }
+
+  function watchRankLabel(item) {
+    if (item.status === "found" && Number.isFinite(Number(item.lastRank))) return `#${Number(item.lastRank)}`;
+    if (item.status === "outside50") return "50 名外";
+    if (item.status === "error") return "抓取失败";
+    return "未抓取";
+  }
+
+  function watchChange(item) {
+    if (item.lastRank === null || item.lastRank === undefined || item.previousRank === null || item.previousRank === undefined) {
+      return { label: "—", tone: "" };
+    }
+    const current = Number(item.lastRank);
+    const previous = Number(item.previousRank);
+    if (!Number.isFinite(current) || !Number.isFinite(previous)) return { label: "—", tone: "" };
+    const delta = previous - current;
+    if (delta > 0) return { label: `↑${delta}`, tone: "up" };
+    if (delta < 0) return { label: `↓${Math.abs(delta)}`, tone: "down" };
+    return { label: "持平", tone: "flat" };
+  }
+
+  function watchHistorySummary(item) {
+    const history = (Array.isArray(item.history) ? item.history : []).slice(-7);
+    if (!history.length) return "—";
+    return history.map((row) => row.rank ? `#${row.rank}` : "50+").join(" → ");
+  }
+
+  function renderWatchlist() {
+    const tbody = $("rankingWatchRows");
+    if (!tbody) return;
+    if (!watchItems.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="muted-cell">还没有保存关键词。请在上方添加第一个关键词和 Product ID。</td></tr>';
+      return;
+    }
+    tbody.innerHTML = watchItems.map((item) => {
+      const change = watchChange(item);
+      const error = item.lastError ? `<small class="ranking-watch-error">${escapeHtml(item.lastError)}</small>` : "";
+      return `
+        <tr data-watch-row="${escapeHtml(item.id)}">
+          <td><input class="ranking-watch-check" type="checkbox" value="${escapeHtml(item.id)}" aria-label="勾选 ${escapeHtml(item.keyword)}" /></td>
+          <td><button class="ranking-watch-keyword" type="button" data-watch-action="quick" data-watch-id="${escapeHtml(item.id)}">${escapeHtml(item.keyword)}</button><small>点击立即抓取</small></td>
+          <td><code>${escapeHtml(item.productId)}</code></td>
+          <td><strong class="ranking-watch-rank">${escapeHtml(watchRankLabel(item))}</strong>${error}</td>
+          <td><span class="ranking-watch-change ${change.tone}">${escapeHtml(change.label)}</span></td>
+          <td>${escapeHtml(formatWatchTime(item.lastCheckedAt))}<small>${item.resultCount ? `已检查 ${item.resultCount} 名` : ""}</small></td>
+          <td><button class="ranking-watch-history-link" type="button" data-watch-action="history" data-watch-id="${escapeHtml(item.id)}">${escapeHtml(watchHistorySummary(item))}</button></td>
+          <td><div class="ranking-watch-actions">
+            <button class="secondary" type="button" data-watch-action="full" data-watch-id="${escapeHtml(item.id)}">完整分析</button>
+            <button class="secondary" type="button" data-watch-action="edit" data-watch-id="${escapeHtml(item.id)}">修改</button>
+            <button class="secondary danger" type="button" data-watch-action="delete" data-watch-id="${escapeHtml(item.id)}">删除</button>
+          </div></td>
+        </tr>`;
+    }).join("");
+  }
+
+  async function loadWatchlist() {
+    const payload = await apiRequest(API("watchlist"));
+    watchItems = Array.isArray(payload.items) ? payload.items : [];
+    renderWatchlist();
+    return payload;
+  }
+
+  function resetWatchForm() {
+    watchEditingId = "";
+    if ($("rankingWatchId")) $("rankingWatchId").value = "";
+    if ($("rankingWatchKeyword")) $("rankingWatchKeyword").value = "";
+    if ($("rankingWatchProductId")) $("rankingWatchProductId").value = "";
+    if ($("rankingWatchSave")) $("rankingWatchSave").textContent = "保存关键词";
+    if ($("rankingWatchCancel")) $("rankingWatchCancel").hidden = true;
+  }
+
+  async function saveWatch(event) {
+    event.preventDefault();
+    const button = $("rankingWatchSave");
+    if (button) button.disabled = true;
+    try {
+      const payload = await apiRequest(API("watchlist/save"), {
+        method: "POST",
+        body: JSON.stringify({
+          id: watchEditingId,
+          keyword: String($("rankingWatchKeyword")?.value || "").trim(),
+          productId: String($("rankingWatchProductId")?.value || "").trim(),
+        }),
+      });
+      watchItems = Array.isArray(payload.items) ? payload.items : watchItems;
+      renderWatchlist();
+      resetWatchForm();
+      setWatchStatus("关键词和 Product ID 已保存。点击关键词即可抓取最新前 50 名排名。", "ok");
+    } catch (error) {
+      setWatchStatus(error.message || String(error), "fail");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function editWatch(item) {
+    watchEditingId = item.id;
+    $("rankingWatchId").value = item.id;
+    $("rankingWatchKeyword").value = item.keyword;
+    $("rankingWatchProductId").value = item.productId;
+    $("rankingWatchSave").textContent = "保存修改";
+    $("rankingWatchCancel").hidden = false;
+    $("rankingWatchKeyword").focus();
+  }
+
+  async function deleteWatch(item) {
+    if (!window.confirm(`确定删除关键词“${item.keyword}”及其排名历史吗？`)) return;
+    try {
+      const payload = await apiRequest(API("watchlist/delete"), {
+        method: "POST",
+        body: JSON.stringify({ id: item.id }),
+      });
+      watchItems = Array.isArray(payload.items) ? payload.items : [];
+      renderWatchlist();
+      $("rankingWatchHistory").hidden = true;
+      setWatchStatus("关键词已删除。", "ok");
+    } catch (error) {
+      setWatchStatus(error.message || String(error), "fail");
+    }
+  }
+
+  function showWatchHistory(item) {
+    const box = $("rankingWatchHistory");
+    if (!box) return;
+    const rows = [...(Array.isArray(item.history) ? item.history : [])].reverse();
+    box.innerHTML = `
+      <div class="toolbar"><div><h4>${escapeHtml(item.keyword)} · 排名历史</h4><p class="section-note">Product ID ${escapeHtml(item.productId)}，每天保留最后一次结果，最多 90 天。</p></div><button class="secondary" id="rankingWatchCloseHistory" type="button">关闭</button></div>
+      <div class="ranking-watch-history-grid">${rows.length ? rows.map((row) => `
+        <div><span>${escapeHtml(row.date)}</span><strong>${row.rank ? `#${number(row.rank)}` : "50 名外"}</strong></div>`).join("") : '<p class="muted-cell">还没有历史数据。</p>'}</div>`;
+    box.hidden = false;
+    $("rankingWatchCloseHistory")?.addEventListener("click", () => { box.hidden = true; });
+  }
+
+  function useForFullAnalysis(item) {
+    $("rankingKeyword").value = item.keyword;
+    $("rankingProductId").value = item.productId;
+    state = { keyword: item.keyword, productId: item.productId };
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+    document.querySelector(".ranking-search-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setStatus("已填入该关键词和 Product ID。可以读取上次完整结果，或使用采集器更新完整 Top 100。", "ok");
+  }
+
+  function checkedWatchItems() {
+    const selected = new Set(Array.from(document.querySelectorAll(".ranking-watch-check:checked")).map((input) => input.value));
+    return watchItems.filter((item) => selected.has(item.id));
+  }
+
+  function setWatchBusy(busy) {
+    watchBusy = busy;
+    const button = $("rankingWatchCollectSelected");
+    if (button) {
+      button.disabled = busy;
+      button.textContent = busy ? "正在批量抓取…" : "抓取选中关键词";
+    }
+  }
+
+  function pingRankingBridge() {
+    window.postMessage({ source: "OZON_RANKING_PAGE_V1", type: "PING" }, location.origin);
+  }
+
+  function startQuickRanks(items) {
+    if (watchBusy) {
+      setWatchStatus("已有排名抓取任务正在运行，请等待完成。", "fail");
+      return;
+    }
+    if (!items.length) {
+      setWatchStatus("请先勾选至少一个关键词。", "fail");
+      return;
+    }
+    watchRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setWatchBusy(true);
+    setWatchStatus(`准备抓取 ${items.length} 个关键词，Chrome 将依次打开 Ozon 搜索页…`);
+    window.postMessage({
+      source: "OZON_RANKING_PAGE_V1",
+      type: "START_QUICK_RANKS",
+      requestId: watchRequestId,
+      tasks: items.map(({ id, keyword, productId }) => ({ id, keyword, productId })),
+    }, location.origin);
+    setTimeout(() => {
+      if (watchBusy && !watchBridgeReady) {
+        setWatchBusy(false);
+        setWatchStatus("没有连接到 Ozon 排名采集器。请安装或重新加载 Chrome 扩展后刷新本页。", "fail");
+      }
+    }, 2500);
+  }
+
+  async function handleBridgeMessage(event) {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const message = event.data || {};
+    if (message.source !== "OZON_RANKING_EXTENSION_V1") return;
+    if (message.type === "READY") {
+      watchBridgeReady = true;
+      return;
+    }
+    if (message.requestId && watchRequestId && message.requestId !== watchRequestId) return;
+    if (message.type === "QUICK_STARTED") {
+      watchBridgeReady = true;
+      setWatchStatus(`采集器已连接，开始抓取 ${message.total || 0} 个关键词…`);
+    } else if (message.type === "QUICK_PROGRESS") {
+      const rank = message.rank ? `，找到排名 #${message.rank}` : message.stage === "saved" ? "，50 名内未找到" : "";
+      setWatchStatus(`${message.index || 0}/${message.total || 0}：${message.keyword || ""}${message.message ? `，${message.message}` : rank}`);
+    } else if (message.type === "QUICK_COMPLETE") {
+      setWatchBusy(false);
+      await loadWatchlist().catch(() => {});
+      setWatchStatus(`抓取完成：成功 ${message.succeeded || 0} 个，失败 ${message.failed || 0} 个。`, message.failed ? "" : "ok");
+    } else if (message.type === "QUICK_ERROR") {
+      setWatchBusy(false);
+      await loadWatchlist().catch(() => {});
+      setWatchStatus(message.error || "快速排名抓取失败。", "fail");
+    }
   }
 
   function number(value, digits = 0) {
@@ -484,7 +762,37 @@
     }
   }
 
+  function handleWatchRowsClick(event) {
+    const button = event.target.closest("[data-watch-action]");
+    if (!button) return;
+    const item = watchItems.find((row) => row.id === button.dataset.watchId);
+    if (!item) return;
+    const action = button.dataset.watchAction;
+    if (action === "quick") startQuickRanks([item]);
+    else if (action === "full") useForFullAnalysis(item);
+    else if (action === "edit") editWatch(item);
+    else if (action === "delete") deleteWatch(item);
+    else if (action === "history") showWatchHistory(item);
+  }
+
+  function toggleWatchSelection() {
+    const boxes = Array.from(document.querySelectorAll(".ranking-watch-check"));
+    const shouldCheck = boxes.some((box) => !box.checked);
+    boxes.forEach((box) => { box.checked = shouldCheck; });
+    if ($("rankingWatchCheckAll")) $("rankingWatchCheckAll").checked = shouldCheck;
+    if ($("rankingWatchSelectAll")) $("rankingWatchSelectAll").textContent = shouldCheck ? "取消全选" : "全选";
+  }
+
   function bindEvents() {
+    $("rankingWatchForm")?.addEventListener("submit", saveWatch);
+    $("rankingWatchCancel")?.addEventListener("click", resetWatchForm);
+    $("rankingWatchRows")?.addEventListener("click", handleWatchRowsClick);
+    $("rankingWatchSelectAll")?.addEventListener("click", toggleWatchSelection);
+    $("rankingWatchCheckAll")?.addEventListener("change", (event) => {
+      document.querySelectorAll(".ranking-watch-check").forEach((box) => { box.checked = event.target.checked; });
+      if ($("rankingWatchSelectAll")) $("rankingWatchSelectAll").textContent = event.target.checked ? "取消全选" : "全选";
+    });
+    $("rankingWatchCollectSelected")?.addEventListener("click", () => startQuickRanks(checkedWatchItems()));
     $("rankingForm")?.addEventListener("submit", search);
     $("rankingFilter")?.addEventListener("input", renderRows);
     $("rankingPairCollector")?.addEventListener("click", pairCollector);
@@ -501,6 +809,9 @@
     if ($("rankingProductId")) $("rankingProductId").value = state.productId || "";
     if ($("rankingCollectorUrl")) $("rankingCollectorUrl").value = location.origin;
     bindEvents();
+    window.addEventListener("message", handleBridgeMessage);
+    pingRankingBridge();
+    if (!document.body.classList.contains("auth-locked")) loadWatchlist().catch(() => {});
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

@@ -121,6 +121,44 @@ if (pairResponse.status !== 200 || !pairPayload.token) {
   throw new Error("Ozon ranking collector pairing did not return a token.");
 }
 
+const watchSaveResponse = await rankingApi.onRequest({
+  request: new Request("http://127.0.0.1/api/ozon-ranking/watchlist/save", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${loginPayload.token}` },
+    body: JSON.stringify({ keyword: "мини пила", productId: "100005" }),
+  }),
+  env: rankingEnv,
+  params: { path: ["watchlist", "save"] },
+});
+const watchSavePayload = await watchSaveResponse.json();
+if (watchSaveResponse.status !== 200 || !watchSavePayload.item?.id) {
+  throw new Error("Ozon ranking watchlist did not save a keyword and Product ID.");
+}
+const quickRankResponse = await rankingApi.onRequest({
+  request: new Request("http://127.0.0.1/api/ozon-ranking/collector/rank", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Collector ${pairPayload.token}` },
+    body: JSON.stringify({ id: watchSavePayload.item.id, rank: 7, status: "found", resultCount: 50 }),
+  }),
+  env: rankingEnv,
+  params: { path: ["collector", "rank"] },
+});
+const quickRankPayload = await quickRankResponse.json();
+if (quickRankResponse.status !== 200 || quickRankPayload.item?.lastRank !== 7 || quickRankPayload.item?.history?.length !== 1) {
+  throw new Error("Ozon ranking collector did not save the quick Top 50 rank observation.");
+}
+const watchListResponse = await rankingApi.onRequest({
+  request: new Request("http://127.0.0.1/api/ozon-ranking/watchlist", {
+    headers: { authorization: `Bearer ${loginPayload.token}` },
+  }),
+  env: rankingEnv,
+  params: { path: ["watchlist"] },
+});
+const watchListPayload = await watchListResponse.json();
+if (watchListResponse.status !== 200 || watchListPayload.items?.[0]?.lastRank !== 7 || watchListPayload.rankLimit !== 50) {
+  throw new Error("Ozon ranking watchlist did not return the saved latest rank.");
+}
+
 const keyword = "сыворотка для глаз";
 const products = Array.from({ length: 12 }, (_, index) => ({
   rank: index + 1,
