@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ozon 排名采集器",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "读取 Ozon 搜索页上的 MPStats 排名和30天销量表，并发送到运营控制中心。",
   "permissions": ["activeTab", "storage", "tabs", "clipboardRead", "scripting"],
   "host_permissions": [

@@ -29,6 +29,7 @@ for (const file of sourceFiles) {
 const hashtagCore = await import("../chrome-extension/ozon-hashtag-collector/background.js");
 await import(`../chrome-extension/ozon-ranking-collector/content.js?review-parser=${Date.now()}`);
 const reviewParser = globalThis.__OZON_RANKING_COLLECTOR_TEST__?.reviewCountFromText;
+const completeReviewCount = globalThis.__OZON_RANKING_COLLECTOR_TEST__?.completeReviewCount;
 const reviewFixtures = [
   ["4.9 1952 отзыва", 1952],
   ["5.0 1 594 отзывов", 1594],
@@ -38,6 +39,9 @@ const reviewFixtures = [
 const parsedReviewFixtures = reviewFixtures.map(([value, expected]) => ({ expected, actual: reviewParser?.(value) }));
 if (!reviewParser || parsedReviewFixtures.some(({ expected, actual }) => actual !== expected)) {
   throw new Error(`Ozon ranking collector did not preserve full review counts with Russian thousands formatting: ${JSON.stringify(parsedReviewFixtures)}`);
+}
+if (!completeReviewCount || completeReviewCount(["956 отзывов", "1 956 отзывов"]) !== 1956 || completeReviewCount(["594 отзыва", "1 594 отзыва"]) !== 1594) {
+  throw new Error("Ozon ranking collector did not prefer the complete outer-card review count over a truncated nested value.");
 }
 delete globalThis.__OZON_RANKING_COLLECTOR_TEST__;
 const xiaomiDetail = hashtagCore.extractProductTags(`

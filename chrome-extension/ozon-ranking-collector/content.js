@@ -20,6 +20,11 @@
     return number(matches[matches.length - 1][1]);
   }
 
+  function completeReviewCount(values) {
+    const candidates = values.map(reviewCountFromText).filter(Number.isFinite);
+    return candidates.length ? Math.max(...candidates) : null;
+  }
+
   function findMpstatsTable() {
     return Array.from(document.querySelectorAll("table")).find((table) => {
       const header = Array.from(table.querySelectorAll("th")).map(text).join("|");
@@ -33,16 +38,21 @@
 
   function reviewCountNearLink(link, productId) {
     let node = link;
+    const cardTexts = [];
     for (let depth = 0; depth < 9 && node?.parentElement; depth += 1) {
       node = node.parentElement;
       const linkedIds = new Set(Array.from(node.querySelectorAll('a[href*="/product/"]')).map((item) => (
         String(item.href || "").match(/\/product\/[^?#]*-(\d{5,20})(?:\/|\?|#|$)/i)?.[1] || ""
       )).filter(Boolean));
-      if (linkedIds.size > 2 || (linkedIds.size && !linkedIds.has(productId))) continue;
-      const reviews = reviewCountFromText(text(node));
-      if (reviews !== null) return reviews;
+      if (linkedIds.size > 1) break;
+      if (linkedIds.size && !linkedIds.has(productId)) continue;
+      cardTexts.push(text(node));
+      Array.from(node.querySelectorAll("*")).forEach((element) => {
+        const value = text(element);
+        if (/отзыв/i.test(value) && value.length <= 80) cardTexts.push(value);
+      });
     }
-    return null;
+    return completeReviewCount(cardTexts);
   }
 
   function productLinkMap() {
@@ -251,7 +261,7 @@
   }
 
   if (typeof chrome === "undefined") {
-    globalThis.__OZON_RANKING_COLLECTOR_TEST__ = { reviewCountFromText };
+    globalThis.__OZON_RANKING_COLLECTOR_TEST__ = { reviewCountFromText, completeReviewCount };
     return;
   }
 
