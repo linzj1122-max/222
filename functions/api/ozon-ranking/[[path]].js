@@ -2,6 +2,8 @@
 
 const DEFAULT_DAYS = 30;
 const MAX_RESULTS = 100;
+const HASHTAG_LINK_LIMIT = 50;
+const HASHTAG_TRANSLATION_LIMIT = 400;
 const COLLECTOR_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -322,6 +324,159 @@ function safeSearchUrl(value) {
   }
 }
 
+function normalizeHashtag(value) {
+  const cleaned = compactText(value, 82).replace(/^[^#]*#/, "#").replace(/[^\p{L}\p{N}_#].*$/u, "");
+  if (!/^#[\p{L}\p{N}_]{2,80}$/u.test(cleaned)) return "";
+  return cleaned;
+}
+
+function hashtagParts(value) {
+  return String(value || "").toLocaleLowerCase("ru-RU").match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function hashtagContainsBrand(tag, brands) {
+  const tagTokens = hashtagParts(String(tag || "").replace(/^#/, ""));
+  const tagCompact = tagTokens.join("");
+  if (!tagCompact) return false;
+  return brands.some((brand) => {
+    const brandTokens = hashtagParts(brand);
+    const brandCompact = brandTokens.join("");
+    if (brandCompact.length < 2) return false;
+    return tagTokens.includes(brandCompact) || tagCompact === brandCompact || (brandTokens.length > 1 && tagCompact.includes(brandCompact));
+  });
+}
+
+function normalizeHashtagProducts(input) {
+  const source = Array.isArray(input?.hashtagProducts)
+    ? input.hashtagProducts
+    : Array.isArray(input?.hashtagAnalysis?.products) ? input.hashtagAnalysis.products : [];
+  return source.slice(0, HASHTAG_LINK_LIMIT).map((raw, index) => {
+    const brands = Array.from(new Set((Array.isArray(raw?.brands) ? raw.brands : [])
+      .map((value) => compactText(value, 120))
+      .filter((value) => value && !/^(?:нет бренда|no brand|без бренда)$/i.test(value))));
+    const unique = new Map();
+    let excludedBrandCount = Math.max(0, Math.round(finiteNumber(raw?.excludedBrandCount, Array.isArray(raw?.excludedBrandTags) ? raw.excludedBrandTags.length : 0)));
+    (Array.isArray(raw?.tags) ? raw.tags : []).slice(0, 300).forEach((value) => {
+      const tag = normalizeHashtag(value);
+      if (!tag) return;
+      if (hashtagContainsBrand(tag, brands)) {
+        excludedBrandCount += 1;
+        return;
+      }
+      const key = tag.toLocaleLowerCase("ru-RU");
+      if (!unique.has(key)) unique.set(key, tag);
+    });
+    return {
+      rank: Math.max(1, Math.round(finiteNumber(raw?.rank, index + 1))),
+      productId: extractProductId(raw?.productId || raw?.url || ""),
+      url: safeSearchUrl(raw?.url),
+      tags: Array.from(unique.values()),
+      brands,
+      excludedBrandCount,
+      error: compactText(raw?.error, 160),
+    };
+  });
+}
+
+function buildHashtagAnalysis(input) {
+  const products = normalizeHashtagProducts(input);
+  const existing = new Map((Array.isArray(input?.hashtagAnalysis?.allTags) ? input.hashtagAnalysis.allTags : [])
+    .map((item) => [normalizeHashtag(item?.tag).toLocaleLowerCase("ru-RU"), compactText(item?.translation, 120)]));
+  const successful = products.filter((item) => !item.error);
+  const counts = new Map();
+  successful.forEach((product) => product.tags.forEach((tag) => {
+    const key = tag.toLocaleLowerCase("ru-RU");
+    const current = counts.get(key) || { tag, count: 0 };
+    current.count += 1;
+    counts.set(key, current);
+  }));
+  const denominator = successful.length;
+  const allTags = Array.from(counts.values())
+    .map((item) => ({
+      ...item,
+      rate: denominator ? Number((item.count / denominator).toFixed(4)) : 0,
+      translation: existing.get(item.tag.toLocaleLowerCase("ru-RU")) || "",
+    }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, "ru"));
+  const repeated = allTags.filter((item) => item.count > 1);
+  return {
+    requestedLimit: HASHTAG_LINK_LIMIT,
+    attemptedCount: products.length,
+    successfulCount: successful.length,
+    failedCount: products.length - successful.length,
+    linksWithTags: successful.filter((item) => item.tags.length).length,
+    uniqueTagCount: allTags.length,
+    repeatedTagCount: repeated.length,
+    excludedBrandTagCount: products.reduce((sum, item) => sum + item.excludedBrandCount, 0),
+    totalOccurrences: allTags.reduce((sum, item) => sum + item.count, 0),
+    rateDenominator: denominator,
+    rateDefinition: "包含该标签的成功商品链接数 ÷ 成功读取的商品链接数；同一链接内重复标签只计一次。",
+    sourceArea: "商品详情页“Характеристики”上方的蓝色 #标签区域。",
+    brandFilter: "商品品牌及包含品牌词的标签已排除，不参与统计和复制。",
+    topTags: (repeated.length ? repeated : allTags).slice(0, 20),
+    allTags,
+    products,
+    translationConfigured: Boolean(input?.hashtagAnalysis?.translationConfigured),
+    translationError: compactText(input?.hashtagAnalysis?.translationError, 240),
+  };
+}
+
+async function translateHashtagAnalysis(env, analysis) {
+  if (!analysis.allTags.length || !env.OPENAI_API_KEY) {
+    return { ...analysis, translationConfigured: Boolean(env.OPENAI_API_KEY) };
+  }
+  const tags = analysis.allTags.slice(0, HASHTAG_TRANSLATION_LIMIT).map((item) => item.tag);
+  const baseUrl = String(env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "你是俄语电商标签翻译器。把俄文 hashtag 翻译成简洁自然的简体中文，只输出 JSON 对象，键必须保留原始 hashtag，值为中文含义（不带#）。品牌名可音译或保留原文。" },
+          { role: "user", content: `翻译这些 Ozon 商品标签：${JSON.stringify(tags)}` },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(compactText(payload?.error?.message || `HTTP ${response.status}`, 180));
+    let translations = {};
+    try {
+      const content = String(payload?.choices?.[0]?.message?.content || "{}").replace(/^```(?:json)?\s*|\s*```$/gi, "");
+      translations = JSON.parse(content);
+    } catch {
+      translations = {};
+    }
+    const translated = analysis.allTags.map((item) => ({
+      ...item,
+      translation: compactText(translations[item.tag] || item.translation, 120),
+    }));
+    const byKey = new Map(translated.map((item) => [item.tag.toLocaleLowerCase("ru-RU"), item]));
+    return {
+      ...analysis,
+      allTags: translated,
+      topTags: analysis.topTags.map((item) => byKey.get(item.tag.toLocaleLowerCase("ru-RU")) || item),
+      translationConfigured: true,
+      translationError: "",
+      translatedCount: translated.filter((item) => item.translation).length,
+    };
+  } catch (error) {
+    return {
+      ...analysis,
+      translationConfigured: true,
+      translationError: error?.name === "AbortError" ? "中文翻译请求超时，俄文标签已完整保留。" : `中文翻译失败：${compactText(error?.message || error, 180)}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function validateSnapshot(input) {
   const keyword = compactText(input.keyword, 120);
   if (keyword.length < 2) {
@@ -394,6 +549,7 @@ async function updateHistory(env, result) {
 
 async function analyzeSnapshot(env, rawSnapshot, input = {}) {
   const snapshot = validateSnapshot(rawSnapshot);
+  const hashtagAnalysis = buildHashtagAnalysis(rawSnapshot);
   const productId = extractProductId(input.productId || rawSnapshot.productId || "");
   const ownProduct = productId ? snapshot.products.find((row) => row.productId === productId) || null : null;
   let official = { available: false, found: false, reason: "未填写自己的 Product ID" };
@@ -434,6 +590,7 @@ async function analyzeSnapshot(env, rawSnapshot, input = {}) {
     official,
     thresholds,
     products: snapshot.products,
+    hashtagAnalysis,
     searchUrl: snapshot.searchUrl,
     diagnostics: {
       detailCoverage: 1,
@@ -464,6 +621,50 @@ async function saveAndAnalyzeSnapshot(env, input) {
   return result;
 }
 
+async function saveHashtagSnapshot(env, input) {
+  const keyword = compactText(input.keyword, 120);
+  if (keyword.length < 2) {
+    const error = new Error("标签快照缺少有效关键词。");
+    error.status = 400;
+    error.code = "INVALID_KEYWORD";
+    throw error;
+  }
+  let hashtagAnalysis = buildHashtagAnalysis(input);
+  if (!hashtagAnalysis.attemptedCount) {
+    const error = new Error("没有收到商品标签数据，请在 Ozon 关键词搜索页重新运行独立标签采集器。");
+    error.status = 400;
+    error.code = "EMPTY_HASHTAG_SNAPSHOT";
+    throw error;
+  }
+  hashtagAnalysis = await translateHashtagAnalysis(env, hashtagAnalysis);
+  const stored = {
+    keyword,
+    hashtagAnalysis,
+    searchUrl: safeSearchUrl(input.searchUrl),
+    generatedAt: input.generatedAt && !Number.isNaN(Date.parse(input.generatedAt)) ? new Date(input.generatedAt).toISOString() : new Date().toISOString(),
+  };
+  await kvPut(env, `ozon-ranking:hashtags:${keywordKey(keyword)}`, stored);
+  return { ok: true, ...stored };
+}
+
+async function latestHashtagSnapshot(env, input) {
+  const keyword = compactText(input.keyword, 120);
+  if (keyword.length < 2) {
+    const error = new Error("请输入至少 2 个字符的 Ozon 关键词。");
+    error.status = 400;
+    error.code = "INVALID_KEYWORD";
+    throw error;
+  }
+  const stored = await kvGet(env, `ozon-ranking:hashtags:${keywordKey(keyword)}`);
+  if (!stored) {
+    const error = new Error("还没有这个关键词的标签快照。请先运行独立的“Ozon 标签采集器”。");
+    error.status = 404;
+    error.code = "HASHTAG_SNAPSHOT_REQUIRED";
+    throw error;
+  }
+  return { ok: true, ...stored, hashtagAnalysis: buildHashtagAnalysis(stored) };
+}
+
 async function analyzeLatestSnapshot(env, input) {
   const keyword = compactText(input.keyword, 120);
   if (keyword.length < 2) {
@@ -479,7 +680,8 @@ async function analyzeLatestSnapshot(env, input) {
     error.code = "BROWSER_SNAPSHOT_REQUIRED";
     throw error;
   }
-  const result = await analyzeSnapshot(env, snapshot, input);
+  const hashtagSnapshot = await kvGet(env, `ozon-ranking:hashtags:${keywordKey(keyword)}`);
+  const result = await analyzeSnapshot(env, hashtagSnapshot?.hashtagAnalysis ? { ...snapshot, hashtagAnalysis: hashtagSnapshot.hashtagAnalysis } : snapshot, input);
   await kvPut(env, `ozon-ranking:latest:${keywordKey(keyword)}:${result.productId || "none"}`, result);
   return result;
 }
@@ -503,6 +705,8 @@ export async function onRequest({ request, env, params }) {
       storeCount: ozonStores(env).length,
       snapshotStorageConfigured: Boolean(env.LISTING_CACHE?.get && env.LISTING_CACHE?.put),
       maxResults: MAX_RESULTS,
+      hashtagLinkLimit: HASHTAG_LINK_LIMIT,
+      translationConfigured: Boolean(env.OPENAI_API_KEY),
     });
   }
 
@@ -518,6 +722,18 @@ export async function onRequest({ request, env, params }) {
     }
   }
 
+  if (path === "collector/hashtags" && request.method === "POST") {
+    const collectorAuth = await authorizeSnapshotUpload(request, env);
+    if (!collectorAuth.ok) return json({ ok: false, error: collectorAuth.error }, collectorAuth.status);
+    try {
+      const input = await request.json().catch(() => ({}));
+      const result = await saveHashtagSnapshot(env, input);
+      return json({ ...result, collector: { accepted: true, user: collectorAuth.user.username } });
+    } catch (error) {
+      return json({ ok: false, code: error.code || "HASHTAG_SNAPSHOT_ERROR", error: error.message || String(error) }, Number(error.status || 500));
+    }
+  }
+
   const auth = await verifyAuth(request, env);
   if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
 
@@ -528,6 +744,10 @@ export async function onRequest({ request, env, params }) {
     if (path === "search" && request.method === "POST") {
       const input = await request.json().catch(() => ({}));
       return json(await analyzeLatestSnapshot(env, input));
+    }
+    if (path === "hashtags/search" && request.method === "POST") {
+      const input = await request.json().catch(() => ({}));
+      return json(await latestHashtagSnapshot(env, input));
     }
     if (path === "official" && request.method === "POST") {
       const input = await request.json().catch(() => ({}));

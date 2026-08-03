@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ozon 标签采集器</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main>
+    <header><strong>Ozon 标签采集器</strong><span>独立插件 · Top 50 蓝色 #标签</span></header>
+    <section>
+      <label>控制中心地址<input id="dashboardUrl" placeholder="https://xxx.pages.dev" /></label>
+      <label>连接 Token<textarea id="token" rows="3" placeholder="使用控制中心生成的采集器配置"></textarea></label>
+      <div class="row"><button id="pasteConfig" class="secondary" type="button">粘贴配置</button><button id="saveConfig" class="secondary" type="button">保存配置</button></div>
+    </section>
+    <section>
+      <label>Ozon 关键词<input id="keyword" placeholder="беспроводные наушники" /></label>
+      <button id="openSearch" type="button">打开关键词搜索页</button>
+      <button id="collect" type="button">抓取 Top 50 蓝色标签</button>
+      <small>自动过滤商品品牌标签，例如 #xiaomi、#наушники_xiaomi。</small>
+    </section>
+    <div id="status" role="status">先从控制中心复制连接配置。</div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

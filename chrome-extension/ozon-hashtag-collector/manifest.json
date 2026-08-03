@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Ozon 标签采集器",
+  "version": "1.0.0",
+  "description": "独立抓取 Ozon 关键词搜索前 50 个商品详情页中的蓝色 #标签，并过滤品牌标签。",
+  "permissions": ["activeTab", "storage", "tabs", "clipboardRead", "scripting"],
+  "host_permissions": [
+    "https://www.ozon.ru/*",
+    "https://ozon.ru/*",
+    "https://*.pages.dev/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "Ozon 标签采集器",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.ozon.ru/search/*", "https://ozon.ru/search/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

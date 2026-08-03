@@ -26,6 +26,24 @@ for (const file of sourceFiles) {
   }
 }
 
+const hashtagCore = await import("../chrome-extension/ozon-hashtag-collector/background.js");
+const xiaomiDetail = hashtagCore.extractProductTags(`
+  <script type="application/ld+json">{"@type":"Product","name":"Headphones","brand":{"@type":"Brand","name":"Xiaomi"}}</script>
+  <div style="color:#fff"><a>#беспроводные_наушники</a><a>#xiaomi</a><a>#наушники_xiaomi</a><a>#шумоподавление</a></div>
+  <h2>Характеристики</h2>
+`);
+if (xiaomiDetail.tags.join(" ") !== "#беспроводные_наушники #шумоподавление" || xiaomiDetail.excludedBrandTags.length !== 2) {
+  throw new Error("Independent hashtag collector did not isolate the blue tag block or filter Xiaomi brand tags.");
+}
+const tokonariDetail = hashtagCore.extractProductTags(`
+  <script type="application/ld+json">{"@type":"Product","brand":{"name":"Tokonari"}}</script>
+  <div><a>#шуруповерт</a><a>#tokonari</a><a>#шуруповерт_профессиональный</a></div>
+  <h2>Характеристики товара</h2>
+`);
+if (tokonariDetail.tags.includes("#tokonari") || tokonariDetail.excludedBrandTags[0] !== "#tokonari") {
+  throw new Error("Independent hashtag collector did not remove a Latin product-brand hashtag.");
+}
+
 const checks = [
   ["main", await import("../functions/api/[[path]].js"), "/api/health", "health", "GET", 200],
   ["listing", await import("../functions/api/listing/[[path]].js"), "/api/listing/health", "health", "GET", 200],
@@ -116,6 +134,12 @@ const products = Array.from({ length: 12 }, (_, index) => ({
   sales30: 300 - (index * 10),
   revenue30: 250000 + index,
 }));
+const hashtagProducts = [
+  { rank: 1, productId: "100000", url: products[0].url, brands: ["Tokonari"], tags: ["#Красота", "#уход", "#Красота", "#tokonari"] },
+  { rank: 2, productId: "100001", url: products[1].url, brands: ["Xiaomi"], tags: ["#красота", "#уход", "#глаза", "#xiaomi", "#наушники_xiaomi"] },
+  { rank: 3, productId: "100002", url: products[2].url, tags: ["#уход", "#сыворотка"] },
+  { rank: 4, productId: "100003", url: products[3].url, tags: [], error: "HTTP 403" },
+];
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
@@ -158,6 +182,37 @@ try {
   if (uploadResponse.status !== 200 || uploadPayload.resultCount !== 12 || uploadPayload.ownRank !== 6) {
     throw new Error("Ozon ranking collector did not store and normalize the browser snapshot correctly.");
   }
+  if (uploadPayload.hashtagAnalysis?.attemptedCount) {
+    throw new Error("Ozon ranking collector unexpectedly mixed hashtag data into the ranking snapshot.");
+  }
+
+  const hashtagUploadResponse = await rankingApi.onRequest({
+    request: new Request("http://127.0.0.1/api/ozon-ranking/collector/hashtags", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Collector ${pairPayload.token}`,
+      },
+      body: JSON.stringify({ keyword, hashtagProducts }),
+    }),
+    env: rankingEnv,
+    params: { path: ["collector", "hashtags"] },
+  });
+  const hashtagUploadPayload = await hashtagUploadResponse.json();
+  const careTag = hashtagUploadPayload.hashtagAnalysis?.allTags?.find((item) => item.tag.toLocaleLowerCase("ru-RU") === "#уход");
+  const beautyTag = hashtagUploadPayload.hashtagAnalysis?.allTags?.find((item) => item.tag.toLocaleLowerCase("ru-RU") === "#красота");
+  if (hashtagUploadPayload.hashtagAnalysis?.successfulCount !== 3 || hashtagUploadPayload.hashtagAnalysis?.failedCount !== 1) {
+    throw new Error("Ozon ranking hashtag analysis did not preserve successful and failed Top 50 links.");
+  }
+  if (careTag?.count !== 3 || careTag?.rate !== 1 || beautyTag?.count !== 2 || beautyTag?.rate !== 0.6667) {
+    throw new Error("Ozon ranking hashtag analysis did not deduplicate per-link tags or calculate repetition rates correctly.");
+  }
+  if (hashtagUploadPayload.hashtagAnalysis?.uniqueTagCount !== 4 || hashtagUploadPayload.hashtagAnalysis?.excludedBrandTagCount !== 3) {
+    throw new Error("Ozon hashtag collector did not remove detected product-brand tags.");
+  }
+  if (hashtagUploadPayload.hashtagAnalysis?.allTags?.some((item) => /tokonari|xiaomi/i.test(item.tag))) {
+    throw new Error("Ozon hashtag collector returned a brand-bearing hashtag in the retained tag list.");
+  }
 
   const searchResponse = await rankingApi.onRequest({
     request: new Request("http://127.0.0.1/api/ozon-ranking/search", {
@@ -186,6 +241,26 @@ try {
   }
   if (searchPayload.official.storeName !== "Smoke Ozon 2") {
     throw new Error("Ozon ranking API did not automatically find the Product ID across stores.");
+  }
+  if (searchPayload.hashtagAnalysis?.uniqueTagCount !== 4 || searchPayload.hashtagAnalysis?.excludedBrandTagCount !== 3) {
+    throw new Error("Ozon ranking API did not merge the independent hashtag snapshot.");
+  }
+
+  const hashtagSearchResponse = await rankingApi.onRequest({
+    request: new Request("http://127.0.0.1/api/ozon-ranking/hashtags/search", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${loginPayload.token}`,
+      },
+      body: JSON.stringify({ keyword }),
+    }),
+    env: rankingEnv,
+    params: { path: ["hashtags", "search"] },
+  });
+  const hashtagSearchPayload = await hashtagSearchResponse.json();
+  if (hashtagSearchResponse.status !== 200 || hashtagSearchPayload.hashtagAnalysis?.uniqueTagCount !== 4) {
+    throw new Error("Ozon hashtag API did not return the independently stored hashtag snapshot.");
   }
 } finally {
   globalThis.fetch = originalFetch;

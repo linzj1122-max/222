@@ -36,6 +36,7 @@
             <input id="rankingProductId" placeholder="可选，例如：1786874757" />
           </label>
           <button class="primary" id="rankingSearchBtn" type="submit">读取最新 Top 100</button>
+          <button class="secondary" id="rankingLoadHashtags" type="button">只读取最新标签</button>
         </form>
         <div id="rankingStatus" class="table-status">先用 Chrome 采集器抓取 Ozon 搜索页，再在这里读取最新 Top 100。</div>
       </section>
@@ -44,7 +45,7 @@
         <div class="toolbar">
           <div>
             <h3>Chrome 采集器</h3>
-            <p class="section-note">采集器只读取 Ozon 页面上 MPStats 已显示的排名和 30 天销量并发送到本控制中心，不会向 Ozon 店铺写入数据。</p>
+            <p class="section-note">原“Ozon 排名采集器”只负责 MPStats 排名和销量。Top 50 蓝色 #标签请单独加载 <code>chrome-extension/ozon-hashtag-collector</code>，两个插件互不覆盖。</p>
           </div>
           <button class="secondary" id="rankingOpenOzon" type="button">打开关键词搜索页</button>
         </div>
@@ -80,6 +81,30 @@
           <span class="scope-chip" id="rankingConfidence">置信度：--</span>
         </div>
         <div class="ranking-thresholds" id="rankingThresholds"></div>
+      </section>
+
+      <section class="panel ranking-hashtag-panel" id="rankingHashtagPanel" hidden>
+        <div class="toolbar ranking-hashtag-toolbar">
+          <div>
+            <h3>Top 50 商品链接 #标签分析</h3>
+            <p class="section-note" id="rankingHashtagMethod"></p>
+          </div>
+          <div class="ranking-hashtag-actions">
+            <button class="secondary" id="rankingCopyTopTags" type="button">复制高频俄文</button>
+            <button class="secondary" id="rankingCopyAllTags" type="button">复制全部俄文</button>
+          </div>
+        </div>
+        <div class="ranking-hashtag-summary" id="rankingHashtagSummary"></div>
+        <div class="table-wrap ranking-hashtag-table-wrap">
+          <table class="ranking-hashtag-table">
+            <thead><tr><th>高频俄文标签</th><th>中文翻译</th><th>出现链接</th><th>重复率</th></tr></thead>
+            <tbody id="rankingTopTagRows"></tbody>
+          </table>
+        </div>
+        <details class="ranking-all-tags">
+          <summary>查看全部标签（<span id="rankingAllTagCount">0</span> 个）</summary>
+          <div class="ranking-all-tag-list" id="rankingAllTagList"></div>
+        </details>
       </section>
 
       <section class="panel" id="rankingResultsPanel" hidden>
@@ -235,6 +260,50 @@
     panel.hidden = false;
   }
 
+  function percent(value) {
+    if (!Number.isFinite(Number(value))) return "--";
+    return `${(Number(value) * 100).toLocaleString("zh-CN", { maximumFractionDigits: 1 })}%`;
+  }
+
+  function renderHashtags() {
+    const panel = $("rankingHashtagPanel");
+    const analysis = result?.hashtagAnalysis;
+    if (!panel || !analysis) return;
+    const method = $("rankingHashtagMethod");
+    if (method) {
+      const translationNote = analysis.translationError
+        ? analysis.translationError
+        : analysis.translationConfigured ? "中文翻译仅用于查看，复制按钮只复制俄文。" : "未配置 OpenAI，当前仅显示俄文；复制按钮仍可正常使用。";
+      method.textContent = `${analysis.sourceArea || ""} ${analysis.rateDefinition || ""} ${analysis.brandFilter || ""} ${translationNote}`.trim();
+    }
+    const summary = $("rankingHashtagSummary");
+    if (summary) summary.innerHTML = [
+      `<span>计划抓取 <strong>${number(analysis.requestedLimit)}</strong> 条</span>`,
+      `<span>成功 <strong>${number(analysis.successfulCount)}/${number(analysis.attemptedCount)}</strong> 条</span>`,
+      `<span>含标签 <strong>${number(analysis.linksWithTags)}</strong> 条</span>`,
+      `<span>全部不同标签 <strong>${number(analysis.uniqueTagCount)}</strong> 个</span>`,
+      `<span>重复标签 <strong>${number(analysis.repeatedTagCount)}</strong> 个</span>`,
+      `<span>已过滤品牌标签 <strong>${number(analysis.excludedBrandTagCount)}</strong> 个</span>`,
+    ].join("");
+    const topRows = $("rankingTopTagRows");
+    const topTags = Array.isArray(analysis.topTags) ? analysis.topTags : [];
+    if (topRows) topRows.innerHTML = topTags.length ? topTags.map((item) => `
+      <tr>
+        <td><strong class="ranking-hashtag-ru">${escapeHtml(item.tag)}</strong></td>
+        <td>${escapeHtml(item.translation || "--")}</td>
+        <td>${number(item.count)} / ${number(analysis.rateDenominator)}</td>
+        <td><strong>${percent(item.rate)}</strong></td>
+      </tr>
+    `).join("") : '<tr><td colspan="4" class="muted-cell">前 50 个商品链接中没有读取到俄文 #标签。</td></tr>';
+    const all = Array.isArray(analysis.allTags) ? analysis.allTags : [];
+    if ($("rankingAllTagCount")) $("rankingAllTagCount").textContent = number(all.length);
+    const list = $("rankingAllTagList");
+    if (list) list.innerHTML = all.length ? all.map((item) => `
+      <span class="ranking-all-tag"><b>${escapeHtml(item.tag)}</b>${item.translation ? `<small>${escapeHtml(item.translation)}</small>` : ""}<em>${percent(item.rate)}</em></span>
+    `).join("") : '<span class="muted">暂无标签</span>';
+    panel.hidden = false;
+  }
+
   function filteredProducts() {
     const query = String($("rankingFilter")?.value || "").trim().toLowerCase();
     const products = [...(result?.products || [])].sort((a, b) => Number(a.rank) - Number(b.rank));
@@ -270,6 +339,7 @@
   function renderResult() {
     renderSummary();
     renderThresholds();
+    renderHashtags();
     renderRows();
     $("rankingMethod").textContent = `${result.methodology?.ranking || ""} ${result.methodology?.threshold || ""}`.trim();
   }
@@ -333,6 +403,30 @@
     setStatus("采集器配置已复制。打开扩展后点击“粘贴配置”。", "ok");
   }
 
+  async function copyRussianTags(scope) {
+    const analysis = result?.hashtagAnalysis;
+    const source = scope === "top" ? analysis?.topTags : analysis?.allTags;
+    const tags = (Array.isArray(source) ? source : [])
+      .map((item) => String(item?.tag || "").trim())
+      .filter((tag) => tag.startsWith("#"));
+    if (!tags.length) throw new Error("暂无可复制的俄文标签。");
+    const content = tags.join(" ");
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = content;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (!copied) throw new Error("浏览器未允许复制，请手动选择标签。");
+    }
+    setStatus(`已复制 ${tags.length} 个${scope === "top" ? "高频" : "全部"}原始标签（不含中文翻译）。`, "ok");
+  }
+
   function openOzonSearch() {
     const keyword = String($("rankingKeyword")?.value || "").trim();
     if (keyword.length < 2) {
@@ -366,11 +460,38 @@
     }
   }
 
+  async function loadHashtags() {
+    const keyword = String($("rankingKeyword")?.value || "").trim();
+    if (keyword.length < 2) {
+      setStatus("请先输入 Ozon 关键词。", "fail");
+      return;
+    }
+    const button = $("rankingLoadHashtags");
+    if (button) button.disabled = true;
+    setStatus("正在读取独立标签采集器的最新快照…");
+    try {
+      const payload = await apiRequest(API("hashtags/search"), {
+        method: "POST",
+        body: JSON.stringify({ keyword }),
+      });
+      result = { ...(result || {}), keyword, hashtagAnalysis: payload.hashtagAnalysis };
+      renderHashtags();
+      setStatus(`标签分析完成：保留 ${payload.hashtagAnalysis?.uniqueTagCount || 0} 个标签，已过滤 ${payload.hashtagAnalysis?.excludedBrandTagCount || 0} 个品牌标签。`, "ok");
+    } catch (error) {
+      setStatus(error.message || String(error), "fail");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function bindEvents() {
     $("rankingForm")?.addEventListener("submit", search);
     $("rankingFilter")?.addEventListener("input", renderRows);
     $("rankingPairCollector")?.addEventListener("click", pairCollector);
     $("rankingCopyCollector")?.addEventListener("click", () => copyCollectorConfig().catch((error) => setStatus(error.message || String(error), "fail")));
+    $("rankingCopyTopTags")?.addEventListener("click", () => copyRussianTags("top").catch((error) => setStatus(error.message || String(error), "fail")));
+    $("rankingCopyAllTags")?.addEventListener("click", () => copyRussianTags("all").catch((error) => setStatus(error.message || String(error), "fail")));
+    $("rankingLoadHashtags")?.addEventListener("click", loadHashtags);
     $("rankingOpenOzon")?.addEventListener("click", openOzonSearch);
   }
 

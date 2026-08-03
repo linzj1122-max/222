@@ -56,7 +56,7 @@
 .ranking-search-panel { padding: 22px; }
 .ranking-form {
   display: grid;
-  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) auto;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(240px, 1fr) auto auto;
   align-items: end;
   gap: 14px;
 }
@@ -140,6 +140,53 @@
   border: 1px solid var(--line);
 }
 .ranking-old-price { text-decoration: line-through; }
+.ranking-hashtag-toolbar { align-items: flex-start; }
+.ranking-hashtag-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.ranking-hashtag-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 14px 0;
+}
+.ranking-hashtag-summary span {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--bg-1);
+  font-size: 12px;
+}
+.ranking-hashtag-summary strong { color: var(--ink-1); }
+.ranking-hashtag-table-wrap { max-height: 520px; }
+.ranking-hashtag-table { min-width: 680px; }
+.ranking-hashtag-table th:first-child { width: 34%; }
+.ranking-hashtag-ru { color: var(--brand-dark); font-size: 14px; }
+.ranking-all-tags { margin-top: 16px; }
+.ranking-all-tags summary {
+  cursor: pointer;
+  color: var(--brand-dark);
+  font-weight: 700;
+}
+.ranking-all-tag-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 9px;
+  margin-top: 12px;
+  max-height: 620px;
+  overflow: auto;
+}
+.ranking-all-tag {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+.ranking-all-tag b { overflow-wrap: anywhere; color: var(--ink-1); }
+.ranking-all-tag small { grid-column: 1; color: var(--ink-3); }
+.ranking-all-tag em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--brand-dark); font-style: normal; font-weight: 700; }
 
 @media (max-width: 1180px) {
   .ranking-form { grid-template-columns: 1fr 1fr; }
@@ -151,7 +198,9 @@
   .ranking-summary,
   .ranking-thresholds { grid-template-columns: 1fr; }
   .ranking-table-toolbar,
-  .ranking-table-actions { align-items: stretch; flex-direction: column; }
+  .ranking-table-actions,
+  .ranking-hashtag-toolbar,
+  .ranking-hashtag-actions { align-items: stretch; flex-direction: column; }
   .ranking-table-actions input { min-width: 0; width: 100%; }
 }
 
