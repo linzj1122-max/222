@@ -36,13 +36,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-github-ssh.ps1 `
 添加公钥后，执行首次发布：
 
 ```powershell
-.\scripts\publish.ps1 -Message "Initial import"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish.ps1 -Message "Initial import"
 ```
 
 以后每次更新只需执行：
 
 ```powershell
-.\scripts\publish.ps1 -Message "说明本次修改"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish.ps1 -Message "说明本次修改"
 ```
 
 脚本会自动暂存、提交并通过 SSH 推送。普通的 `git commit` 也会触发项目内的 `post-commit` 钩子自动推送；如果推送失败，本地提交仍会保留，可修复网络或权限后运行 `git push origin main`。

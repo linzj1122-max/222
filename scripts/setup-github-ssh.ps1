@@ -73,4 +73,4 @@ Write-Host ''
 Write-Host 'Add this PUBLIC key to GitHub (Settings -> SSH and GPG keys):' -ForegroundColor Cyan
 Get-Content -Raw -LiteralPath "$KeyPath.pub"
 Write-Host 'After adding it, run:' -ForegroundColor Cyan
-Write-Host ".\scripts\publish.ps1 -Message `"Initial import`""
+Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish.ps1 -Message `"Initial import`""
