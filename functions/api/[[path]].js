@@ -1723,12 +1723,15 @@ function normalizeAdsReportRows(payload, account, campaigns, from, to) {
     const adRevenue = textAmount(adObjectValue(row, ["revenue", "ordersMoney", "money", "sales", "推广带来的销售额", "推广带来的销售额，₽", "促销销售", "促销销售，{货币}", "Выручка", "Продажи", "Заказы, ₽", "Продажи в продвижении, ₽", "Продажи в продвижении с заказов модели, ₽", "Заказано на сумму, ₽", "Revenue", "Sales"]));
     const adCost = textAmount(adObjectValue(row, ["expense", "expenses", "cost", "spent", "moneySpent", "费用", "费用，₽", "Расход", "Расход, ₽", "Расход, ₽, с НДС", "Затраты", "Expense", "Cost", "Spend"]));
     const sku = String(adObjectValue(row, ["sku", "SKU", "offerId", "offer_id", "productId", "product_id", "商品 SKU", "Артикул", "Артикул продавца", "Ozon ID", "Ozon Product Id", "fbo", "fbs", "ID товара"]) || campaignId) || detectRowSku(row);
-    const rawDate = String(adObjectValue(row, ["date", "day", "dateTo", "日期", "День", "Дата", "Date", "Day", "Period", "Период", "at"]) || "");
+    const rawDate = String(adObjectValue(row, ["date", "day", "日期", "День", "Дата", "Date", "Day", "Period", "Период", "at"]) || "");
     const rowDate = toIsoDate(rawDate, "") || detectRowDate(row);
     return {
       date: rowDate || to,
       dateFrom: rowDate || from,
       dateTo: rowDate || to,
+      reportFrom: from,
+      reportTo: to,
+      hasExactDate: Boolean(rowDate),
       store: account.name,
       campaignId,
       campaignName: String(adObjectValue(row, ["campaignName", "campaign_name", "title", "广告活动", "Название кампании", "Campaign name"]) || campaign.campaignName || ""),
@@ -1912,7 +1915,10 @@ function toIsoDate(value, fallback = "") {
 
 function detectRowDate(row) {
   if (!row || typeof row !== "object") return "";
-  const dateKeys = Object.entries(row).filter(([key]) => /date|day|дата|день|период|period/i.test(key));
+  const dateKeys = Object.entries(row).filter(([key]) => {
+    if (!/date|day|дата|день|период|period/i.test(key)) return false;
+    return !/from|to|start|end|начал|конец/i.test(key);
+  });
   for (const [, value] of dateKeys) {
     const iso = toIsoDate(value, "");
     if (iso) return iso;

@@ -479,8 +479,16 @@
 
         <section class="panel">
           <div class="toolbar">
-            <h3>每日产品广告汇总</h3>
-            <span class="status">按日期和产品汇总，不展示订单号。</span>
+            <div>
+              <h3>产品广告数据明细</h3>
+              <span class="status" id="adDetailRangeStatus">展示所选时间范围内的逐条产品广告数据。</span>
+            </div>
+            <div class="ad-detail-filters">
+              <label>开始日期<input id="adDetailDateFrom" type="date" /></label>
+              <span class="ad-detail-date-separator">至</span>
+              <label>结束日期<input id="adDetailDateTo" type="date" /></label>
+              <button class="secondary" id="applyAdDetailRange" type="button">筛选</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
@@ -489,6 +497,8 @@
                   <th>日期/周期</th>
                   <th>店铺</th>
                   <th>产品</th>
+                  <th>广告活动</th>
+                  <th>投放信息</th>
                   <th>广告销售额</th>
                   <th>广告订单</th>
                   <th>广告费</th>

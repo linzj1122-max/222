@@ -26,7 +26,7 @@ const initialProducts = [
     const importedAdsKey = "ozon_wb_imported_ads_v1";
     const adsTaskCacheKey = "ozon_wb_ads_task_cache_v1";
     const adImageCacheKey = "ozon_wb_ad_image_cache_v1";
-    const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v2";
+    const adsRowsCacheKey = "ozon_wb_ads_rows_cache_v3";
     const trendOrdersKey = "ozon_wb_trend_orders_v1";
     const orderRangeCacheKey = "ozon_wb_order_range_cache_v2";
     const storeAnalyticsCacheKey = "ozon_wb_store_analytics_cache_v2";
@@ -183,7 +183,14 @@ const initialProducts = [
     let inventoryLoadSeq = 0;
     let inventorySortKey = "";
     let inventorySortDir = "asc";
-    let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]");
+    let importedAds = JSON.parse(localStorage.getItem(importedAdsKey) || "[]").map((row) => {
+      if (typeof row?.hasExactDate === "boolean") return row;
+      const reportFrom = row?.reportFrom || row?.dateFrom || row?.date || "";
+      const reportTo = row?.reportTo || row?.dateTo || row?.date || "";
+      // 旧导入数据中，只有落在报表结束日的行无法区分“当天”还是“整段汇总”，按整段处理更安全。
+      const hasExactDate = Boolean(row?.date && (reportFrom === reportTo || row.date !== reportTo));
+      return { ...row, reportFrom, reportTo, hasExactDate };
+    });
     let backendAds = [];
     let adsTaskCache = JSON.parse(localStorage.getItem(adsTaskCacheKey) || "{}");
     let adsRowsCache = JSON.parse(localStorage.getItem(adsRowsCacheKey) || "{}");
@@ -196,8 +203,8 @@ const initialProducts = [
     // 累积全部按天分析数据(曝光/点击/转化),用于本地筛选任意子范围秒出
     const trendDailyAnalyticsKey = "ozon_wb_trend_daily_analytics_v1";
     let trendDailyAnalytics = JSON.parse(localStorage.getItem(trendDailyAnalyticsKey) || "[]");
-    // 清理旧版本缓存（v1 已废弃，数据结构不兼容）
-    ["ozon_wb_order_range_cache_v1", "ozon_wb_store_analytics_cache_v1"].forEach((staleKey) => {
+    // 清理旧版本缓存（旧广告缓存可能把周期报表误拆到单日）
+    ["ozon_wb_order_range_cache_v1", "ozon_wb_store_analytics_cache_v1", "ozon_wb_ads_rows_cache_v1", "ozon_wb_ads_rows_cache_v2"].forEach((staleKey) => {
       if (localStorage.getItem(staleKey) !== null) localStorage.removeItem(staleKey);
     });
     // 清理被早期 withCache bug 破坏的缓存条目(orders/rows 变成了对象而非数组)
@@ -525,6 +532,23 @@ const initialProducts = [
     // 广告缓存持久化到 KV(跨设备/跨部署共享)。原因:Cloudflare Functions 内存
     // 每次冷启动都清空,必须把已拉到的数据持久化,否则重启后一片空白。
     let cloudAdsSyncing = false;
+    function normalizeAdCacheEntry(entry) {
+      if (!entry || !Array.isArray(entry.rows)) return entry;
+      return {
+        ...entry,
+        rows: entry.rows.map((row) => {
+          if (typeof row?.hasExactDate === "boolean") return row;
+          const reportFrom = row?.reportFrom || row?.dateFrom || row?.date || "";
+          const reportTo = row?.reportTo || row?.dateTo || row?.date || "";
+          return {
+            ...row,
+            reportFrom,
+            reportTo,
+            hasExactDate: Boolean(reportFrom && reportTo && reportFrom === reportTo),
+          };
+        }),
+      };
+    }
     function syncAdsCacheToCloud() {
       if (cloudAdsSyncing || !backendEnabled) return;
       cloudAdsSyncing = true;
@@ -543,8 +567,11 @@ const initialProducts = [
         if (data.ok && data.cache && typeof data.cache === "object") {
           const cloudKeys = Object.keys(data.cache);
           for (const k of cloudKeys) {
-            if (!adsRowsCache[k] || (adsRowsCache[k]?.updatedAt || 0) < (data.cache[k]?.updatedAt || 0)) {
-              adsRowsCache[k] = data.cache[k];
+            const incoming = normalizeAdCacheEntry(data.cache[k]);
+            // 旧版曾把整段周期数据写入结束日缓存，这类单日键直接丢弃。
+            if (!k.includes("|") && incoming?.rows?.some((row) => row.hasExactDate === false)) continue;
+            if (!adsRowsCache[k] || (adsRowsCache[k]?.updatedAt || 0) < (incoming?.updatedAt || 0)) {
+              adsRowsCache[k] = incoming;
             }
           }
           if (data.tasks && typeof data.tasks === "object") {
@@ -674,6 +701,8 @@ const initialProducts = [
           // 按天拆分缓存:每一天的数据单独存入 adsRowsCache[date]
           const dayMap = {};
           for (const row of backendAds) {
+            // 周期汇总行没有可拆分的精确日期，不能把整段数据误缓存到结束日。
+            if (row.hasExactDate === false) continue;
             const d = row.date || row.dateFrom || "";
             if (!d) continue;
             if (!dayMap[d]) dayMap[d] = [];
@@ -1938,6 +1967,12 @@ const initialProducts = [
 
     function adRowsForRange(from = adDateFrom, to = adDateTo) {
       return baseAdRows().filter((row) => {
+        if (row.hasExactDate === false) {
+          const rowFrom = row.reportFrom || row.dateFrom || row.date || "";
+          const rowTo = row.reportTo || row.dateTo || row.date || "";
+          // 无逐日日期的周期汇总只能整体纳入，不能按重叠天数伪造部分明细。
+          return Boolean(rowFrom && rowTo) && rowFrom >= from && rowTo <= to;
+        }
         return dateInRange(row.date || row.dateTo, from, to);
       });
     }
@@ -2115,6 +2150,8 @@ const initialProducts = [
       if ($("adDateRangeButton")) $("adDateRangeButton").textContent = `${adDateFrom} - ${adDateTo}`;
       if ($("adDateFromDisplay")) $("adDateFromDisplay").textContent = adDateFrom.replaceAll("-", "/");
       if ($("adDateToDisplay")) $("adDateToDisplay").textContent = adDateTo.replaceAll("-", "/");
+      if ($("adDetailDateFrom")) $("adDetailDateFrom").value = adDateFrom;
+      if ($("adDetailDateTo")) $("adDetailDateTo").value = adDateTo;
       if ($("adCompareToggle")) $("adCompareToggle").checked = adCompareEnabled;
       const currentDays = daysInclusive(adDateFrom, adDateTo);
       document.querySelectorAll("[data-ad-range]").forEach((button) => {
@@ -2123,6 +2160,27 @@ const initialProducts = [
       const adRangePanel = $("adDateRangePanel");
       if (adRangePanel) adRangePanel.classList.toggle("custom-range", ![7, 14, 28].includes(currentDays));
       renderAdCalendar();
+    }
+
+    async function applyAdDetailDateRange() {
+      const from = $("adDetailDateFrom")?.value || "";
+      const to = $("adDetailDateTo")?.value || "";
+      if (!from || !to) {
+        alert("请选择完整的开始日期和结束日期。");
+        return;
+      }
+      if (from > to) {
+        alert("开始日期不能晚于结束日期。");
+        return;
+      }
+      adDateFrom = from;
+      adDateTo = to;
+      pendingAdDateAnchor = null;
+      adCalendarCursor = new Date(`${from}T00:00:00`);
+      $("adDateRangePanel")?.classList.remove("open");
+      updateAdDateInputs();
+      renderAds();
+      await autoRefreshAds();
     }
 
     function adImageFor(row) {
@@ -2163,9 +2221,12 @@ const initialProducts = [
         const imported = rows.slice(headerIndex + 1).map((row) => {
           const sku = String(adCell(row, headerMap, ["SKU"]) || "").trim();
           if (!sku) return null;
-          const rowDate = parseAdDate(adCell(row, headerMap, ["日期", "Date", "День", "Дата"])) || period.to;
+          const parsedRowDate = parseAdDate(adCell(row, headerMap, ["日期", "Date", "День", "Дата"]));
+          const rowDate = parsedRowDate || period.to;
           return {
-            id: uid(), fileName: file.name, source: "xlsx", store, date: rowDate, dateFrom: rowDate, dateTo: rowDate, reportFrom: period.from, reportTo: period.to, sku,
+            id: uid(), fileName: file.name, source: "xlsx", store, date: rowDate,
+            dateFrom: parsedRowDate ? rowDate : period.from, dateTo: parsedRowDate ? rowDate : period.to,
+            reportFrom: period.from, reportTo: period.to, hasExactDate: Boolean(parsedRowDate), sku,
             name: String(adCell(row, headerMap, ["\u5546\u54C1\u540D\u79F0"]) || "").trim(),
             tool: String(adCell(row, headerMap, ["\u5DE5\u5177"]) || "").trim(),
             placement: String(adCell(row, headerMap, ["\u6295\u653E\u4F4D\u7F6E"]) || "").trim(),
@@ -2240,37 +2301,43 @@ const initialProducts = [
               : "暂无广告数据，点击刷新按钮获取";
       }
 
-      const summaryMap = new Map();
-      adSourceRows().forEach((row) => {
+      const detailRows = adSourceRows().map((row) => {
         const product = productBySku(row.sku);
-        const isApiRow = row.source === "api";
-        const periodFrom = isApiRow ? adDateFrom : (row.dateFrom || row.date);
-        const periodTo = isApiRow ? adDateTo : (row.dateTo || row.date);
-        const key = periodFrom + "|" + periodTo + "|" + row.store + "|" + row.sku;
-        const existing = summaryMap.get(key) || { date: row.date, dateFrom: periodFrom, dateTo: periodTo, store: row.store, sku: row.sku, name: row.name || product?.name || "", image: adImageFor({ ...row, product }), product, revenue: 0, adCost: 0, adOrders: 0, impressions: 0, clicks: 0, ctrWeightedClicks: 0 };
-        existing.revenue += Number(row.revenue || 0);
-        existing.adCost += Number(row.adCost || 0);
-        existing.adOrders += Number(row.adOrders || 0);
-        existing.impressions += Number(row.impressions || 0);
-        existing.clicks += Number(row.clicks || 0);
-        existing.ctrWeightedClicks += Number(row.ctr || 0) * Number(row.clicks || 0);
-        summaryMap.set(key, existing);
-      });
-      const summaryRows = [...summaryMap.values()].map((row) => ({ ...row, ctr: row.clicks ? row.ctrWeightedClicks / row.clicks : (row.impressions ? row.clicks / row.impressions * 100 : 0) })).sort((a, b) => (b.dateTo || b.date).localeCompare(a.dateTo || a.date) || b.adCost - a.adCost);
-      const adTotal = summaryRows.reduce((sum, row) => sum + row.adCost, 0);
-      const revenue = summaryRows.reduce((sum, row) => sum + row.revenue, 0);
-      const productCount = new Set(summaryRows.map((row) => row.sku)).size;
+        return {
+          ...row,
+          product,
+          name: row.name || product?.name || "",
+          image: adImageFor({ ...row, product }),
+          revenue: Number(row.revenue ?? row.adRevenue ?? 0),
+          adCost: Number(row.adCost || 0),
+          adOrders: Number(row.adOrders || 0),
+          impressions: Number(row.impressions || 0),
+          clicks: Number(row.clicks || 0),
+          ctr: Number(row.ctr || 0) || (Number(row.impressions || 0) ? Number(row.clicks || 0) / Number(row.impressions || 0) * 100 : 0),
+        };
+      }).sort((a, b) => String(b.dateTo || b.date || "").localeCompare(String(a.dateTo || a.date || "")) || b.adCost - a.adCost);
+      const adTotal = detailRows.reduce((sum, row) => sum + row.adCost, 0);
+      const revenue = detailRows.reduce((sum, row) => sum + row.revenue, 0);
+      const productCount = new Set(detailRows.map((row) => row.sku).filter(Boolean)).size;
       $("adTotal").textContent = rub(adTotal);
       $("adRevenue").textContent = rub(revenue);
       $("adRatio").textContent = (revenue ? adTotal / revenue * 100 : 0).toFixed(2) + "%";
       $("adProductCount").textContent = productCount;
-      $("adRows").innerHTML = summaryRows.map((row) => {
-        const period = formatAdPeriod(row.dateFrom, row.dateTo);
+      if ($("adDetailRangeStatus")) {
+        $("adDetailRangeStatus").textContent = `${adDateFrom} 至 ${adDateTo}，共 ${detailRows.length} 条产品广告明细。`;
+      }
+      $("adRows").innerHTML = detailRows.length ? detailRows.map((row) => {
+        const period = row.hasExactDate === false
+          ? formatAdPeriod(row.reportFrom || row.dateFrom, row.reportTo || row.dateTo)
+          : (row.date || formatAdPeriod(row.dateFrom, row.dateTo));
         const label = row.product?.code || row.sku;
         const image = row.image ? '<img src="' + escapeHtml(row.image) + '" alt="' + escapeHtml(label) + '" />' : '<span class="ad-product-placeholder">' + escapeHtml(String(label || "?").slice(0, 3)) + '</span>';
         const productCell = '<div class="ad-product">' + image + '<div><strong>' + escapeHtml(label) + '</strong><div class="sku">' + escapeHtml(row.sku) + '</div></div></div>';
-        return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
-      }).join("");
+        const campaignName = row.campaignName || row.campaignId || "-";
+        const campaignId = row.campaignName && row.campaignId ? '<div class="sku">' + escapeHtml(row.campaignId) + '</div>' : '';
+        const placement = [row.tool, row.placement].filter(Boolean).join(" / ") || "-";
+        return '<tr><td>' + escapeHtml(period) + '</td><td>' + escapeHtml(row.store) + '</td><td>' + productCell + '</td><td>' + escapeHtml(campaignName) + campaignId + '</td><td>' + escapeHtml(placement) + '</td><td class="money">' + rub(row.revenue) + '</td><td>' + Number(row.adOrders || 0).toFixed(0) + '</td><td class="money">' + rub(row.adCost) + '</td><td>' + Number(row.impressions || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.clicks || 0).toLocaleString("zh-CN") + '</td><td>' + Number(row.ctr || 0).toFixed(2) + '%</td><td>' + (row.revenue ? row.adCost / row.revenue * 100 : 0).toFixed(2) + '%</td></tr>';
+      }).join("") : '<tr><td colspan="12" class="muted-cell">当前店铺和日期范围内没有产品广告明细。</td></tr>';
       drawAdChart();
     }
 
@@ -3928,6 +3995,14 @@ const initialProducts = [
       renderStoreOverview();
     });
     if ($("refreshAdsApi")) $("refreshAdsApi").addEventListener("click", refreshAdsApi);
+    if ($("applyAdDetailRange")) $("applyAdDetailRange").addEventListener("click", () => {
+      applyAdDetailDateRange().catch((error) => alert(error.message));
+    });
+    [$("adDetailDateFrom"), $("adDetailDateTo")].filter(Boolean).forEach((input) => {
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") $("applyAdDetailRange")?.click();
+      });
+    });
     if ($("adCompareToggle")) $("adCompareToggle").addEventListener("change", (event) => {
       adCompareEnabled = event.target.checked;
       renderAds();

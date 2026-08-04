@@ -2255,6 +2255,47 @@ h1, h2, h3 { margin: 0; letter-spacing: 0; }
   padding: 0 14px;
 }
 
+.ad-detail-filters {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ad-detail-filters label {
+  display: grid;
+  gap: 5px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ad-detail-filters input[type="date"] {
+  width: 150px;
+  height: 38px;
+}
+.ad-detail-filters button {
+  height: 38px;
+}
+.ad-detail-date-separator {
+  align-self: flex-end;
+  line-height: 38px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .ad-detail-filters {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .ad-detail-filters label {
+    flex: 1 1 140px;
+  }
+  .ad-detail-filters input[type="date"] {
+    width: 100%;
+  }
+}
+
 /* ---- 通用：所有 inline-select 内 select 统一高度 ---- */
 .inline-select select,
 .inline-select + select,
